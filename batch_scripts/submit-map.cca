@@ -1,0 +1,17 @@
+## Example batch script to run the total signal strength for SCE cluster assignment
+
+#!/bin/bash
+#SBATCH -J mapping-2j2b2e
+#SBATCH --output=%J.out
+#SBATCH --error=%J.err
+#SBATCH -t 2:00:00
+#SBATCH --mail-type=ALL --mail-user=tha@flatironinstitute.org
+#SBATCH -p gen
+#SBATCH -C skylake,opa
+#SBATCH --nodes 1
+#SBATCH --ntasks-per-node=20
+
+export PYTHONDONTWRITEBYTECODE=true
+source /mnt/home/tha10/venv-python/som/bin/activate
+
+python3 $SOM/parse_mapping3d.py --file_path /mnt/home/tha10/ceph/SOM-tests/harris-d2/SCE3d-gpu --threshold -0.048 --save_combined_map --slice 10 --ndim 200 --reference_file /mnt/home/tha10/ceph/SOM-tests/harris-d2/features_2j2b2e0r_9_bgy_d2.h5

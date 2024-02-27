@@ -1,0 +1,18 @@
+## Example batch script to run the GPU version of the SCE calculation
+
+#!/bin/bash
+#SBATCH -J SCE-jax-2j2b2e
+#SBATCH --output=%J.out
+#SBATCH --error=%J.err
+#SBATCH -t 48:00:00
+#SBATCH --mail-type=ALL --mail-user=tha@flatironinstitute.org
+#SBATCH -p gpu
+#SBATCH --gpus=1
+#SBATCH -c 16
+#SBATCH --mem=100G
+#SBATCH -C a100-80gb,ib
+
+export PYTHONDONTWRITEBYTECODE=true
+module load cuda
+
+python3 $SOM/sce3d_jax.py --folder /mnt/home/tha10/ceph/SOM-tests/harris-d2/ --subfolder SCE3d-gpu 
