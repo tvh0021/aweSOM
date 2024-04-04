@@ -89,7 +89,7 @@ def assign_cluster_id(nx : int, ny : int, nz : int, data_Xneuron : np.ndarray, d
                                 cluster_id[iz,iy,ix] = clusters[int(data_Xneuron[j]), int(data_Yneuron[j])]
         return cluster_id
 
-def batch_training(full_data : np.ndarray, xdim : int, ydim : int, alpha : float, train : int, decay_rate : float, batch : int, feature_list : list[str], save_neuron_values=False) -> som.map:
+def batch_training(full_data : np.ndarray, xdim : int, ydim : int, alpha : float, train : int, batch : int, feature_list : list[str], save_neuron_values=False) -> som.map:
         """Function to perform batch training on a full domain
 
         Args:
@@ -121,23 +121,23 @@ def batch_training(full_data : np.ndarray, xdim : int, ydim : int, alpha : float
                                 attr=pd.DataFrame(x_split)
                                 attr.columns=feature_list
 
-                                print(f'constructing batch SOM for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}, decay={decay_rate}, index=[{start_index_crop_z},{start_index_crop_y},{start_index_crop_x}]...', flush=True)
+                                print(f'constructing batch SOM for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}, index=[{start_index_crop_z},{start_index_crop_y},{start_index_crop_x}]...', flush=True)
                                 m=som.map(xdim, ydim, alpha, train, epoch, number_of_batches, alpha_type='decay')
                                 
                                 print("Training step: ", epoch)
 
                                 labels = np.array(list(range(len(x_split))))
                                 if (split_index1 == 0) & (split_index2 == 0) & (split_index3 == 0):
-                                        m.fit(attr,labels,restart=False,momentum_decay_rate=decay_rate)
+                                        m.fit(attr,labels,restart=False)
                                 else: # if first window, then initiate random neuron values, else use neurons from last batch
-                                        m.fit(attr,labels,restart=True, neurons=neurons, momentum_decay_rate=decay_rate)
+                                        m.fit(attr,labels,restart=True, neurons=neurons)
 
                                 neurons = m.all_neurons()
                                 epoch = m.epoch
                                 
                                 # print("neurons: ", neurons)
                                 if save_neuron_values == True:
-                                        np.save(f'neurons_{lap}_{xdim}{ydim}_{alpha}_{train}_{decay_rate}_{split_index1}-{split_index2}-{split_index3}.npy', neurons, allow_pickle=True)
+                                        np.save(f'neurons_{lap}_{xdim}{ydim}_{alpha}_{train}_{split_index1}-{split_index2}-{split_index3}.npy', neurons, allow_pickle=True)
                                         print("Data being saved")
                                 
                                 # print changes in neuron weights
@@ -151,8 +151,8 @@ def batch_training(full_data : np.ndarray, xdim : int, ydim : int, alpha : float
         labels = np.array(list(range(len(x))))
         m.fit_notraining(attr, labels, neurons)
 
-        np.save(f'evolution_{lap}_{xdim}{ydim}_{alpha}_{train}_{decay_rate}_{batch}_combined.npy', np.array(history), allow_pickle=True)
-        np.save(f'feature_evolution_{lap}_{xdim}{ydim}_{alpha}_{train}_{decay_rate}_{batch}_combined.npy', np.array(feature_history), allow_pickle=True)
+        np.save(f'evolution_{lap}_{xdim}{ydim}_{alpha}_{train}_{batch}_combined.npy', np.array(history), allow_pickle=True)
+        np.save(f'feature_evolution_{lap}_{xdim}{ydim}_{alpha}_{train}_{batch}_combined.npy', np.array(feature_history), allow_pickle=True)
 
         return m
 
@@ -166,7 +166,6 @@ if __name__ == "__main__":
         parser.add_argument('--ydim', type=int, dest='ydim', default=20, help='Map y size')
         parser.add_argument('--alpha', type=float, dest='alpha', default=0.5, help='Learning parameter')
         parser.add_argument('--train', type=int, dest='train', default=10000, help='Number of training steps')
-        parser.add_argument('--decay', type=float, dest='decay_rate', default=0.0, help='Decay rate for momentum-based gradient descent')
         parser.add_argument('--batch', type=int, dest='batch', default=None, help='Width of domain in a batch', required=False)
         parser.add_argument('--pretrained', action="store_true", dest='pretrained', help='Pass this argument if supplying a pre-trained model', required=False)
         parser.add_argument('--neurons_path', type=str, dest='neurons_path', default=None, help='Path to file containing neuron values', required=False)
@@ -195,7 +194,6 @@ if __name__ == "__main__":
         pretrained = args.pretrained
         neurons_path = args.neurons_path
         save_neuron_values = args.save_neuron_values
-        decay_rate = args.decay_rate
         
         if save_neuron_values is None:
                 save_neuron_values = False
@@ -231,24 +229,24 @@ if __name__ == "__main__":
                 attr=pd.DataFrame(x)
                 attr.columns=feature_list
 
-                print(f'constructing full SOM for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}, decay={decay_rate}...', flush=True)
+                print(f'constructing full SOM for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}...', flush=True)
                 m=som.map(xdim, ydim, alpha, train, alpha_type='decay')
 
                 labels = np.array(list(range(len(x))))
-                m.fit(attr,labels,momentum_decay_rate=decay_rate)
+                m.fit(attr,labels)
                 neurons = m.all_neurons()
                 # print("neurons: ", neurons)
                 if save_neuron_values == True:
-                        np.save(f'neurons_{lap}_{xdim}{ydim}_{alpha}_{train}_{decay_rate}.npy', neurons, allow_pickle=True)
+                        np.save(f'neurons_{lap}_{xdim}{ydim}_{alpha}_{train}.npy', neurons, allow_pickle=True)
                         print("Data being saved")
                 # print changes in neuron weights
                 # loss_history = m.loss_history
                 average_loss = m.average_loss
                 epoch = m.epoch
-                np.save(f'evolution_{lap}_{xdim}{ydim}_{alpha}_{epoch}_{decay_rate}.npy', average_loss, allow_pickle=True)
+                np.save(f'evolution_{lap}_{xdim}{ydim}_{alpha}_{epoch}.npy', average_loss, allow_pickle=True)
         elif (batch is not None) & (pretrained == False):
-                print(f"Constructing SOM batch training for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}, decay={decay_rate}, batch={batch}", flush=True)
-                m_batch = batch_training(x, xdim, ydim, alpha, train, decay_rate, batch, feature_list, save_neuron_values)
+                print(f"Constructing SOM batch training for xdim={xdim}, ydim={ydim}, alpha={alpha}, train={train}, batch={batch}", flush=True)
+                m_batch = batch_training(x, xdim, ydim, alpha, train, batch, feature_list, save_neuron_values)
                 # print("Saved neuron values : ", save_neuron_values)
                 m = m_batch
         else: # if the run is initialized as a no training run, load these values
@@ -317,5 +315,5 @@ if __name__ == "__main__":
         print("Assigning clusters", flush=True)
         
         cluster_id = assign_cluster_id(nx, ny, nz, data_Xneuron, data_Yneuron, clusters)
-        np.save(f'clusters_{lap}_{xdim}{ydim}_{alpha}_{train}_{decay_rate}_{batch}.npy', cluster_id, allow_pickle=True)
+        np.save(f'clusters_{lap}_{xdim}{ydim}_{alpha}_{train}_{batch}.npy', cluster_id, allow_pickle=True)
         print("Done writing the cluster ID file")    

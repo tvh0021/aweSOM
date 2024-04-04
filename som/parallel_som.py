@@ -23,17 +23,18 @@ np.random.seed(42)
 
 # NOTE: numba does not work in a class with pandas DataFrames. Can circumvent with @staticmethod
 class map:
-	def __init__(self, xdim : int = 10, ydim : int = 10, alpha : float = 0.3, train : int = 1000, epoch : int = 0, number_of_batches : int = 1, alpha_type : str = "static", norm : bool = False):
+	def __init__(self, xdim : int = 10, ydim : int = 10, alpha : float = 0.3, train : int = 1000, epoch : int = 0, number_of_batches : int = 1, alpha_type : str = "decay", norm : bool = False, save_neurons : bool = False):
 		""" __init__ -- Initialize the Model 
 
 			parameters:
-			- xdim,ydim - the dimensions of the map
-			- alpha - the learning rate, should be a positive non-zero real number
-			- train - number of training iterations
-			- step_counter - current step in the training process
-			- number_of_batches - number of batches to train on
-			- alpha_type - a string that determines whether the learning rate is static or decaying
-			- norm - normalize the input data space
+			- xdim,ydim - the dimensions of the map. Default is 10
+			- alpha - the learning rate, should be a positive non-zero real number. Default is 0.3
+			- train - number of training iterations. Default is 1000
+			- step_counter - current step in the training process. Default is 0
+			- number_of_batches - number of batches to train on. Default is 1
+			- alpha_type - a string that determines whether the learning rate is static or decaying. Default is "decay"
+			- norm - normalize the input data space. Default is False
+			- save_neurons - save the neuron values at the end of training. Default is False
     	"""
 		self.xdim = xdim
 		self.ydim = ydim
@@ -48,8 +49,9 @@ class map:
 			self.alpha_type = 1
 		else:
 			sys.exit("alpha_type must be either 'static' or 'decay'")
+		self.save_neurons = save_neurons
 
-	def fit(self, data : pd.DataFrame, labels : np.ndarray, restart : bool = False, neurons : np.ndarray = None, momentum_decay_rate : float = 0.5):
+	def fit(self, data : pd.DataFrame, labels : np.ndarray, restart : bool = False, neurons : np.ndarray = None):
 		""" fit -- Train the Model with numba JIT acceleration
 
 			parameters:
@@ -57,7 +59,6 @@ class map:
 			- labels - a vector or dataframe with one label for each observation in data
 			- restart - a flag that determines whether fit starts with non-randomized values of neurons
 			- neurons - vectors for the weights of the neurons from past realizations
-			- momentum_decay_rate - the rate at which the momentum-based gradient descent decay
     	"""
 
 		if self.norm:
@@ -71,7 +72,7 @@ class map:
 		self.data = data
 		self.data_array = data.to_numpy()	
 		self.labels = labels
-		self.momentum_decay_rate = momentum_decay_rate
+		# self.momentum_decay_rate = momentum_decay_rate
 
 		# check if the dims are reasonable
 		if (self.xdim < 3 or self.ydim < 3):
@@ -204,12 +205,17 @@ class map:
 				if np.sum(this_average_loss**2)  < 1e-4:
 					print("Terminating from small changes at epoch ", epoch, flush=True)
 					self.epoch = epoch
+					print("Saving final neurons weights", epoch, flush=True)
+					np.save(f"neuronsf_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)
 					break
 
 			# if this batch has gone over the step limit for the batch (which is total training steps divided by number of batches), terminate
 			if (epoch - self.epoch) >= (self.train // self.number_of_batches):
 				print("Terminating from step limit reached at epoch ", epoch, flush=True)
 				self.epoch = epoch
+				if self.save_neurons:
+					print("Saving final neurons weights", epoch, flush=True)
+					np.save(f"neuronsf_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)
 				break
 
 	        # competitive step
@@ -242,7 +248,7 @@ class map:
 			# save neuron maps sparingly
 			if epoch % 1000000 == 0 and epoch != 0:
 				print("Saving neurons at epoch ", epoch, flush=True)
-				np.save(f"neurons_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}_{self.momentum_decay_rate}.npy", neurons)	
+				np.save(f"neurons_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)	
     
 			epoch += 1
 
