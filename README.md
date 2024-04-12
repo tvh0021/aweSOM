@@ -23,12 +23,12 @@ Start with a 3D simulation snapshot -----
 	
  --crop : tuple, the start index of the cropped window and the width of the window
 	
- -v/--var : list of features, format like this: "-v b_perp -v j_perp -v j_par"
+ -v/--var : list of features, format like this: "-v b_perp j_perp j_par"
 	
   List of possible features:
-    b_perp  bz  j_perp  j_par j_mag j_par_abs e_perp  e_par   e_dot_j  rho  b_perp_ciso  bz_ciso  j_perp_ciso  j_par_ciso  e_perp_ciso  e_par_ciso  e_dot_j_ciso   rho_ciso
+    b_perp  bz  j_perp  j_par j_mag j_par_abs e_perp  e_par   e_dot_j  rho  b_perp_ciso  bz_ciso  j_perp_ciso  j_par_ciso  e_perp_ciso  e_par_ciso  e_dot_j_ciso   rho_ciso  j_asym  j_sym
   
-  In the case where you call for 10+ features, having <100 GB of memory might not be enough, so a highmem node will be required (only take 10 minutes, so computational cost is minimal)
+  In the case where you call for 10+ features, having <100 GB of memory might not be enough, so a highmem node will be required (only take a few minutes, so computational cost is minimal)
 	
 
 2. To compute the SOMs of the feature set, use "som/som3d.py". 
