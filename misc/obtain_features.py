@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 import h5py as h5
 import argparse
-from scipy import ndimage
+from scipy.ndimage import zoom, rotate, convolve
 
 # The following line improves formatting when ouputting NumPy arrays.
 np.set_printoptions(linewidth = 200)
@@ -15,6 +15,8 @@ np.set_printoptions(linewidth = 200)
 import pytools
 from initialize_turbulence import Configuration_Turbulence as Configuration
 
+from multiprocessing import Pool
+from multiprocessing import cpu_count
 
 default_values = {
     "cmap": "hot",
@@ -141,10 +143,10 @@ def pseudo_convolution(variable : np.ndarray, kernel : np.ndarray, step_size : i
     pseudo_value = np.zeros(shape=variable.shape)
 
     # for a set step_size, compute the mean of each step_size x step_size x step_size window within the simulation
-    average_of_each_window = ndimage.zoom(input=variable, zoom = 1./step_size)
+    average_of_each_window = zoom(input=variable, zoom = 1./step_size)
 
     # compute the convolution between average_of_each_window and kernel
-    convolved_window = ndimage.convolve(average_of_each_window, kernel, mode="wrap", cval=0.0)
+    convolved_window = convolve(average_of_each_window, kernel, mode="wrap", cval=0.0)
 
     for i in range(convolved_window.shape[0]):
         for j in range(convolved_window.shape[1]):
@@ -152,6 +154,69 @@ def pseudo_convolution(variable : np.ndarray, kernel : np.ndarray, step_size : i
                 pseudo_value[i*step_size:(i+1)*step_size, j*step_size:(j+1)*step_size, k*step_size:(k+1)*step_size] = convolved_window[i,j,k]
 
     return pseudo_value
+
+
+def convolve_by_slice(variable_slice : np.ndarray, k : int, kernelA : np.ndarray, kernelS : np.ndarray, direction : np.ndarray) -> np.ndarray:
+    """Convolve a 3D variable with an antisymmetric kernel and a symmetric kernel by 2D slices
+
+    Args:
+        variable (numpy 2d array): the slice of variable to be convolved; already extended to size + kn to take edges into account
+        k (int): slice number
+        kernelA (numpy 2d array): nxn antisymmetric kernel to convolve with; normalize beforehand
+        kernelS (numpy 2d array): nxn symmetric kernel to convolve with; normalize beforehand
+        direction (numpy 4d array): direction to align the kernel with; should already been normalized such that all cell contains a unit vector
+
+    Returns:
+        numpy 3d array: the convolved variable with the antisymmetric kernel [index 0] and symmetric kernel [index 1]
+    """
+    kernel_size = kernelA.shape[0]
+    actual_variable_size0 = variable_slice.shape[0] - kernel_size + 1
+    actual_variable_size1 = variable_slice.shape[1] - kernel_size + 1
+    convolved_variable_slice = np.zeros((2, actual_variable_size0, actual_variable_size1))
+    
+    print("Convolution on slice {}".format(k), flush=True)
+
+    for j in range(actual_variable_size1):
+        for i in range(actual_variable_size0):
+            n = direction[:,k,j,i]
+            rotate_angle = np.arctan2(n[2], n[1]) * 180 / np.pi - 90
+            kernelA_rotated = rotate(kernelA, rotate_angle, reshape=False, mode="nearest", order=1)
+            kernelS_rotated = rotate(kernelS, rotate_angle, reshape=False, mode="nearest", order=1)
+            
+            convolved_variable_slice[0,j,i] = np.einsum("ji,ji", variable_slice[j:j+kernel_size,i:i+kernel_size], kernelA_rotated)
+            convolved_variable_slice[1,j,i] = np.einsum("ji,ji", variable_slice[j:j+kernel_size,i:i+kernel_size], kernelS_rotated)
+
+    return convolved_variable_slice
+
+def obtain_convolved_features(feature_array : np.ndarray, kernelA : np.ndarray, kernelS : np.ndarray, direction : np.ndarray) -> np.ndarray:
+    """Obtain the convolved features for a 3D array of features with multiprocessing
+
+    Args:
+        feature_array (numpy 3d array): the 3D array of features to be convolved
+        kernelA (numpy 2d array): nxn antisymmetric kernel to convolve with; normalize beforehand
+        kernelS (numpy 2d array): nxn symmetric kernel to convolve with; normalize beforehand
+        direction (numpy 4d array): direction to align the kernel with; should already been normalized such that all cell contains a unit vector
+
+    Returns:
+        numpy 3d array: the convolved features with the antisymmetric kernel and symmetric kernel
+    """
+    convolved_feature = np.zeros((2, feature_array.shape[0], feature_array.shape[1], feature_array.shape[2]))
+
+    kernel_size = kernelA.shape[0]
+    extended_feature = np.pad(feature_array, ((kernel_size//2,kernel_size//2),(kernel_size//2,kernel_size//2),(kernel_size//2,kernel_size//2)), mode='wrap')
+    print("Computing directional convolution using {} cores".format(cpu_count()), flush=True)
+
+    with Pool() as p:
+        items = [(extended_feature[k + kernel_size//2], k, kernelA, kernelS, direction) for k in range(feature_array.shape[0])]
+
+        for k, result in enumerate(p.starmap(convolve_by_slice, items)):
+            convolved_feature[:, k, :, :] = result
+
+    convolvedA_feature = convolved_feature[0]
+    convolvedS_feature = convolved_feature[1]
+        
+    return convolvedA_feature, convolvedS_feature
+
 
 def GetH5FileName(feature_list : list[str], snapshot : int, kwargs=[]) -> str:
     """Generate the name of the hdf5 file to save the feature set
@@ -197,7 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("--b_guide", type=str, dest='guide', default='z') # guide field direction
     parser.add_argument("--crop", type=tuple, dest='crop', default=None)
     parser.add_argument("--downsample", type=int, dest='downsample', default=1)
-    parser.add_argument("-v", "--var", nargs='+', action="store", type=str, dest='var', default=['b_perp', 'j_perp', 'j_par', 'e_perp'])
+    parser.add_argument("-v", "--var", nargs='+', action="store", type=str, dest='var', default=['j_sym', 'j_asym'])
 
     args_cli = parser.parse_args()
 
@@ -342,14 +407,14 @@ if __name__ == "__main__":
     list_of_features = args_cli.var
     
     # isotropic convolution
-    convolution_on = False
+    smoothing_convolution_on = False
     for name in list_of_features:
         if "ciso" in name:
-            convolution_on = True
+            smoothing_convolution_on = True
             print("Isotropic convolution requested", flush=True)
             break
             
-    if convolution_on:
+    if smoothing_convolution_on:
         convolution_size = 4
         kernel_iso_shape = (3,3,3)
         kernel_iso = np.ones(shape=kernel_iso_shape)
@@ -367,6 +432,50 @@ if __name__ == "__main__":
         rho_ciso = pseudo_convolution(rho, kernel_iso, step_size=convolution_size)
         
         print("Finished computing isotropic convolution features", flush=True)
+
+    # antisymmetric and symmetric convolution
+    directional_convolution_on = False
+    for name in list_of_features:
+        if "sym" in name:
+            directional_convolution_on = True
+            print("Directional convolution requested", flush=True)
+            break
+    
+    if directional_convolution_on:
+        # define the kernels
+        kn=19
+        along_k, across_k = np.linspace(-1, 1, kn), np.linspace(-1, 1, kn)
+
+        coord_kA = np.asarray(np.meshgrid(along_k, across_k))
+
+        kernelA = np.zeros((kn,kn))
+        for i in range(kn):
+            for j in range(kn):
+                if i != kn//2 or j != kn//2:
+                    hypot_ij = np.hypot(coord_kA[0,i,j], coord_kA[1,i,j])
+                    kernelA[i,j] = -coord_kA[0,i,j]/hypot_ij if hypot_ij <= 1 - 1/kn else 0
+        kernelA /= np.sum(np.abs(kernelA))
+
+        kernelS = np.zeros((kn,kn))
+        kernelS[kn//2,:] = 1
+
+        for i in range(kn):
+            for j in range(kn):
+                if i != kn//2 or j != kn//2:
+                    hypot_ij = np.hypot(coord_kA[0,i,j], coord_kA[1,i,j])
+                    kernelS[i,j] = np.abs(coord_kA[0,i,j]/hypot_ij) if hypot_ij <= 1 - 1/kn else 0
+        kernelS /= np.sum(np.abs(kernelS))
+
+        # calculate the direction vector (grad J)
+        grad_jpar = np.gradient(j_par)
+        grad_jpar = np.array([grad_jpar[2], grad_jpar[1], grad_jpar[0]])
+        grad_jpar_hat = grad_jpar / np.linalg.norm(grad_jpar, axis=0)
+
+        print(f"Shape of j_par : {j_par.shape}")
+        j_asym, j_sym = obtain_convolved_features(j_par, kernelA, kernelS, grad_jpar_hat)
+        
+
+        print("Finished computing directional convolution features", flush=True)
     
     ### FEATURE SET ###
     dataset_combined = np.array([globals()[list_of_features[i]] for i in range(len(list_of_features))])
@@ -381,6 +490,10 @@ if __name__ == "__main__":
         additional_kws.append("jpa")
     if args_cli.guide != 'z':
         additional_kws.append("bg" + args_cli.guide)
+    if "j_asym" in list_of_features:
+        additional_kws.append("jasym")
+    if "j_sym" in list_of_features:
+        additional_kws.append("jsym")
     
     # save memory by carving out a smaller domain
     if args_cli.crop is not None and nx == ny == nz: 
@@ -421,3 +534,4 @@ if __name__ == "__main__":
     dsetf = f5.create_dataset("names",  data=asciilist)
     f5.close()
     print("Saved dataset to {}".format(GetH5FileName(list_of_features, lap, kwargs=additional_kws)), flush=True)
+    print("Order of features : ", list_of_features, flush=True)
