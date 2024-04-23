@@ -7,6 +7,7 @@ import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+# plt.rcParams.update({'font.size': 8})
 import seaborn as sns					
 from random import randint
 from sklearn.metrics.pairwise import euclidean_distances
@@ -17,13 +18,14 @@ from scipy.stats import f               # F-test
 from itertools import combinations
 
 from numba import njit, prange
+from scipy.ndimage import map_coordinates
 
 np.random.seed(42)
 
 
 # NOTE: numba does not work in a class with pandas DataFrames. Can circumvent with @staticmethod
 class map:
-	def __init__(self, xdim : int = 10, ydim : int = 10, alpha : float = 0.3, train : int = 1000, epoch : int = 0, number_of_batches : int = 1, alpha_type : str = "decay", norm : bool = False, save_neurons : bool = False):
+	def __init__(self, xdim : int = 10, ydim : int = 10, alpha : float = 0.3, train : int = 1000, epoch : int = 0, number_of_batches : int = 1, alpha_type : str = "decay", sampling_type : str = "sampling", norm : bool = False, save_neurons : bool = False):
 		""" __init__ -- Initialize the Model 
 
 			parameters:
@@ -33,6 +35,7 @@ class map:
 			- step_counter - current step in the training process. Default is 0
 			- number_of_batches - number of batches to train on. Default is 1
 			- alpha_type - a string that determines whether the learning rate is static or decaying. Default is "decay"
+			- sampling_type - a string that determines whether the initial lattice is uniform or sampled from the data. Default is "sampling"
 			- norm - normalize the input data space. Default is False
 			- save_neurons - save the neuron values at the end of training. Default is False
     	"""
@@ -43,6 +46,7 @@ class map:
 		self.epoch = epoch
 		self.number_of_batches = number_of_batches
 		self.norm = norm
+		self.init = sampling_type # random or sampling initial lattice
 		if alpha_type == "static":
 			self.alpha_type = 0
 		elif alpha_type == "decay":
@@ -51,7 +55,7 @@ class map:
 			sys.exit("alpha_type must be either 'static' or 'decay'")
 		self.save_neurons = save_neurons
 
-	def fit(self, data : pd.DataFrame, labels : np.ndarray, restart : bool = False, neurons : np.ndarray = None):
+	def fit(self, data : pd.DataFrame, labels : np.ndarray = None, restart : bool = False, neurons : np.ndarray = None):
 		""" fit -- Train the Model with numba JIT acceleration
 
 			parameters:
@@ -86,14 +90,14 @@ class map:
 
 		self.visual = visual
 
-	def fit_notraining(self, data : pd.DataFrame, labels : np.ndarray, neurons : np.ndarray, parallel : bool = False):
+	def fit_notraining(self, data : pd.DataFrame, neurons : np.ndarray, labels : np.ndarray = None):
 		"""fit_notraining -- Provided an array of neurons, load best-fit data into the class
 
 		Args:
 			data (pandas DataFrame): data with features as columns
 			labels (np.ndarray): range from 0 to number of points in data, acts as label
 			neurons (numpy 3d array): xdim x ydim x feature array of neurons
-			parallel (bool): indicate whether to use multiple threads to find best fit neurons
+
 		"""
 
 		self.data = data
@@ -145,28 +149,36 @@ class map:
 
 		if self.restart:
 			neurons = self.restart_neurons
-		else:
+		elif self.init == "uniform":
 			# vector with small init values for all neurons
 			# NOTE: each row represents a neuron, each column represents a dimension.
-			neurons = np.random.uniform(-1, 1, (nr,nc))
+			neurons = np.random.uniform(0., 1., (nr,nc))
+		else:
+			# sample a random subset of the data to initialize the neurons
+			ix = np.random.randint(0, dr-1, nr)
+			neurons = self.data_array[ix,:]
 
 		alpha = self.alpha # starting learning rate
 		if self.alpha_type == 1:
 			alpha_freq = self.train // 25 # how often to decay the learning rate
+		else:
+			alpha_freq = 1
 
 	    # compute the initial neighborhood size and step
 		nsize_max = max(self.xdim, self.ydim) + 1
 		nsize_min = 8
-		nsize_step = self.train // 20 # for the first 5% of the training steps, shrink the neighborhood
+		nsize_step = self.train // 4 # for the third quarter of the training steps, shrink the neighborhood
+		nsize_freq = nsize_step // (nsize_max - nsize_min) # how often to shrink the neighborhood
 
-		if self.epoch > nsize_step:
+		if self.epoch < 2 * nsize_step:
+			nsize = nsize_max
+		elif self.epoch >= 3 * nsize_step:
 			nsize = nsize_min
 		else:
-			nsize_freq = nsize_step // (nsize_max - nsize_min) # how often to shrink the neighborhood
 			nsize = nsize_max - self.epoch // nsize_freq
    
 		epoch = self.epoch  # counts the number of epochs per nsize_freq
-		# print("starting epoch for this batch is ", epoch, flush=True)
+		print("starting epoch for this batch is ", epoch, flush=True)
 
 	    # constants for the Gamma function
 		m = np.reshape(list(range(nr)), (nr,1))  # a vector with all neuron 1D addresses
@@ -195,6 +207,9 @@ class map:
 
 		# for epoch in range(self.step_counter, self.train):
 		while True:
+			if epoch % int(self.train//10) == 0:
+				print("Evaluating epoch = ", epoch, flush=True)
+
 	        # hood size decreases in disrete nsize steps
 			if (epoch % frequency == 0) & (epoch != 0):
 				
@@ -202,12 +217,12 @@ class map:
 				self.average_loss[epoch//frequency-1,:] = this_average_loss
     
 				# Terminate if the network has not changed much in the last train//100 epochs
-				if np.sum(this_average_loss**2)  < 1e-4:
-					print("Terminating from small changes at epoch ", epoch, flush=True)
-					self.epoch = epoch
-					print("Saving final neurons weights", epoch, flush=True)
-					np.save(f"neuronsf_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)
-					break
+				# if np.sum(this_average_loss**2)  < 1e-6:
+				# 	print("Terminating from small changes at epoch ", epoch, flush=True)
+				# 	self.epoch = epoch
+				# 	print("Saving final neurons weights", epoch, flush=True)
+				# 	np.save(f"neuronsf_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)
+				# 	break
 
 			# if this batch has gone over the step limit for the batch (which is total training steps divided by number of batches), terminate
 			if (epoch - self.epoch) >= (self.train // self.number_of_batches):
@@ -236,8 +251,8 @@ class map:
 			neurons -= diff * gamma_m
 
 			# shrink the neighborhood size every frequ epochs
-			if epoch % nsize_freq == 0 and nsize > 8:
-				nsize = nsize_max - epoch // nsize_freq
+			if epoch > 2*nsize_step and epoch % nsize_freq == 0 and nsize > nsize_min:
+				nsize = nsize_max - (epoch - 2*nsize_step) // nsize_freq
 				print(f"Shrinking neighborhood size to {nsize} at epoch {epoch}", flush=True)
 
 			# decay the learning rate every frequ epochs
@@ -288,7 +303,7 @@ class map:
 			else:
 				best_match_neuron[i] = np.argmin(s)
 
-			if i % int(1e7) == 0:
+			if i % int(obs.shape[0]//10) == 0:
 				print("i = ", i)
 
 		return best_match_neuron
@@ -345,6 +360,84 @@ class map:
 			coords[k,:] = np.array([rowix[k,0] % xdim, rowix[k,0] // xdim])
 
 		return coords
+	
+	def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.005):
+		#Neuron matrix with centroids:
+		umat = self.compute_umat(smoothing=smoothing)
+		naive_centroids = self.compute_centroids(umat, False)
+		centroids = self.compute_combined_centroids(umat, naive_centroids, merge_cost)
+		x = self.xdim
+		y = self.ydim
+		centr_locs = []
+
+		#create list of centroid _locations
+		for ix in range(x):
+			for iy in range(y):
+				cx = centroids['centroid_x'][ix, iy]
+				cy = centroids['centroid_y'][ix, iy]
+					
+				centr_locs.append((cx,cy))
+
+
+		unique_ids = list(set(centr_locs))
+		n_clusters = len(unique_ids)
+		print(f"Number of clusters : {n_clusters}", flush=True)
+		print("Centroids: ", unique_ids, flush=True)
+
+		# mapping = {}
+		clusters = 1000 * np.ones((x,y), dtype=np.int32)
+		for i in range(n_clusters):
+			# mapping[i] = unique_ids[i]
+			for ix in range(x):
+				for iy in range(y):
+					if (centroids['centroid_x'][ix, iy], centroids['centroid_y'][ix, iy]) == unique_ids[i]:
+						clusters[ix,iy] = i
+
+		self.lattice_assigned_clusters = clusters
+		return clusters
+	
+	@staticmethod
+	@njit(parallel=True)
+	def assign_cluster_to_data(data_Xneuron : np.ndarray, data_Yneuron : np.ndarray, clusters_on_lattice : np.ndarray) -> np.ndarray:
+		"""From neuron data and cluster assignments, return the cluster id of the observation (in a 1d array)
+
+		Args:
+			data_Xneuron (np.ndarray): 1d array with x coordinate of the neuron associated with a cell
+			data_Yneuron (np.ndarray): 1d array with y coordinate of the neuron associated with a cell
+			clusters_on_lattice (np.ndarray): n x n matrix of cluster on neuron map
+
+		Returns:
+			np.ndarray: cluster_id
+		"""
+		cluster_id = np.zeros(len(data_Xneuron), dtype=np.int32)
+		for i in prange(len(data_Xneuron)):
+			cluster_id[i] = clusters_on_lattice[int(data_Xneuron[i]), int(data_Yneuron[i])]
+		return cluster_id
+
+	def continuous_class_map(self):
+		nr = self.xdim * self.ydim
+		result = []
+		counts = np.zeros((nr, 1))
+
+		data_matrix = self.projection()
+		data_Xneuron = data_matrix[:,0]
+		data_Yneuron = data_matrix[:,1]
+
+		neurons_list = np.arange(nr)
+		neuron_coords = self.coordinate(neurons_list, self.xdim)
+
+		for neuron_id in range(nr):
+			neuron_x = neuron_coords[neuron_id,0]
+			neuron_y = neuron_coords[neuron_id,1]
+			
+			response_variables = {data_matrix == [neuron_x, neuron_y]}
+			
+
+		for i in range(len(data_Xneuron)):
+
+			counts[data_Xneuron[i] + data_Yneuron[i]*self.xdim] += 1
+			result[data_Xneuron[i] + data_Yneuron[i]*self.xdim]
+
 
 	## Any function below this line was not significantly modified from the original POPSOM library
 	## Refer to: https://github.com/njali2001/popsom.git for documentation
@@ -671,30 +764,86 @@ class map:
 
 		return {"centroid_x": centroid_x, "centroid_y": centroid_y}
 
-	def compute_combined_clusters(self, heat, explicit, rang):
+	@staticmethod
+	@njit(parallel=True)
+	def replace_value(centroids : np.ndarray, centroid_a : tuple, centroid_b : tuple) -> np.ndarray:
+		for ix in range(self.xdim):
+				for iy in range(self.ydim):
+					if replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_a[0] and centroids['centroid_y'][ix, iy] == centroid_a[1]:
+						centroids['centroid_x'][ix, iy] = centroid_b[0]
+						centroids['centroid_y'][ix, iy] = centroid_b[1]
 
-		# compute the connected components
-		centroids = self.compute_centroids(heat, explicit)
-		# Get unique centroids
-		unique_centroids = self.get_unique_centroids(centroids)
-		# Get distance from centroid to cluster elements for all centroids
-		within_cluster_dist = self.distance_from_centroids(centroids,
-														   unique_centroids,
-														   heat)
-		# Get average pairwise distance between clusters
-		between_cluster_dist = self.distance_between_clusters(centroids,
-															  unique_centroids,	
-															  heat)
-		# Get a boolean matrix of whether two components should be combined
-		combine_cluster_bools = self.combine_decision(within_cluster_dist,
-													  between_cluster_dist,
-													  rang)
-		# Create the modified connected components grid
-		ne_centroid = self.new_centroid(combine_cluster_bools,
-										centroids,
-										unique_centroids)
+	def compute_combined_centroids(self, heat : np.ndarray, naive_centroids : np.ndarray, threshold=0.3):
+		""" compute_combined_centroids -- a function that combines centroids that are close enough together
 
-		return ne_centroid
+		Args:
+			heat (np.ndarray): U-matrix
+			naive_centroids (np.ndarray): original centroids without merging
+			threshold (float, optional): Any centroids with pairwise cost less than this threshold is merged. Defaults to 0.3.
+
+		Returns:
+			np.ndarray: new node map with combined centroids
+		"""
+		centroids = naive_centroids.copy()
+		unique_centroids = self.get_unique_centroids(centroids) # the nodes_count dictionary is also created here, so don't remove this line
+
+		# for each pair of centroids, compute the weighted distance between them via interpolating the umat
+		# if the distance is less than the threshold, combine the centroids
+  
+		cost_between_centroids = []
+
+		for i in range(len(unique_centroids['position_x'])-1):
+			for j in range(i+1, len(unique_centroids['position_x'])):
+				a = [unique_centroids['position_x'][i], unique_centroids['position_y'][i]]
+				b = [unique_centroids['position_x'][j], unique_centroids['position_y'][j]]
+				num_sample = 5*int(np.sqrt((b[0]-a[0])**2 + (b[1]-a[1])**2))
+				x, y = np.linspace(a[0], b[0], num_sample), np.linspace(a[1], b[1], num_sample)
+				umat_dist = map_coordinates(heat, np.vstack((x,y)))
+				total_cost = np.sum(umat_dist)
+				cost_between_centroids.append([a, b, total_cost])
+		
+		# cost_between_centroids.sort(key=lambda x: x[2])  
+		sorted_cost = sorted(cost_between_centroids, key=lambda x: x[2]) # this ranks all pairwise cost in ascending order
+		# normalize the cost such that the largest cost at each step is always one
+		sorted_cost = [[a, b, c/sorted_cost[-1][2]] for a, b, c in sorted_cost]
+
+		# combine the centroids, going down the list until the threshold is reached
+		if sorted_cost[0][2] < threshold:
+			centroid_a = tuple(sorted_cost[0][0])
+			centroid_b = tuple(sorted_cost[0][1])
+			nodes_a = self.nodes_count[centroid_a]
+			nodes_b = self.nodes_count[centroid_b]
+
+			print("Centroid A: ", centroid_a, flush=True)
+			print("Node A count: ", nodes_a, flush=True)
+			print("Centroid B: ", centroid_b, flush=True)
+			print("Node B count: ", nodes_b, flush=True)
+
+			print("Merging...", flush=True)
+
+			replace_a_with_b = False
+			if nodes_a < nodes_b:
+				replace_a_with_b = True
+
+			# update the centroids with a smaller number of nodes by replacing them with the centroid with larger number of nodes
+			for ix in range(self.xdim):
+				for iy in range(self.ydim):
+					if replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_a[0] and centroids['centroid_y'][ix, iy] == centroid_a[1]:
+						centroids['centroid_x'][ix, iy] = centroid_b[0]
+						centroids['centroid_y'][ix, iy] = centroid_b[1]
+					elif not replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_b[0] and centroids['centroid_y'][ix, iy] == centroid_b[1]:
+						centroids['centroid_x'][ix, iy] = centroid_a[0]
+						centroids['centroid_y'][ix, iy] = centroid_a[1]
+
+			# print("New centroids: \n", centroids, flush=True)
+			centroids = self.compute_combined_centroids(heat, centroids, threshold)
+		else:
+			unique_centroids = self.get_unique_centroids(centroids)
+			print("Centroids: \n", unique_centroids, flush=True)
+			print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
+			return centroids
+
+		return centroids
 
 	def get_unique_centroids(self, centroids):
 		""" get_unique_centroids -- a function that computes a list of unique centroids from
@@ -709,22 +858,24 @@ class map:
 		ydim = self.ydim
 		xlist = []
 		ylist = []
-		x_centroid = centroids['centroid_x']
-		y_centroid = centroids['centroid_y']
+		# x_centroid = centroids['centroid_x']
+		# y_centroid = centroids['centroid_y']
+		centr_locs = []
 
+		# create a list of unique centroid positions
 		for ix in range(xdim):
 			for iy in range(ydim):
-				cx = x_centroid[ix, iy]
-				cy = y_centroid[ix, iy]
+				cx = centroids['centroid_x'][ix, iy]
+				cy = centroids['centroid_y'][ix, iy]
+					
+				centr_locs.append((cx,cy))
 
-		# Check if the x or y of the current centroid is not in the list
-		# and if not
-		# append both the x and y coordinates to the respective lists
-				if not(cx in xlist) or not(cy in ylist):
-					xlist.append(cx)
-					ylist.append(cy)
+		self.nodes_count = {i:centr_locs.count(i) for i in centr_locs}
 
-		# return a list of unique centroid positions
+		unique_ids = list(set(centr_locs))
+		xlist = [x for x, y in unique_ids]
+		ylist = [y for x, y in unique_ids]
+
 		return {"position_x": xlist, "position_y": ylist}
 
 	def distance_from_centroids(self, centroids, unique_centroids, heat):
@@ -807,8 +958,8 @@ class map:
 		columns = tmp_1.shape[1]
 
 		tmp = np.transpose(np.array(list(combinations([i for i in range(columns)], 2))))
-		print("shape of tmp: ", tmp.shape)
-		print("shape of tmp_1: ", tmp_1.shape)
+		# print("shape of tmp: ", tmp.shape)
+		# print("shape of tmp_1: ", tmp_1.shape)
 
 		tmp_3 = np.zeros(shape=(tmp_1.shape[0], tmp.shape[1]))
 
@@ -904,7 +1055,16 @@ class map:
 						cdist < centroid_dist[yi] + ry):
 						to_combine[xi, yi] = True
 
+		# for xi in range(inter_cluster.shape[0]):
+		# 	for yi in range(inter_cluster.shape[1]):
+		# 		cdist = inter_cluster[xi, yi]
+		# 		if cdist != 0:
+
+					
+
 		return to_combine
+		
+
 
 	def new_centroid(self, bmat, centroids, unique_centroids):
 		""" new_centroid -- A function to combine centroids based on matrix of booleans.
@@ -1182,7 +1342,7 @@ class map:
 
 		return {'lo': lo_val, 'hi': hi_val}	
 
-	def accuracy(self, sample, data_ix):
+	def accuracy(self, sample, data_ix): # this is topographical error
 		""" accuracy -- the topographic accuracy of a single sample is 1 is the best matching unit
 		             	and the second best matching unit are are neighbors otherwise it is 0
 		"""
@@ -1387,7 +1547,7 @@ class map:
 						merge=merge_clusters,
 						merge_range=merge_range)
 
-	def compute_umat(self, smoothing=None):
+	def compute_umat(self, smoothing=None): # WORKS / CHECKED 04/17
 		""" compute_umat -- compute the unified distance matrix
 		
 			parameters:
@@ -1397,12 +1557,12 @@ class map:
 			- a matrix with the same x-y dims as the original map containing the umat values
 		"""
 
-		d = euclidean_distances(self.neurons, self.neurons)
+		d = euclidean_distances(self.neurons, self.neurons) / (self.xdim*self.ydim)
 		umat = self.compute_heat(d, smoothing)
 
 		return umat
 
-	def compute_heat(self, d, smoothing=None):
+	def compute_heat(self, d, smoothing=None): # WORKS / CHECKED 04/17
 		""" compute_heat -- compute a heat value map representation of the given distance matrix
 			
 			parameters:
@@ -1540,7 +1700,7 @@ class map:
 
 		return heat
 
-	def plot_heat(self, heat, explicit=False, comp=True, merge=False, merge_range=0.25):
+	def plot_heat(self, heat, explicit=False, comp=True, merge=False, merge_cost=0.001):
 		""" plot_heat -- plot a heat map based on a 'map', this plot also contains the connected
 		                 components of the map based on the landscape of the heat map
 
@@ -1549,9 +1709,8 @@ class map:
 			- explicit - controls the shape of the connected components
 			- comp - controls whether we plot the connected components on the heat map
 			- merge - controls whether we merge the starbursts together.
-			- merge_range - a range that is used as a percentage of a certain distance in the code
-			                to determine whether components are closer to their centroids or
-			                centroids closer to each other.
+			- merge_cost - a cost threshold that is used to determine how close the centroids are
+			                before they are merged together.
 		"""
 
 		umat = heat
@@ -1571,26 +1730,39 @@ class map:
 		
 		tmp_1 = np.array(np.transpose(tmp))
 		
-		fig, ax = plt.subplots()
+		fig, ax = plt.subplots(dpi=200)
+		plt.rcParams['font.size'] = 8
 		ax.pcolor(tmp_1, cmap=plt.cm.YlOrRd)
 		
-		ax.set_xticks(np.arange(x)+0.5, minor=False)
-		ax.set_yticks(np.arange(y)+0.5, minor=False)
+		ax.set_xticks(np.arange(0,x,5)+0.5, minor=False)
+		ax.set_yticks(np.arange(0,y,5)+0.5, minor=False)
 		plt.xlabel("x")
 		plt.ylabel("y")
-		ax.set_xticklabels(np.arange(x), minor=False)
-		ax.set_yticklabels(np.arange(y), minor=False)
+		ax.set_xticklabels(np.arange(0,x,5), minor=False)
+		ax.set_yticklabels(np.arange(0,y,5), minor=False)
 		ax.xaxis.set_tick_params(labeltop='on')
 		ax.yaxis.set_tick_params(labelright='on')
+		ax.xaxis.label.set_fontsize(10)
+		ax.yaxis.label.set_fontsize(10)
+		ax.set_aspect('equal')
+		ax.grid(True)
 
 		# put the connected component lines on the map
 		if comp:
-			if not merge:
-				# find the centroid for each neuron on the map
-				centroids = self.compute_centroids(heat, explicit)
-			else:
+			
+			# find the centroid for each neuron on the map
+			centroids = self.compute_centroids(heat, explicit)
+			if merge:
 				# find the unique centroids for the neurons on the map
-				centroids = self.compute_combined_clusters(umat, explicit, merge_range)
+				centroids = self.compute_combined_centroids(umat, centroids, merge_cost)
+
+			unique_centroids = self.get_unique_centroids(centroids)
+			print("Unique centroids : ", unique_centroids)
+
+			unique_centroids['position_x'] = [x+0.5 for x in unique_centroids['position_x']]
+			unique_centroids['position_y'] = [y+0.5 for y in unique_centroids['position_y']]
+
+			plt.scatter(unique_centroids['position_x'],unique_centroids['position_y'], color='red', s=10)
 
 			# connect each neuron to its centroid
 			for ix in range(x):
@@ -1611,16 +1783,17 @@ class map:
 
 				nix = self.visual[i]
 				c = self.coordinate(np.reshape(nix,(1,1)), self.xdim) # NOTE: slow code
-				ix = c[0,0]
-				iy = c[0,1]
+				# print(c)
+				ix = int(c[0,0])
+				iy = int(c[0,1])
 
 				count[ix-1, iy-1] = count[ix-1, iy-1]+1
 
 			for i in range(nobs):
 
 				c = self.coordinate(np.reshape(self.visual[i],(1,1)), self.xdim) # NOTE: slow code
-				ix = c[0,0]
-				iy = c[0,1]
+				ix = int(c[0,0])
+				iy = int(c[0,1])
 
 				# we only print one label per cell
 				if count[ix-1, iy-1] > 0:

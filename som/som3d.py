@@ -218,8 +218,8 @@ if __name__ == "__main__":
         #--------------------------------------------------
         # analyze
         #1. standardize:
-        scaler = StandardScaler()
-        # scaler = MinMaxScaler()
+        # scaler = StandardScaler()
+        scaler = MinMaxScaler()
 
         scaler.fit(x)
         x = scaler.transform(x)

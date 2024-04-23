@@ -3,7 +3,7 @@
 
 import os
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 import h5py as h5
 import argparse
 from scipy.ndimage import zoom, rotate, convolve
@@ -520,7 +520,7 @@ if __name__ == "__main__":
     dataset_reshaped = np.reshape(dataset_reduced, (dataset_reduced.shape[0], dataset_reduced.shape[1]*dataset_reduced.shape[2]*dataset_reduced.shape[3])).T
 
     if args_cli.scale == True: # scale dataset
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         scaler.fit(dataset_reshaped)
         dataset_scaled = scaler.transform(dataset_reshaped)
     else:

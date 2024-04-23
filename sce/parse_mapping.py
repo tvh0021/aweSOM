@@ -85,11 +85,11 @@ if __name__ == '__main__':
     if not args.save_combined_map:
         plt.figure(dpi=300)
         plt.plot(cluster_order, gsum_deriv, marker='o', c='k', markersize=2, linewidth=1)
-        # plt.yscale('log')
-        plt.ylim(min(gsum_deriv) / 30, 0.0)
         plt.title(f"Sorted gsum derivatives")
         plt.xlabel("Ranked clusters")
         plt.ylabel("Gsum derivative")
+        # plt.yscale('symlog', linthreshy=0.01)
+        plt.yscale('symlog', linthresh=0.01) 
         plt.grid()
         plt.hlines(args.threshold, 0, len(cluster_order))
         plt.savefig(f"{args.file_path}/gsum_deriv.png")
