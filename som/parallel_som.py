@@ -438,10 +438,6 @@ class map:
 			counts[data_Xneuron[i] + data_Yneuron[i]*self.xdim] += 1
 			result[data_Xneuron[i] + data_Yneuron[i]*self.xdim]
 
-
-	## Any function below this line was not significantly modified from the original POPSOM library
-	## Refer to: https://github.com/njali2001/popsom.git for documentation
-
 	def rowix(self, x, y):
 		""" rowix -- convert from a map xy-coordinate to a row index  """
 
@@ -765,13 +761,16 @@ class map:
 		return {"centroid_x": centroid_x, "centroid_y": centroid_y}
 
 	@staticmethod
-	@njit(parallel=True)
-	def replace_value(centroids : np.ndarray, centroid_a : tuple, centroid_b : tuple) -> np.ndarray:
-		for ix in range(self.xdim):
-				for iy in range(self.ydim):
-					if replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_a[0] and centroids['centroid_y'][ix, iy] == centroid_a[1]:
+	# @njit(parallel=True) # numba does not support dictionary; so cannot parallelize this function
+	def replace_value(centroids : dict[str, np.ndarray], centroid_a : tuple, centroid_b : tuple) -> dict[str, np.ndarray]:
+		(xdim, ydim) = centroids['centroid_x'].shape
+		for ix in range(xdim):
+				for iy in range(ydim):
+					if centroids['centroid_x'][ix, iy] == centroid_a[0] and centroids['centroid_y'][ix, iy] == centroid_a[1]:
 						centroids['centroid_x'][ix, iy] = centroid_b[0]
 						centroids['centroid_y'][ix, iy] = centroid_b[1]
+
+		return centroids
 
 	def compute_combined_centroids(self, heat : np.ndarray, naive_centroids : np.ndarray, threshold=0.3):
 		""" compute_combined_centroids -- a function that combines centroids that are close enough together
@@ -798,7 +797,7 @@ class map:
 				b = [unique_centroids['position_x'][j], unique_centroids['position_y'][j]]
 				num_sample = 5*int(np.sqrt((b[0]-a[0])**2 + (b[1]-a[1])**2))
 				x, y = np.linspace(a[0], b[0], num_sample), np.linspace(a[1], b[1], num_sample)
-				umat_dist = map_coordinates(heat, np.vstack((x,y)))
+				umat_dist = map_coordinates(heat**2, np.vstack((x,y)))
 				total_cost = np.sum(umat_dist)
 				cost_between_centroids.append([a, b, total_cost])
 		
@@ -825,15 +824,10 @@ class map:
 			if nodes_a < nodes_b:
 				replace_a_with_b = True
 
-			# update the centroids with a smaller number of nodes by replacing them with the centroid with larger number of nodes
-			for ix in range(self.xdim):
-				for iy in range(self.ydim):
-					if replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_a[0] and centroids['centroid_y'][ix, iy] == centroid_a[1]:
-						centroids['centroid_x'][ix, iy] = centroid_b[0]
-						centroids['centroid_y'][ix, iy] = centroid_b[1]
-					elif not replace_a_with_b and centroids['centroid_x'][ix, iy] == centroid_b[0] and centroids['centroid_y'][ix, iy] == centroid_b[1]:
-						centroids['centroid_x'][ix, iy] = centroid_a[0]
-						centroids['centroid_y'][ix, iy] = centroid_a[1]
+			if replace_a_with_b:
+				centroids = self.replace_value(centroids, centroid_a, centroid_b)
+			else:
+				centroids = self.replace_value(centroids, centroid_b, centroid_a)
 
 			# print("New centroids: \n", centroids, flush=True)
 			centroids = self.compute_combined_centroids(heat, centroids, threshold)
@@ -878,107 +872,6 @@ class map:
 
 		return {"position_x": xlist, "position_y": ylist}
 
-	def distance_from_centroids(self, centroids, unique_centroids, heat):
-		""" distance_from_centroids -- A function to get the average distance from
-		                               centroid by cluster.
-			parameters:
-			- centroids - a matrix of the centroid locations in the map
-			- unique_centroids - a list of unique centroid locations
-			- heat - a unified distance matrix
-		"""
-
-		centroids_x_positions = unique_centroids['position_x']
-		centroids_y_positions = unique_centroids['position_y']
-		within = np.zeros(len(centroids_x_positions))
-
-		for i in range(len(centroids_x_positions)):
-			cx = centroids_x_positions[i]
-			cy = centroids_y_positions[i]
-
-			# compute the average distance
-			distance = self.cluster_spread(cx, cy, np.array(heat), centroids)
-
-			# append the computed distance to the list of distances
-			within[i] = distance
-
-		return within
-
-	def cluster_spread(self, x, y, umat, centroids):
-		""" cluster_spread -- Function to calculate the average distance in
-		                      one cluster given one centroid.
-		
-			parameters:
-			- x - x position of a unique centroid
-			- y - y position of a unique centroid
-			- umat - a unified distance matrix
-			- centroids - a matrix of the centroid locations in the map
-		"""
-
-		centroid_x = x
-		centroid_y = y
-		sum = 0
-		elements = 0
-		xdim = self.xdim
-		ydim = self.ydim
-		centroid_weight = umat[centroid_x, centroid_y]
-
-		for xi in range(xdim):
-			for yi in range(ydim):
-				cx = centroids['centroid_x'][xi, yi]
-				cy = centroids['centroid_y'][xi, yi]
-
-				if(cx == centroid_x and cy == centroid_y):
-					cweight = umat[xi, yi]
-					sum = sum + abs(cweight - centroid_weight)
-					elements = elements + 1
-
-		average = sum / elements
-
-		return average
-
-	def distance_between_clusters(self, centroids, unique_centroids, umat):
-		""" distance_between_clusters -- A function to compute the average pairwise
-		                                 distance between clusters.
-		
-			parameters:
-			- centroids - a matrix of the centroid locations in the map
-			- unique_centroids - a list of unique centroid locations
-			- umat - a unified distance matrix
-		"""
-
-		cluster_elements = self.list_clusters(centroids, unique_centroids, umat)
-
-		tmp_1 = np.zeros(shape=(max([len(cluster_elements[i]) for i in range(
-				len(cluster_elements))]), len(cluster_elements)))
-
-		for i in range(len(cluster_elements)):
-			for j in range(len(cluster_elements[i])):
-				tmp_1[j, i] = cluster_elements[i][j]
-
-		columns = tmp_1.shape[1]
-
-		tmp = np.transpose(np.array(list(combinations([i for i in range(columns)], 2))))
-		# print("shape of tmp: ", tmp.shape)
-		# print("shape of tmp_1: ", tmp_1.shape)
-
-		tmp_3 = np.zeros(shape=(tmp_1.shape[0], tmp.shape[1]))
-
-		for i in range(tmp.shape[1]):
-			tmp_3[:, i] = np.where(tmp_1[:, tmp[1, i]]*tmp_1[:, tmp[0, i]] != 0,
-									abs(tmp_1[:, tmp[0, i]]-tmp_1[:, tmp[1, i]]), 0)
-	        # both are not equals 0
-
-		mean = np.true_divide(tmp_3.sum(0), (tmp_3 != 0).sum(0))
-		index = 0
-		mat = np.zeros((columns, columns))
-
-		for xi in range(columns-1):
-			for yi in range(xi, columns-1):
-				mat[xi, yi + 1] = mean[index]
-				mat[yi + 1, xi] = mean[index]
-				index = index + 1
-
-		return mat
 
 	def list_clusters(self, centroids, unique_centroids, umat):
 		""" list_clusters -- A function to get the clusters as a list of lists.
@@ -1029,87 +922,6 @@ class map:
 					cluster_list.append(cweight)
 
 		return cluster_list
-
-	def combine_decision(self, within_cluster_dist, distance_between_clusters, rang):
-		""" combine_decision -- A function that produces a boolean array
-		                        representing which clusters should be combined.
-		
-			parameters:
-			- within_cluster_dist - A list of the distances from centroid to cluster elements for all centroids
-			- distance_between_clusters - A list of the average pairwise distance between clusters
-			- range - The distance where the clusters are merged together.
-		"""
-
-		inter_cluster = distance_between_clusters
-		centroid_dist = within_cluster_dist
-		dim = inter_cluster.shape[1]
-		to_combine = np.array([[False]*dim]*dim)
-
-		for xi in range(dim):
-			for yi in range(dim):
-				cdist = inter_cluster[xi, yi]
-				if cdist != 0:
-					rx = centroid_dist[xi] * rang
-					ry = centroid_dist[yi] * rang
-					if (cdist < centroid_dist[xi] + rx or
-						cdist < centroid_dist[yi] + ry):
-						to_combine[xi, yi] = True
-
-		# for xi in range(inter_cluster.shape[0]):
-		# 	for yi in range(inter_cluster.shape[1]):
-		# 		cdist = inter_cluster[xi, yi]
-		# 		if cdist != 0:
-
-					
-
-		return to_combine
-		
-
-
-	def new_centroid(self, bmat, centroids, unique_centroids):
-		""" new_centroid -- A function to combine centroids based on matrix of booleans.
-		
-			parameters:
-			- bmat - a boolean matrix containing the centroids to merge
-			- centroids - a matrix of the centroid locations in the map
-			- unique_centroids - a list of unique centroid locations
-		"""
-
-		bmat_rows = bmat.shape[0]
-		bmat_columns = bmat.shape[1]
-		centroids_x = unique_centroids['position_x']
-		centroids_y = unique_centroids['position_y']
-		components = centroids
-
-		for xi in range(bmat_rows):
-			for yi in range(bmat_columns):
-				if bmat[xi, yi]:
-					x1 = centroids_x[xi]
-					y1 = centroids_y[xi]
-					x2 = centroids_x[yi]
-					y2 = centroids_y[yi]
-					components = self.swap_centroids(x1, y1, x2, y2, components)
-
-		return components
-
-	def swap_centroids(self, x1, y1, x2, y2, centroids):
-		""" swap_centroids -- A function that changes every instance of a centroid to
-		                      one that it should be combined with.
-			parameters:
-			- centroids - a matrix of the centroid locations in the map
-		"""
-
-		xdim = self.xdim
-		ydim = self.ydim
-		compn_x = centroids['centroid_x']
-		compn_y = centroids['centroid_y']
-		for xi in range(xdim):
-			for yi in range(ydim):
-				if compn_x[xi, 0] == x1 and compn_y[yi, 0] == y1:
-					compn_x[xi, 0] = x2
-					compn_y[yi, 0] = y2
-
-		return {"centroid_x": compn_x, "centroid_y": compn_y}
 
 	def embed(self, conf_int=.95, verb=False, ks=False):
 		""" embed -- evaluate the embedding of a map using the F-test and
