@@ -115,7 +115,7 @@ if __name__ == "__main__":
     # initialize lattice
     if xdim is None or ydim is None:
         print("No lattice dimensions provided, initializing lattice based on Kohonen's advice", flush=True)
-        [xdim, ydim] = initialize_lattice(x, 0.3)
+        [xdim, ydim] = initialize_lattice(x, 0.5)
     
     print(f"Initialized lattice dimensions: {xdim}x{ydim}", flush=True)
     print(f"File loaded, parameters: {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}", flush=True)
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     # normalize data
     scale_method = "manual"
     if scale_method == "manual":
-        x = manual_scaling(x)
+        data_transformed = manual_scaling(x)
     else:
         scaler = MinMaxScaler()
         data_transformed = scaler.fit_transform(x)
