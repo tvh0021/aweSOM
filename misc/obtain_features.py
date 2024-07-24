@@ -401,6 +401,7 @@ if __name__ == "__main__":
     j_perp = np.sqrt(j_perp2)
     e_par = b_dot_e / b_mag
     e_perp = np.sqrt(e_mag*e_mag - e_par*e_par)
+    # j_par_e_par = j_par * e_par
     
     print("Finished computing derived features", flush=True)
     
@@ -533,5 +534,6 @@ if __name__ == "__main__":
     asciilist = [n.encode("ascii", "ignore") for n in list_of_features]
     dsetf = f5.create_dataset("names",  data=asciilist)
     f5.close()
-    print("Saved dataset to {}".format(GetH5FileName(list_of_features, lap, kwargs=additional_kws)), flush=True)
-    print("Order of features : ", list_of_features, flush=True)
+    print("Saved dataset to {}".format(os.getcwd()), flush=True)
+    print("Saved dataset as {}".format(GetH5FileName(list_of_features, lap, kwargs=additional_kws)), flush=True)
+    # print("Order of features : ", list_of_features, flush=True)

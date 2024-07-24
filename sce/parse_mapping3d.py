@@ -7,13 +7,14 @@ import h5py as h5
 from scipy.signal import savgol_filter
 
 parser = argparse.ArgumentParser(description="Use multimap mapping to analyze and segment groups of features")
-parser.add_argument('--file_path', type=str, dest='file_path', help='Multimap mapping file path')
+parser.add_argument('--file_path', type=str, dest='file_path', default=os.getcwd(), help='Multimap mapping file path')
 parser.add_argument("--copy_clusters", dest='copy_clusters', action='store_true', help="Copy the clusters to a new folder")
-parser.add_argument("--save_combined_map", dest='save_combined_map', action='store_true', help="Save the combined map of all clusters")
 parser.add_argument("--threshold", type=float, dest='threshold', default=-0.015, help="Threshold for the derivative of the gsum values")
+parser.add_argument("--ndim", type=int, dest='ndim', default=640, help="Number of voxels in each dimension")
+parser.add_argument("--save_combined_map", dest='save_combined_map', action='store_true', help="Save the combined map of all clusters")
+parser.add_argument("--return_fig", dest='return_fig', action='store_true', help="Return the figure")
 parser.add_argument("--reference_file", type=str, dest='reference_file', default='/mnt/home/tha10/ceph/SOM-tests/pipeline-test/features_2j1b1e0r_2800.h5', help="Reference file to compare the clusters to", required=False)
 parser.add_argument('--slice', type=int, dest='slice', default=580, help='Slice number, make sure this matches the slice number in the sce_slice.py call')
-parser.add_argument("--ndim", type=int, dest='ndim', default=640, help="Number of voxels in each dimension")
 args = parser.parse_args()
 
 def makeFilename (n : int) -> str:
@@ -34,8 +35,8 @@ if __name__ == '__main__':
     with open(args.file_path + "/multimap_mappings.txt", 'r') as f:
         for line in f:
             line = line.strip("\n")
-            if not line[0].isnumeric():
-                key_name = line.strip("clusters_").strip(".npy")
+            if line.endswith("_labels.npy"):
+                key_name = line.strip(".npy")
                 mapping[key_name] = []
             else:
                 mapping[key_name].append(line.split(" "))
@@ -88,12 +89,12 @@ if __name__ == '__main__':
         plt.figure(dpi=300)
         plt.plot(cluster_order, gsum_deriv, marker='o', c='k', markersize=2, linewidth=1)
         # plt.yscale('log')
-        plt.ylim(min(gsum_deriv) / 30, 0.0)
+        plt.ylim(threshold * 3, 0.0)
         plt.title(f"Sorted gsum derivatives")
         plt.xlabel("Ranked clusters")
         plt.ylabel("Gsum derivative")
         plt.grid()
-        plt.hlines(args.threshold, 0, len(cluster_order))
+        plt.hlines(threshold, 0, len(cluster_order))
         plt.savefig(f"{args.file_path}/gsum_deriv.png")
         print("Saved gsum derivative plot")
     
@@ -163,49 +164,51 @@ if __name__ == '__main__':
             cluster_binary_map = np.zeros((len(remapped_clusters[cluster]),nd,nd,nd), dtype=np.float32)
             for i, instance in enumerate(remapped_clusters[cluster]):
                 print("Instance", i, flush=True)
-                cluster_binary_map[i,:,:,:] = np.load(args.file_path + "/mask3d-clusters_{}.npy-id{}.npy".format(instance[2],instance[1]))
+                cluster_binary_map[i,:,:,:] = np.load(args.file_path + "/mask3d-{}.npy-id{}.npy".format(instance[2],instance[1]))
                 
             all_binary_maps[int(cluster),:,:,:] = np.sum(cluster_binary_map, axis=0)
                 
         # save the new binary map
-        np.save(args.file_path + "/all_binary_maps.npy", all_binary_maps)
+        np.save(args.file_path + f"/sce_clusters_{threshold}.npy", all_binary_maps)
         print("Saved new binary map")
         
         # plot the new binary map with j_par as reference
         # load h5 file as comparison
-        f_in = h5.File(args.reference_file,"r")
+        if args.return_fig:
         
-        dataset = f_in['features'][()]
-        feature_names = f_in['names'][()]
-        
-        all_data = np.array(dataset)
-        # print("Shape of all data", all_data.shape)
-        nx = int(np.cbrt(all_data.shape[0]))
-        ny = nx
-        nz = nx
-        j_par = np.reshape(all_data[:,feature_names == b'j_par'] if b'j_par' in feature_names else all_data[:,feature_names == b'j_par_abs'], newshape=[nx,ny,nz])
-        slice_number = args.slice
-        
-        number_of_clusters = all_binary_maps.shape[0]
-        print("Identified {} clusters.".format(number_of_clusters))
-
-        ncols = 3
-        nrows = int(np.ceil((number_of_clusters+1) / ncols))
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(10,10 / ncols * nrows), sharex=True, sharey=True, dpi=300)
-        # fig, axs = plt.subplots(nrows=number_of_clusters+1, ncols=1, figsize=(4,number_of_clusters*4), dpi=200)
-
-        ref = axs[0,0].pcolormesh(j_par[slice_number,:,:], cmap='RdBu', vmin=-1.5, vmax=1.5)
-        axs[0,0].set_aspect('equal')
-        # fig.colorbar(ref, ax=axs[0], shrink=0.9)
-        axs[0,0].set_title('j_par')
-
-        for i, file in enumerate(all_binary_maps):
-            a, b = divmod(i+1, ncols)
-            axs[a, b].pcolormesh(all_binary_maps[i,slice_number,:,:], cmap='Reds', vmin=0)
-            axs[a, b].set_aspect('equal')
-            axs[a, b].set_title(f"Cluster {i}")
+            f_in = h5.File(args.reference_file,"r")
             
-        plt.savefig(f"{args.file_path}/combined_binary_map-z{slice_number}.png")
+            dataset = f_in['features'][()]
+            feature_names = f_in['names'][()]
+            
+            all_data = np.array(dataset)
+            # print("Shape of all data", all_data.shape)
+            nx = int(np.cbrt(all_data.shape[0]))
+            ny = nx
+            nz = nx
+            j_par = np.reshape(all_data[:,feature_names == b'j_par'] if b'j_par' in feature_names else all_data[:,feature_names == b'j_par_abs'], newshape=[nx,ny,nz])
+            slice_number = args.slice
+            
+            number_of_clusters = all_binary_maps.shape[0]
+            print("Identified {} clusters.".format(number_of_clusters))
+
+            ncols = 3
+            nrows = int(np.ceil((number_of_clusters+1) / ncols))
+            fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(10,10 / ncols * nrows), sharex=True, sharey=True, dpi=300)
+            # fig, axs = plt.subplots(nrows=number_of_clusters+1, ncols=1, figsize=(4,number_of_clusters*4), dpi=200)
+
+            ref = axs[0,0].pcolormesh(j_par[slice_number,:,:], cmap='RdBu', vmin=-1.5, vmax=1.5)
+            axs[0,0].set_aspect('equal')
+            # fig.colorbar(ref, ax=axs[0], shrink=0.9)
+            axs[0,0].set_title('j_par')
+
+            for i, file in enumerate(all_binary_maps):
+                a, b = divmod(i+1, ncols)
+                axs[a, b].pcolormesh(all_binary_maps[i,slice_number,:,:], cmap='Reds', vmin=0)
+                axs[a, b].set_aspect('equal')
+                axs[a, b].set_title(f"Cluster {i}")
+                
+            plt.savefig(f"{args.file_path}/combined_binary_map-z{slice_number}.png")
         print("Saved combined binary map")
             
         

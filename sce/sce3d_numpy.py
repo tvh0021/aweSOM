@@ -1,5 +1,5 @@
 ## Statistically Combined Ensemble (SCE) code for 3D data, originally described in Bussov & Nattila (2021)
-## JAX version, GPU and JIT accelerated. Capable of handling 1000^3 data with 1 A100-80GB GPU. 
+## numpy version in case there is no GPU available. This can be 15+ times slower than the JAX version.
 
 import numpy as np
 import os
@@ -7,16 +7,14 @@ import glob
 import argparse
 
 # import jax for GPU computation
-import jax.numpy as jnp
-from jax import jit
+import numpy as np
 
 # read array from clusterID.npy
-def load_som_npy(path : str) -> jnp.ndarray:
-    """Load a numpy array from a file onto the GPU"""
-    return jnp.load(path, 'r')
+def load_som_npy(path : str) -> np.ndarray:
+    """Load a numpy array from a file onto memory"""
+    return np.load(path, 'r')
 
-@jit
-def create_mask(img : jnp.ndarray, cid : int) -> jnp.ndarray:
+def create_mask(img : np.ndarray, cid : int) -> np.ndarray:
     """Create a mask for a given cluster id
 
     Args:
@@ -26,9 +24,9 @@ def create_mask(img : jnp.ndarray, cid : int) -> jnp.ndarray:
     Returns:
         jnp.ndarray: masked cluster, 1 where cluster id is cid, 0 elsewhere
     """
-    return jnp.where(img == cid, 1, 0)
+    return np.where(img == cid, 1, 0)
 
-def compute_SQ(mask : jnp.ndarray, maskC : jnp.ndarray):
+def compute_SQ(mask : np.ndarray, maskC : np.ndarray):
     """Compute the quality index between two masks
 
     Args:
@@ -41,25 +39,25 @@ def compute_SQ(mask : jnp.ndarray, maskC : jnp.ndarray):
     """
     #--------------------------------------------------
     # product of two masked arrays; corresponds to intersection
-    I = jnp.multiply(mask, maskC)
+    I = np.multiply(mask, maskC)
 
     #--------------------------------------------------
     # sum of two masked arrays; corresponds to union
-    U = jnp.ceil((mask + maskC) * 0.5)
+    U = np.ceil((mask + maskC) * 0.5)
     # U_area = jnp.sum(U) / (nx * ny * nz)
     
     #--------------------------------------------------
     # Intersection signal strength of two masked arrays, S
-    S = jnp.sum(I) / jnp.sum(U)
+    S = np.sum(I) / np.sum(U)
 
     #--------------------------------------------------
     # Union quality of two masked arrays, Q
-    if jnp.max(mask) == 0  or jnp.max(maskC) == 0:
-        return 0., jnp.zeros(mask.shape), 0., 0.
+    if np.max(mask) == 0  or np.max(maskC) == 0:
+        return 0., np.zeros(mask.shape), 0., 0.
     
-    Q = jnp.sum(U) / (jnp.sum(mask) + jnp.sum(maskC)) - jnp.sum(I) / (jnp.sum(mask) + jnp.sum(maskC))
+    Q = np.sum(U) / (np.sum(mask) + np.sum(maskC)) - np.sum(I) / (np.sum(mask) + np.sum(maskC))
     if Q == 0.0:
-        return 0., jnp.zeros(mask.shape) #break here because this causes NaNs that accumulate.
+        return 0., np.zeros(mask.shape) #break here because this causes NaNs that accumulate.
     
     #--------------------------------------------------
     # final measure for this comparison is (S/Q) x Union
@@ -84,7 +82,7 @@ def nested_loop(all_data, number_of_clusters):
             f.write('{}\n'.format(run))
         
         # nx x ny x nz size maps
-        nz,ny,nx = jnp.cbrt(clusters_1d.shape[0]).astype(int), jnp.cbrt(clusters_1d.shape[0]).astype(int), jnp.cbrt(clusters_1d.shape[0]).astype(int)
+        nz,ny,nx = np.cbrt(clusters_1d.shape[0]).astype(int), np.cbrt(clusters_1d.shape[0]).astype(int), np.cbrt(clusters_1d.shape[0]).astype(int)
         clusters = clusters_1d.reshape(nz,ny,nx)
 
         # unique ids
@@ -100,7 +98,7 @@ def nested_loop(all_data, number_of_clusters):
             # create masked array where only id == cid are visible
             mask = create_mask(clusters, cid)
 
-            total_mask = jnp.zeros((ny,nx,nz), dtype=float)
+            total_mask = np.zeros((ny,nx,nz), dtype=float)
             
             total_SQ_scalar = 0.
             
@@ -131,7 +129,7 @@ def nested_loop(all_data, number_of_clusters):
             
             # save total mask to file
             print("Saving total mask to file", flush=True)
-            jnp.save(subfolder + '/mask3d-{}-id{}.npy'.format(run, cid), total_mask)
+            np.save(subfolder + '/mask3d-{}-id{}.npy'.format(run, cid), total_mask)
 
             # multimap_mapping[run][cid] = total_SQ_scalar
             print("Saving total SQ scalar to multimap_mapping", flush=True)
@@ -144,7 +142,7 @@ def nested_loop(all_data, number_of_clusters):
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='SCE code')
-    parser.add_argument('--folder', type=str, dest='folder', default=os.getcwd(), help='Folder name')
+    parser.add_argument('--folder', type=str, dest='folder', help='Folder name')
     parser.add_argument('--subfolder', type=str, dest='subfolder', default='SCE', help='Subfolder name')
 
     args = parser.parse_args()
@@ -165,7 +163,7 @@ if __name__ == "__main__":
     nids_array = np.empty(len(cluster_files), dtype=int)
     for run in range(len(cluster_files)):
         clusters = load_som_npy(cluster_files[run])
-        ids = jnp.unique(clusters)
+        ids = np.unique(clusters)
         nids_array[run] = len(ids)
         # print (nids_array[run])
     

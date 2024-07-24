@@ -20,7 +20,8 @@ from itertools import combinations
 from numba import njit, prange
 from scipy.ndimage import map_coordinates
 
-np.random.seed(42)
+seed = 42
+np.random.seed(seed)
 
 
 # NOTE: numba does not work in a class with pandas DataFrames. Can circumvent with @staticmethod
@@ -47,6 +48,8 @@ class map:
 		self.number_of_batches = number_of_batches
 		self.norm = norm
 		self.init = sampling_type # random or sampling initial lattice
+		self.seed = seed
+
 		if alpha_type == "static":
 			self.alpha_type = 0
 		elif alpha_type == "decay":
@@ -54,6 +57,10 @@ class map:
 		else:
 			sys.exit("alpha_type must be either 'static' or 'decay'")
 		self.save_neurons = save_neurons
+
+		self.save_frequency = self.train // 200 # how often to save the neuron weights
+		self.neurons_weights_history = []
+		self.umat_history = []
 
 	def fit(self, data : pd.DataFrame, labels : np.ndarray = None, restart : bool = False, neurons : np.ndarray = None):
 		""" fit -- Train the Model with numba JIT acceleration
@@ -187,11 +194,26 @@ class map:
 		m2Ds = self.coordinate(m, self.xdim)
 
 		# Initialize [train] number of random observations for training
-		ix = np.random.randint(0, dr-1, self.train)
-		xk = self.data_array[ix,:]
+		# ix = np.random.randint(0, dr-1, self.train)
+		# xk = self.data_array[ix,:]
+
+		# Added 06/17/2024: use random generator, shuffle the data and take the first train samples
+		rng = np.random.default_rng()
+		indices = np.arange(dr)
+		rng.shuffle(indices)
+
+		# Added 06/25/2024: if the number of training steps is larger than the number of data points, repeat the shuffled indices
+		if self.train > dr:
+			indices = np.tile(indices, self.train // dr + 1)
+		xk = self.data_array[indices[:self.train],:]
+
+		# this ensures that the same batch is not repeated over and over
+		if self.number_of_batches > 1:
+			self.seed += 1
+			np.random.seed(self.seed)
 
 		# Save the stepping of the neurons for termination condition
-		neurons_old = neurons.copy()
+		# neurons_old = neurons.copy()
 		frequency = 1000
 		# self.weight_history = np.zeros((self.train//frequency, 2))
 		# self.feature_weight_history = np.zeros((self.train//frequency, dc))
@@ -205,7 +227,6 @@ class map:
 		self.loss_history = np.zeros((self.train, dc))
 		self.average_loss = np.zeros((self.train//frequency, dc))
 
-		# for epoch in range(self.step_counter, self.train):
 		while True:
 			if epoch % int(self.train//10) == 0:
 				print("Evaluating epoch = ", epoch, flush=True)
@@ -261,9 +282,16 @@ class map:
 				print(f"Decaying learning rate to {alpha} at epoch {epoch}", flush=True)
     
 			# save neuron maps sparingly
-			if epoch % 1000000 == 0 and epoch != 0:
+			if epoch % self.save_frequency == 0:
+				self.neurons = neurons.copy()
 				print("Saving neurons at epoch ", epoch, flush=True)
-				np.save(f"neurons_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)	
+				# np.save(f"neurons_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", neurons)
+				self.neurons_weights_history.append(self.neurons)
+
+				# compute the umatrix and save it
+				umat = self.compute_umat()
+				# np.save(f"umat_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", umat)
+				self.umat_history.append(umat)
     
 			epoch += 1
 
@@ -799,6 +827,7 @@ class map:
 				x, y = np.linspace(a[0], b[0], num_sample), np.linspace(a[1], b[1], num_sample)
 				umat_dist = map_coordinates(heat**2, np.vstack((x,y)))
 				total_cost = np.sum(umat_dist)
+				# total_cost /= num_sample
 				cost_between_centroids.append([a, b, total_cost])
 		
 		# cost_between_centroids.sort(key=lambda x: x[2])  

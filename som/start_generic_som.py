@@ -1,14 +1,14 @@
 ## Script to initialize and train SOM network with generic (1D) data
 
-from sklearn.preprocessing import MinMaxScaler
-import numpy as np
-import parallel_som as psom
-import pandas as pd
-import pickle
-
 import h5py as h5
 import sys
 import argparse
+
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+
+import pandas as pd
+import pickle
 
 def batch_separator(data : np.ndarray, number_of_batches : int) -> np.ndarray:
     """ batch_separator - given a dataset and a number of batches, return a list of datasets
@@ -48,7 +48,7 @@ def initialize_lattice(data : np.ndarray, ratio : float) -> list[int]:
     N = data.shape[0]
     f = data.shape[1]
     nodes = number_of_nodes(N, f)
-    xdim = int(np.ceil(np.sqrt(nodes / ratio)))
+    xdim = int(np.sqrt(nodes / ratio))
     ydim = int(nodes / xdim)
 
     return [xdim, ydim]
@@ -74,14 +74,17 @@ if __name__ == "__main__":
     parser.add_argument("--init_lattice", type=str, dest='init_lattice', default='uniform', help='Initial values of lattice. uniform or sampling')
     parser.add_argument('--xdim', type=int, dest='xdim', default=None, help='X dimension of the lattice', required=False)
     parser.add_argument('--ydim', type=int, dest='ydim', default=None, help='Y dimension of the lattice', required=False)
+    parser.add_argument('--ratio', type=float, dest='ratio', default=0.7, help='Height to width ratio of the lattice', required=False)
     parser.add_argument('--alpha', type=float, dest='alpha', default=0.5, help='Initial learning parameter')
-    parser.add_argument('--train', type=int, dest='train', default=10000, help='Number of training steps')
+    parser.add_argument('--train', type=int, dest='train', default=None, help='Number of training steps')
     parser.add_argument('--batch', type=int, dest='batch', default=None, help='Number of batches', required=False)
     parser.add_argument('--pretrained', action="store_true", dest='pretrained', help='Pass this argument if supplying a pre-trained model', required=False)
     parser.add_argument('--neurons_path', type=str, dest='neurons_path', default=None, help='Path to file containing neuron values', required=False)
-    parser.add_argument('--save_neuron_values', dest='save_neuron_values', help='Pass this argument if you want to save neuron values', action="store_true")
+    parser.add_argument('--threshold', type=float, dest='threshold', default=0.2, help='Threshold for merging clusters', required=False)
 
     args = parser.parse_args()
+
+    import parallel_som as psom
 
     #--------------------------------------------------
     if (args.pretrained == True) & (args.neurons_path is None):
@@ -93,15 +96,13 @@ if __name__ == "__main__":
     init_lattice = args.init_lattice
     xdim = args.xdim
     ydim = args.ydim
+    ratio = args.ratio
     alpha = args.alpha
     train = args.train
     batch = args.batch
     pretrained = args.pretrained
     neurons_path = args.neurons_path
-    save_neuron_values = args.save_neuron_values
-    
-    if save_neuron_values is None:
-            save_neuron_values = False
+    threshold = args.threshold
     
     name_of_dataset = file_name.split("_")[2].split(".h5")[0] # all the data laps to process
 
@@ -112,10 +113,16 @@ if __name__ == "__main__":
     feature_list = [n.decode('utf-8') for n in feature_list]
     f5.close()
 
+    if train is None:
+        train = len(x)
+        print(f"Training steps not provided, defaulting to # steps = # data points", flush=True)
+        # print(f"Training steps: {train}", flush=True)
+
     # initialize lattice
     if xdim is None or ydim is None:
+        # NOTE: try PCA here to figure out the ratio of the map
         print("No lattice dimensions provided, initializing lattice based on Kohonen's advice", flush=True)
-        [xdim, ydim] = initialize_lattice(x, 0.5)
+        [xdim, ydim] = initialize_lattice(x, ratio)
     
     print(f"Initialized lattice dimensions: {xdim}x{ydim}", flush=True)
     print(f"File loaded, parameters: {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}", flush=True)
@@ -134,7 +141,7 @@ if __name__ == "__main__":
     else:
         data_by_batch = batch_separator(data_transformed, batch)
         som = psom.map(xdim, ydim, alpha, train, epoch=0, alpha_type="decay", sampling_type=init_lattice, number_of_batches=batch)
-    
+
     # train SOM
     if batch is None:
         attr = pd.DataFrame(data_transformed)
@@ -151,9 +158,11 @@ if __name__ == "__main__":
             attr.columns = feature_list
             som.fit(data_by_batch[i], restart=True, neurons=neurons)
             neurons = som.all_neurons()
+
+    print(f"Random seed: {som.seed}", flush=True)
     
     # assign cluster ids to the lattice
-    clusters = som.assign_cluster_to_lattice(smoothing=None,merge_cost=0.2)
+    clusters = som.assign_cluster_to_lattice(smoothing=None,merge_cost=threshold)
 
     # assign cluster ids to the data
     data_matrix=som.projection()
@@ -162,11 +171,16 @@ if __name__ == "__main__":
 
     som_labels = som.assign_cluster_to_data(data_Xneuron, data_Yneuron, clusters)
 
+    if init_lattice == "sampling":
+        initial = "s"
+    else:
+        initial = "u"
+
     # save cluster ids
-    np.save(f"{name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}"+"_labels.npy", som_labels)
-    print(f"Cluster labels saved to {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}_labels.npy")
+    np.save(f"{name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}"+"_labels.npy", som_labels)
+    print(f"Cluster labels saved to {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}_labels.npy")
 
     # save som object
-    with open('som_object.pkl', 'wb') as file:
+    with open(f'som_object_{xdim}_{ydim}_{alpha}_{train}{initial}.pkl', 'wb') as file:
         pickle.dump(som, file)
-    print(f"SOM object saved to som_object.pkl")
+    print(f"SOM object saved to som_object_{xdim}_{ydim}_{alpha}_{train}{initial}.pkl")
