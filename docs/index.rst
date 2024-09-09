@@ -14,7 +14,11 @@ Below is a quick start guide to set up aweSOM for a few generic datasets.
    :maxdepth: 2
    :caption: Contents:
 
-
+   installation
+   quickstart
+   examples
+   modules
+   api
 
 Indices and tables
 ==================

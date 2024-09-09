@@ -68,6 +68,8 @@ def manual_scaling(data : np.ndarray, bulk_range : float = 1.) -> np.ndarray:
 
 
 if __name__ == "__main__":
+    import parallel_som as psom
+
     parser = argparse.ArgumentParser(description='SOM code')
     parser.add_argument("--features_path", type=str, dest='features_path', default='/mnt/ceph/users/tha10/SOM-tests/hr-d3x640/')
     parser.add_argument("--file", type=str, dest='file', default='features_4j1b1e_2800.h5')
@@ -77,14 +79,12 @@ if __name__ == "__main__":
     parser.add_argument('--ratio', type=float, dest='ratio', default=0.7, help='Height to width ratio of the lattice', required=False)
     parser.add_argument('--alpha', type=float, dest='alpha', default=0.5, help='Initial learning parameter')
     parser.add_argument('--train', type=int, dest='train', default=None, help='Number of training steps')
-    parser.add_argument('--batch', type=int, dest='batch', default=None, help='Number of batches', required=False)
+    parser.add_argument('--batch', type=int, dest='batch', default=1, help='Number of batches', required=False)
     parser.add_argument('--pretrained', action="store_true", dest='pretrained', help='Pass this argument if supplying a pre-trained model', required=False)
     parser.add_argument('--neurons_path', type=str, dest='neurons_path', default=None, help='Path to file containing neuron values', required=False)
     parser.add_argument('--threshold', type=float, dest='threshold', default=0.2, help='Threshold for merging clusters', required=False)
 
     args = parser.parse_args()
-
-    import parallel_som as psom
 
     #--------------------------------------------------
     if (args.pretrained == True) & (args.neurons_path is None):
@@ -135,41 +135,34 @@ if __name__ == "__main__":
         scaler = MinMaxScaler()
         data_transformed = scaler.fit_transform(x)
 
-    # initialize SOM
-    if batch is None:
-        som = psom.map(xdim, ydim, alpha, train, epoch=0, alpha_type="decay", sampling_type=init_lattice)
-    else:
-        data_by_batch = batch_separator(data_transformed, batch)
-        som = psom.map(xdim, ydim, alpha, train, epoch=0, alpha_type="decay", sampling_type=init_lattice, number_of_batches=batch)
-
+    # initialize SOM lattice
+    som = psom.Lattice(xdim, ydim, alpha, train, alpha_type="decay", sampling_type=init_lattice)
+    
     # train SOM
-    if batch is None:
-        attr = pd.DataFrame(data_transformed)
-        attr.columns = feature_list
-        som.fit(attr)
+    if batch == 1:
+        som.train_lattice(data_transformed, feature_list,)
     else:
-        attr = pd.DataFrame(data_by_batch[0])
-        attr.columns = feature_list
-        som.fit(attr)
-        neurons = som.all_neurons()
-        
+        print(f"Training batch 1/{batch}", flush=True)
+        data_by_batch = batch_separator(data_transformed, batch)
+        som.train_lattice(data_by_batch[0], feature_list, number_of_steps=data_by_batch[0].shape[0])
+        lattice_weights = som.lattice
+
         for i in range(1, batch):
-            attr = pd.DataFrame(data_by_batch[i])
-            attr.columns = feature_list
-            som.fit(data_by_batch[i], restart=True, neurons=neurons)
-            neurons = som.all_neurons()
+            print(f"Training batch {i+1}/{batch}", flush=True)
+            som.train_lattice(data_by_batch[i], feature_list, number_of_steps=data_by_batch[i].shape[0], restart_lattice=lattice_weights)
+            lattice_weights = som.lattice
 
     print(f"Random seed: {som.seed}", flush=True)
+
+    # map data to lattice
+    som.data_array = data_transformed # recover the full dataset instead of the batch
+    projection_2d = som.map_data_to_lattice()
     
     # assign cluster ids to the lattice
     clusters = som.assign_cluster_to_lattice(smoothing=None,merge_cost=threshold)
 
     # assign cluster ids to the data
-    data_matrix=som.projection()
-    data_Xneuron=data_matrix[:,0]
-    data_Yneuron=data_matrix[:,1]
-
-    som_labels = som.assign_cluster_to_data(data_Xneuron, data_Yneuron, clusters)
+    som_labels = som.assign_cluster_to_data(projection_2d, clusters)
 
     if init_lattice == "sampling":
         initial = "s"
