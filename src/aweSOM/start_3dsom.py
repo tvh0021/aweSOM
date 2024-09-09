@@ -7,12 +7,11 @@ import argparse
 from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 
-import pandas as pd
 import pickle
 
 def batch_separator(data : np.ndarray, number_of_batches : int) -> np.ndarray:
-    """ batch_separator - given a dataset and a number of batches, return a list of datasets
-    each containing the same number of data points
+    """ Given a dataset and a number of batches, return a list of datasets
+    each containing the same number of data points.
 
     Args:
         data (np.ndarray): N x f dataset, N is the number of data points and f is the number of features
@@ -32,11 +31,19 @@ def batch_separator(data : np.ndarray, number_of_batches : int) -> np.ndarray:
     return batches
 
 def number_of_nodes(N : int, f : int) -> int:
+    """ Given a dataset with N data points and f features, return the number of nodes in the SOM lattice.
+
+    Args:
+        N (int): number of data points
+        f (int): number of features
+
+    Returns:
+        int: number of nodes in the lattice
+    """
     return int(5 * np.sqrt(N * f) / 6)
 
 def initialize_lattice(data : np.ndarray, ratio : float) -> list[int]:
-    """ initialize_lattice - given a N x f dataset and a ratio, return the dimensions of the SOM lattice
-        based on Kohonen's advice
+    """ Given a N x f dataset and a ratio, return the dimensions of the SOM lattice based on Kohonen's advice.
 
     Args:
         data (np.ndarray): N x f dataset, N is the number of data points and f is the number of features
@@ -54,7 +61,7 @@ def initialize_lattice(data : np.ndarray, ratio : float) -> list[int]:
     return [xdim, ydim]
 
 def manual_scaling(data : np.ndarray, bulk_range : float = 1.) -> np.ndarray:
-    """manual_scaling - scale data to a range that centers on 0. and contains 95% of the data within the range
+    """Scale data to a range that centers on 0. and contains 95% of the data within the range.
 
     Args:
         data (np.ndarray): 2d array of data (N x f)
@@ -81,14 +88,14 @@ if __name__ == "__main__":
     parser.add_argument('--train', type=int, dest='train', default=None, help='Number of training steps')
     parser.add_argument('--batch', type=int, dest='batch', default=1, help='Number of batches', required=False)
     parser.add_argument('--pretrained', action="store_true", dest='pretrained', help='Pass this argument if supplying a pre-trained model', required=False)
-    parser.add_argument('--neurons_path', type=str, dest='neurons_path', default=None, help='Path to file containing neuron values', required=False)
+    parser.add_argument('--lattice_path', type=str, dest='lattice_path', default=None, help='Path to file containing lattice values', required=False)
     parser.add_argument('--threshold', type=float, dest='threshold', default=0.2, help='Threshold for merging clusters', required=False)
 
     args = parser.parse_args()
 
     #--------------------------------------------------
-    if (args.pretrained == True) & (args.neurons_path is None):
-        sys.exit("Cannot run, no neuron values provided.")
+    if (args.pretrained == True) & (args.lattice_path is None):
+        sys.exit("Cannot run, no lattice provided.")
 
     # CLI arguments
     features_path = args.features_path
