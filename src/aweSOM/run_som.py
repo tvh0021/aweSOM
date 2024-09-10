@@ -1,4 +1,4 @@
-## Script to initialize and train SOM network with generic (1D) data
+## Script to initialize and train SOM network with generic (1D flattened) data
 
 import h5py as h5
 import sys
@@ -73,10 +73,7 @@ def manual_scaling(data : np.ndarray, bulk_range : float = 1.) -> np.ndarray:
     two_sigma = 2. * np.std(data, axis=0)
     return (data - np.mean(data, axis=0)) / two_sigma * bulk_range
 
-
-if __name__ == "__main__":
-    import parallel_som as psom
-
+def parse_args():
     parser = argparse.ArgumentParser(description='SOM code')
     parser.add_argument("--features_path", type=str, dest='features_path', default='/mnt/ceph/users/tha10/SOM-tests/hr-d3x640/')
     parser.add_argument("--file", type=str, dest='file', default='features_4j1b1e_2800.h5')
@@ -91,7 +88,12 @@ if __name__ == "__main__":
     parser.add_argument('--lattice_path', type=str, dest='lattice_path', default=None, help='Path to file containing lattice values', required=False)
     parser.add_argument('--threshold', type=float, dest='threshold', default=0.2, help='Threshold for merging clusters', required=False)
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    from .som import Lattice
+
+    args = parse_args()
 
     #--------------------------------------------------
     if (args.pretrained == True) & (args.lattice_path is None):
@@ -143,7 +145,7 @@ if __name__ == "__main__":
         data_transformed = scaler.fit_transform(x)
 
     # initialize SOM lattice
-    som = psom.Lattice(xdim, ydim, alpha, train, alpha_type="decay", sampling_type=init_lattice)
+    som = Lattice(xdim, ydim, alpha, train, alpha_type="decay", sampling_type=init_lattice)
     
     # train SOM
     if batch == 1:
@@ -181,6 +183,6 @@ if __name__ == "__main__":
     print(f"Cluster labels saved to {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}_labels.npy")
 
     # save som object
-    with open(f'som_object_{xdim}_{ydim}_{alpha}_{train}{initial}.pkl', 'wb') as file:
+    with open(f'som_object-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}.pkl', 'wb') as file:
         pickle.dump(som, file)
-    print(f"SOM object saved to som_object_{xdim}_{ydim}_{alpha}_{train}{initial}.pkl")
+    print(f"SOM object saved to som_object-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}.pkl")

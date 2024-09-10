@@ -1,6 +1,6 @@
-## Self-organizing map base code including training and fitting data, along with limited plotting capabilities
-## ported from the POPSOM library by Li Yuan (2018)
-## https://github.com/njali2001/popsom.git 
+## Self-Organizing Map base code including training and fitting data, 
+## along with limited cluster plotting capabilities, ported from
+## the POPSOM library by Li Yuan (2018) https://github.com/njali2001/popsom.git 
 ## with modifications by Trung Ha (2024) for aweSOM
 
 import sys
@@ -17,7 +17,7 @@ np.random.seed(seed)
 
 class Lattice:
 	def __init__(self, xdim : int = 10, ydim : int = 10, alpha_0 : float = 0.3, train : int = 1000, alpha_type : str = "decay", sampling_type : str = "sampling"):
-		""" Initialize the SOM lattice. - CHECK GOOD
+		""" Initialize the SOM lattice.
 			
 		Args:
 			xdim (int): The x dimension of the map. Default is 10.
@@ -83,7 +83,7 @@ class Lattice:
 	
 
 	def fast_som(self):
-		""" Performs the self-organizing map (SOM) training. - CHECK GOOD
+		""" Performs the self-organizing map (SOM) training.
 
 		This method initializes the SOM with random values or a subset of the data, and then trains the SOM by updating the
 		node weights based on the input vectors. The training process includes adjusting the learning rate, shrinking the
@@ -235,7 +235,7 @@ class Lattice:
 	@staticmethod
 	@njit()
 	def Gamma(index_bmu : int, m2Ds : np.ndarray, alpha : float, nsize : int, gaussian : bool = True):
-		""" Calculate the neighborhood function for a given BMU on a lattice. - CHECK GOOD
+		""" Calculate the neighborhood function for a given BMU on a lattice.
 
 		Args:
 			index_bmu (int): The index of the BMU node on the lattice.
@@ -271,7 +271,7 @@ class Lattice:
 	
 	def map_data_to_lattice(self):
 		"""
-		After training, map each data point to the nearest node in the lattice. - CHECK GOOD
+		After training, map each data point to the nearest node in the lattice.
 
 		Returns:
 			np.ndarray[int]: A 2D array with the x and y coordinates of the best matching nodes for each data point.
@@ -290,7 +290,7 @@ class Lattice:
 	
 	def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.005):
 		"""
-		Assigns clusters to the lattice based on the computed centroids. - CHECK GOOD
+		Assigns clusters to the lattice based on the computed centroids.
 
 		Args:
 			smoothing (float, optional): Smoothing parameter for computing Umatrix. Defaults to None.
@@ -356,7 +356,7 @@ class Lattice:
 	@njit(parallel=True)
 	def best_match(lattice : np.ndarray, obs : np.ndarray, full=False) -> np.ndarray:
 		"""
-		Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node. - CHECK GOOD
+		Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node.
 
 		Args:
 			lattice (np.ndarray): weight values of the lattice
@@ -396,7 +396,7 @@ class Lattice:
 	@njit(parallel=True)
 	def coordinate(rowix : np.ndarray, xdim : int) -> np.ndarray:
 		"""
-		Convert from a list of row index to an array of xy-coordinates. - CHECK GOOD
+		Convert from a list of row index to an array of xy-coordinates.
 
 		Args:
 			rowix (np.ndarray): 1d array with the 1d indices of the points of interest (n x 1 matrix)
@@ -416,7 +416,7 @@ class Lattice:
 
 	def rowix(self, x, y):
 		"""
-		Convert from a xy-coordinate to a row index. - CHECK GOOD
+		Convert from a xy-coordinate to a row index.
 
 		Args:
 			x (int): The x-coordinate of the map.
@@ -431,7 +431,7 @@ class Lattice:
 	
 	def node_weight(self, x, y):
 		"""
-		Returns the weight values of a node at (x,y) on the lattice. - CHECK GOOD
+		Returns the weight values of a node at (x,y) on the lattice.
 
 		Args:
 			x (int): x-coordinate of the node.
@@ -447,7 +447,7 @@ class Lattice:
 
 	def compute_centroids(self, explicit=False):
 		"""
-		Compute the centroid for each node in the lattice given a precomputed Umatrix. - CHECK GOOD
+		Compute the centroid for each node in the lattice given a precomputed Umatrix.
 
 		Args:
 			explicit (bool): Controls the shape of the connected component.
@@ -740,7 +740,7 @@ class Lattice:
 	# @njit(parallel=True) # numba does not support dictionary; so cannot parallelize this function
 	def replace_value(centroids : dict[str, np.ndarray], centroid_a : tuple, centroid_b : tuple) -> dict[str, np.ndarray]:
 		"""
-		Replaces the values of centroid_a with the values of centroid_b in the given centroids dictionary. - CHECK GOOD
+		Replaces the values of centroid_a with the values of centroid_b in the given centroids dictionary.
 
 		Args:
 			centroids (dict[str, np.ndarray]): A dictionary containing the centroids.
@@ -761,7 +761,7 @@ class Lattice:
 
 	def merge_similar_centroids(self, naive_centroids : np.ndarray, threshold=0.3):
 		""" 
-		Merge centroids that are close enough together. - CHECK GOOD
+		Merge centroids that are close enough together.
 
 		Args:
 			naive_centroids (np.ndarray): original centroids before merging
@@ -831,7 +831,7 @@ class Lattice:
 
 	def get_unique_centroids(self, centroids):
 		"""
-		Print out a list of unique centroids given a matrix of centroid locations. - CHECK GOOD
+		Print out a list of unique centroids given a matrix of centroid locations.
 
 		Args:
 			centroids: A matrix of the centroid locations in the map.
@@ -869,7 +869,7 @@ class Lattice:
 
 	def compute_umat(self, smoothing=None):
 		"""
-		Compute the unified distance matrix. - CHECK GOOD
+		Compute the unified distance matrix.
 
 		Args:
 			smoothing (float, optional): A positive floating point value controlling the smoothing of the umat representation. Defaults to None.
@@ -885,7 +885,7 @@ class Lattice:
 
 	def compute_heat(self, d, smoothing=None): # WORKS / CHECKED 04/17
 		"""
-		Compute a heat value map representation of the given distance matrix. - CHECK GOOD
+		Compute a heat value map representation of the given distance matrix.
 
 		Args:
 			d (numpy.ndarray): A distance matrix computed via the 'dist' function.
@@ -1023,7 +1023,7 @@ class Lattice:
 
 
 	def list_clusters(self, centroids, unique_centroids):
-		"""Get the clusters as a list of lists. - CHECK GOOD, not very useful
+		"""Get the clusters as a list of lists., not very useful
 
 		Args:
 			centroids (matrix): A matrix of the centroid locations in the map.
@@ -1047,7 +1047,7 @@ class Lattice:
 		return cluster_list
 
 	def list_from_centroid(self, x, y, centroids):
-		"""Get all cluster elements associated with one centroid. - CHECK GOOD
+		"""Get all cluster elements associated with one centroid.
 
 		Args:
 			x (int): The x position of a centroid.
@@ -1078,7 +1078,7 @@ class Lattice:
 
 	def smooth_2d(self, Y, ind=None, weight_obj=None, grid=None, nrow=64, ncol=64, surface=True, theta=None):
 		"""
-		Smooths 2D data using a kernel smoother. - CHECK GOOD, internal function, no user-facing aspect
+		Smooths 2D data using a kernel smoother., internal function, no user-facing aspect
 
 		Args:
 			Y (array-like): The input data to be smoothed.
@@ -1151,7 +1151,7 @@ class Lattice:
 	def starburst(self, explicit=False, smoothing=2, merge_clusters=True, merge_cost=.25):
 	
 		""" 
-		Compute and plot the starburst representation of clusters. - CHECK GOOD
+		Compute and plot the starburst representation of clusters.
 			
 		Args:
 			explicit (bool, optional): Controls the shape of the connected components. Defaults to False.
@@ -1169,7 +1169,7 @@ class Lattice:
 
 	def plot_heat(self, heat, explicit=False, comp=True, merge=False, merge_cost=0.001):
 		"""
-		Plot the heat map of the given data. - CHECK GOOD
+		Plot the heat map of the given data.
 
 		Args:
 			heat (array-like): The data to be plotted.

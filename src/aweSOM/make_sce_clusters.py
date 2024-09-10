@@ -6,18 +6,28 @@ import numpy as np
 import h5py as h5
 from scipy.signal import savgol_filter
 
-parser = argparse.ArgumentParser(description="Use multimap mapping to analyze and segment groups of features")
-parser.add_argument('--file_path', type=str, dest='file_path', default=os.getcwd(), help='Multimap mapping file path')
-parser.add_argument("--copy_clusters", dest='copy_clusters', action='store_true', help="Copy the clusters to a new folder")
-parser.add_argument("--threshold", type=float, dest='threshold', default=-0.015, help="Threshold for the derivative of the gsum values")
-parser.add_argument("--ndim", type=int, dest='ndim', default=640, help="Number of voxels in each dimension")
-parser.add_argument("--save_combined_map", dest='save_combined_map', action='store_true', help="Save the combined map of all clusters")
-parser.add_argument("--return_fig", dest='return_fig', action='store_true', help="Return the figure")
-parser.add_argument("--reference_file", type=str, dest='reference_file', default='/mnt/home/tha10/ceph/SOM-tests/pipeline-test/features_2j1b1e0r_2800.h5', help="Reference file to compare the clusters to", required=False)
-parser.add_argument('--slice', type=int, dest='slice', default=580, help='Slice number, make sure this matches the slice number in the sce_slice.py call')
-args = parser.parse_args()
+def parse_args():
+    parser = argparse.ArgumentParser(description="Use multimap mapping to analyze and segment groups of features")
+    parser.add_argument('--file_path', type=str, dest='file_path', default=os.getcwd(), help='Multimap mapping file path')
+    parser.add_argument("--copy_clusters", dest='copy_clusters', action='store_true', help="Copy the clusters to a new folder")
+    parser.add_argument("--threshold", type=float, dest='threshold', default=-0.015, help="Threshold for the derivative of the gsum values")
+    parser.add_argument("--return_gsum", dest='return_gsum', action='store_true', help="Return the sorted gsum values plot")
+    parser.add_argument('--dims', nargs='+', action="store", type=int, dest='dims', default=[640, 640, 640], help='Dimensions of the data')
+    parser.add_argument("--save_combined_map", dest='save_combined_map', action='store_true', help="Save the combined map of all clusters")
+    parser.add_argument("--return_fig", dest='return_fig', action='store_true', help="Return the figure")
+    parser.add_argument("--reference_file", type=str, dest='reference_file', default='/mnt/home/tha10/ceph/SOM-tests/lr-d3x128/production/features_2j1b1e0r_5000_jasym.h5', help="Reference file to compare the clusters to", required=False)
+    parser.add_argument('--slice', type=int, dest='slice', default=27, help='Slice number, make sure this matches the slice number in the sce_slice.py call')
+    return parser.parse_args()
 
 def makeFilename (n : int) -> str:
+    """ Make a filename based on the number given
+
+    Args:
+        n (int): number to be converted to a filename
+
+    Returns:
+        str: filename
+    """
     if n < 10:
         file_n = '000' + str(n)
     elif (n >= 10) & (n < 100):
@@ -28,15 +38,16 @@ def makeFilename (n : int) -> str:
     return f"{file_n}.png"
 
 if __name__ == '__main__':
-    
+
+    args = parse_args()
     mapping = dict()
     
     # read in the multimap mapping file and store in a dict that includes the file as key name, and the cluster_id and gsum as values
     with open(args.file_path + "/multimap_mappings.txt", 'r') as f:
         for line in f:
             line = line.strip("\n")
-            if line.endswith("_labels.npy"):
-                key_name = line.strip(".npy")
+            if line.endswith("_labels"):
+                key_name = line
                 mapping[key_name] = []
             else:
                 mapping[key_name].append(line.split(" "))
@@ -50,7 +61,7 @@ if __name__ == '__main__':
             
     # sort the list based on gsum value
     map_list.sort(key=lambda map_list: map_list[0], reverse=True)
-    print("Sorted map", map_list[0])
+    # print("Sorted map", map_list[0])
     print("Length of sorted map", len(map_list), flush=True)
     
     # now iterate through the list and copy the files to the appropriate cluster folder
@@ -65,6 +76,18 @@ if __name__ == '__main__':
             shutil.copyfile(origin_file_name, destination_file_name)
             
         print("Done copying files")
+
+    # plot the gsum values
+    if args.return_gsum:
+        gsum_values = [map_list[i][0] for i in range(len(map_list))]
+        plt.figure(dpi=300)
+        plt.plot(list(range(len(gsum_values))), gsum_values, marker='o', c='k', markersize=2, linewidth=1)
+        plt.title(f"Sorted gsum values")
+        plt.xlabel("Ranked clusters")
+        plt.ylabel("Gsum value")
+        plt.grid()
+        plt.savefig(f"{args.file_path}/gsum_values.png")
+        print("Saved gsum values plot")
         
     # apply a Savitzky-Golay filter to smooth the gsum values
     smooth_fraction = 10
@@ -151,22 +174,19 @@ if __name__ == '__main__':
         
         # add values of the binary map of each cluster to obtain a new map
         # read in the binary map
-        nd = args.ndim
-        all_binary_maps = np.empty((len(remapped_clusters),nd, nd, nd), dtype=np.float32)
+        dims = args.dims
+        all_binary_maps = np.empty(([len(remapped_clusters)]+dims), dtype=np.float32)
         for cluster in remapped_clusters.keys():
-            # diagnostic
-            # if cluster == "1":
-            #     sys.exit()
             print("Currently analyzing cluster : ", cluster, flush=True)
             print("Number of instances in cluster : ", len(remapped_clusters[cluster]), flush=True)
             
             # cannot use jax here because it uses too much memory; cannot use numba because it does not support np.load; loading all binary maps in each cluster at once will use more memory, but is also ~30% faster than loading them sequentially and adding to total every step.
-            cluster_binary_map = np.zeros((len(remapped_clusters[cluster]),nd,nd,nd), dtype=np.float32)
+            cluster_binary_map = np.zeros(([len(remapped_clusters[cluster])]+dims), dtype=np.float32)
             for i, instance in enumerate(remapped_clusters[cluster]):
                 print("Instance", i, flush=True)
-                cluster_binary_map[i,:,:,:] = np.load(args.file_path + "/mask3d-{}.npy-id{}.npy".format(instance[2],instance[1]))
+                cluster_binary_map[i] = np.reshape(np.load(args.file_path + "/mask-{}-id{}.npy".format(instance[2],instance[1])), newshape=dims)
                 
-            all_binary_maps[int(cluster),:,:,:] = np.sum(cluster_binary_map, axis=0)
+            all_binary_maps[int(cluster)] = np.sum(cluster_binary_map, axis=0)
                 
         # save the new binary map
         np.save(args.file_path + f"/sce_clusters_{threshold}.npy", all_binary_maps)
@@ -182,11 +202,8 @@ if __name__ == '__main__':
             feature_names = f_in['names'][()]
             
             all_data = np.array(dataset)
-            # print("Shape of all data", all_data.shape)
-            nx = int(np.cbrt(all_data.shape[0]))
-            ny = nx
-            nz = nx
-            j_par = np.reshape(all_data[:,feature_names == b'j_par'] if b'j_par' in feature_names else all_data[:,feature_names == b'j_par_abs'], newshape=[nx,ny,nz])
+ 
+            j_par = np.reshape(all_data[:,feature_names == b'j_par'] if b'j_par' in feature_names else all_data[:,feature_names == b'j_par_abs'], newshape=dims)
             slice_number = args.slice
             
             number_of_clusters = all_binary_maps.shape[0]
@@ -199,7 +216,6 @@ if __name__ == '__main__':
 
             ref = axs[0,0].pcolormesh(j_par[slice_number,:,:], cmap='RdBu', vmin=-1.5, vmax=1.5)
             axs[0,0].set_aspect('equal')
-            # fig.colorbar(ref, ax=axs[0], shrink=0.9)
             axs[0,0].set_title('j_par')
 
             for i, file in enumerate(all_binary_maps):
