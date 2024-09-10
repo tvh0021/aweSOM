@@ -1,0 +1,12 @@
+README.md
+setup.py
+src/aweSOM/__init__.py
+src/aweSOM/make_sce_clusters.py
+src/aweSOM/run_som.py
+src/aweSOM/sce.py
+src/aweSOM/som.py
+src/aweSOM.egg-info/PKG-INFO
+src/aweSOM.egg-info/SOURCES.txt
+src/aweSOM.egg-info/dependency_links.txt
+src/aweSOM.egg-info/requires.txt
+src/aweSOM.egg-info/top_level.txt

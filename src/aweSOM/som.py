@@ -839,8 +839,8 @@ class Lattice:
 		Returns:
 			A dictionary containing the unique x and y positions of the centroids.
 			The dictionary has the following keys:
-				position_x: A list of unique x positions.
-				position_y: A list of unique y positions.
+			position_x: A list of unique x positions.
+			position_y: A list of unique y positions.
 		"""
 
 		# get the dimensions of the map
