@@ -73,7 +73,7 @@ class Lattice:
         Args:
                 data (np.ndarray): A numpy 2D array where each row contains an unlabeled training instance.
                 features_names (list[str]): A list of feature names.
-                labels (np.ndarray, optional): A vector or dataframe with one label for each observation in data. Defaults to None.
+                labels (np.ndarray, optional): A vector with one label (ground truth) for each observation in data. Defaults to None.
                 number_of_steps (int): Number of steps taken this batch, used for keeping track of training restarts. Default is self.train.
                 save_lattice (bool, optional): A flag that determines whether the node weights are saved to a file at the end of training. Defaults to False.
                 restart_lattice (np.ndarray, optional): Vectors for the weights of the nodes from past realizations. Defaults to None.
@@ -913,7 +913,11 @@ class Lattice:
         else:
             unique_centroids = self.get_unique_centroids(centroids)
             # print("Centroids: \n", unique_centroids, flush=True)
-            print("Number of unique centroids: ", len(unique_centroids["position_x"]), flush=True)
+            print(
+                "Number of unique centroids: ",
+                len(unique_centroids["position_x"]),
+                flush=True,
+            )
             print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
             return centroids
 
