@@ -73,6 +73,58 @@ def parse_args():
     return parser.parse_args()
 
 
+def plot_gsum_values(gsum_values, file_path: str = None):
+    plt.figure(dpi=300)
+    plt.plot(
+        list(range(len(gsum_values))),
+        gsum_values,
+        marker="o",
+        c="k",
+        markersize=2,
+        linewidth=1,
+    )
+    plt.title(f"Sorted gsum values")
+    plt.xlabel("Ranked clusters")
+    plt.ylabel("Gsum value")
+    plt.grid()
+    if file_path is None:
+        plt.show()
+    else:
+        plt.savefig(f"{file_path}/gsum_values.png")
+        print("Saved gsum values plot")
+
+
+def get_gsum_values(mapping_file: str):
+    """Get the gsum values from the mapping file
+
+    Args:
+        mapping_file (str): path to the mapping file
+
+    Returns:
+        list: gsum values
+        dict: mapping of gsum values to cluster id and cluster name
+    """
+    mapping = dict()
+    with open(mapping_file, "r") as f:
+        for line in f:
+            line = line.strip("\n")
+            if "-" in line:
+                key_name = line
+                mapping[key_name] = []
+            else:
+                mapping[key_name].append(line.split(" "))
+
+    map_list = []
+    for key in mapping.keys():
+        map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
+
+    map_list.sort(key=lambda map_list: map_list[0], reverse=True)
+
+    gsum_values = [map_list[i][0] for i in range(len(map_list))]
+
+    return gsum_values, map_list
+
+
 def makeFilename(n: int) -> str:
     """Make a filename based on the number given
 
@@ -95,28 +147,30 @@ def makeFilename(n: int) -> str:
 if __name__ == "__main__":
 
     args = parse_args()
-    mapping = dict()
+    # mapping = dict()
 
-    # read in the multimap mapping file and store in a dict that includes the file as key name, and the cluster_id and gsum as values
-    with open(args.file_path + "/multimap_mappings.txt", "r") as f:
-        for line in f:
-            line = line.strip("\n")
-            if line.endswith("_labels"):
-                key_name = line
-                mapping[key_name] = []
-            else:
-                mapping[key_name].append(line.split(" "))
+    # # read in the multimap mapping file and store in a dict that includes the file as key name, and the cluster_id and gsum as values
+    # with open(args.file_path + "/multimap_mappings.txt", "r") as f:
+    #     for line in f:
+    #         line = line.strip("\n")
+    #         if "-" in line:
+    #             key_name = line
+    #             mapping[key_name] = []
+    #         else:
+    #             mapping[key_name].append(line.split(" "))
 
-    # convert the dict to a list to sort more easily
-    map_list = []
-    for key in mapping.keys():
-        map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
-    # print("Map list length", len(map_list))
+    # # convert the dict to a list to sort more easily
+    # map_list = []
+    # for key in mapping.keys():
+    #     map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
+    # # print("Map list length", len(map_list))
 
-    # sort the list based on gsum value
-    map_list.sort(key=lambda map_list: map_list[0], reverse=True)
-    # print("Sorted map", map_list[0])
-    print("Length of sorted map", len(map_list), flush=True)
+    # # sort the list based on gsum value
+    # map_list.sort(key=lambda map_list: map_list[0], reverse=True)
+    # # print("Sorted map", map_list[0])
+    gsum_values, map_list = get_gsum_values(args.file_path + "/multimap_mappings.txt")
+    print("Length of sorted map", len(gsum_values), flush=True)
+    # gsum_values = [map_list[i] for i in range(len(map_list))]
 
     # now iterate through the list and copy the files to the appropriate cluster folder
     if args.copy_clusters:
@@ -124,8 +178,8 @@ if __name__ == "__main__":
         if not os.path.exists(ranked_clusters_dir):
             os.makedirs(ranked_clusters_dir)
 
-        for i in range(len(map_list)):
-            origin_file_name = "{}/mask3d-clusters_{}.npy_id{}.png".format(
+        for i in range(len(gsum_values)):
+            origin_file_name = "{}/mask-{}_id{}.png".format(
                 args.file_path, map_list[i][2], map_list[i][1]
             )
             destination_file_name = "{}/ranked-clusters/{}".format(
@@ -137,39 +191,24 @@ if __name__ == "__main__":
 
     # plot the gsum values
     if args.return_gsum:
-        gsum_values = [map_list[i][0] for i in range(len(map_list))]
-        plt.figure(dpi=300)
-        plt.plot(
-            list(range(len(gsum_values))),
-            gsum_values,
-            marker="o",
-            c="k",
-            markersize=2,
-            linewidth=1,
-        )
-        plt.title(f"Sorted gsum values")
-        plt.xlabel("Ranked clusters")
-        plt.ylabel("Gsum value")
-        plt.grid()
-        plt.savefig(f"{args.file_path}/gsum_values.png")
-        print("Saved gsum values plot")
+        plot_gsum_values(gsum_values, args.file_path)
 
     # apply a Savitzky-Golay filter to smooth the gsum values
     smooth_fraction = 10
     order = 4
-    smoothed_map = np.array([map_list[i][0] for i in range(len(map_list))])
+    smoothed_map = gsum_values.copy()
     print("Applying Savitzky-Golay filter")
     smoothed_map = savgol_filter(
-        smoothed_map, len(map_list) // smooth_fraction, order, deriv=0
+        smoothed_map, len(gsum_values) // smooth_fraction, order, deriv=0
     )
 
     # compute the derivative of the gsum values to find the drop
     gsum_deriv = (
-        savgol_filter(smoothed_map, len(map_list) // smooth_fraction, order, deriv=1)
+        savgol_filter(smoothed_map, len(gsum_values) // smooth_fraction, order, deriv=1)
         / smoothed_map
     )
 
-    if True:
+    if False:
         np.save(
             f"{args.file_path}/gsum_deriv_smoothed_{smooth_fraction}_{order}.npy",
             gsum_deriv,

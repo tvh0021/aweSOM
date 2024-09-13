@@ -86,7 +86,7 @@ def compute_SQ(mask: array_lib.ndarray, maskC: array_lib.ndarray):
     # --------------------------------------------------
     # Union quality of two masked arrays, Q
     if array_lib.max(mask) == 0 or array_lib.max(maskC) == 0:
-        return 0.0, array_lib.zeros(mask.shape), 0.0, 0.0
+        return 0.0, array_lib.zeros(mask.shape)
 
     Q = array_lib.sum(U) / (array_lib.sum(mask) + array_lib.sum(maskC)) - array_lib.sum(
         I
@@ -244,6 +244,12 @@ if __name__ == "__main__":
 
     # --------------------------------------------------
     # generate index for multimap_mapping as the loop runs. Avoid declaring a dict beforehand to avoid memory leaks
+
+    try:  # try to create subfolder, if it exists, pass
+        os.mkdir(subfolder)
+    except FileExistsError:
+        pass
+
     with open(subfolder + "/multimap_mappings.txt", "w") as f:
         f.write("")
 

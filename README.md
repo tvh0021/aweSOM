@@ -17,7 +17,7 @@ cd aweSOM
 pip install .
 ```
 
-## 2. Basic Usage
+## 2. Basic Usage - SOM
 
 Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset
 
@@ -38,12 +38,11 @@ print("Labeled classes :", iris.target_names)
 print("Features in the set :", iris.feature_names)
 ```
 
+```text
 Shape of the data : (150, 4)
-
 Labeled classes : ['setosa' 'versicolor' 'virginica']
-
 Features in the set : ['sepal length (cm)', 'sepal width (cm)', 'petal length (cm)', 'petal width (cm)']
-
+```
 
 Normalize the data with a custom scaler
 
@@ -164,12 +163,119 @@ print("Precision: ", [float(np.round(precision[i],4))*100 for i in range(3)], "%
 print("Recall: ", [float(np.round(recall[i],4))*100 for i in range(3)], "%")
 ```
 
+```text
 Number of correct predictions:  141
-
 Accuracy =  94.0 %
-
 Precision:  [100.0, 90.2, 91.84] %
-
 Recall:  [100.0, 92.0, 90.0] %
+```
 
 Is the performance of the aweSOM model.
+
+## 3. Basic Usage - SCE
+
+If a dataset is complex, a single SOM result might not be sufficiently stable.
+Instead, we can generate multiple SOM realizations with slightly different initial parameters, then stack the results into a set of statistically significant clusters.
+
+Let's use the same Iris dataset:
+
+```python
+# set a parameter space to scan
+parameters = {"xdim": [38, 40, 42], "ydim": [14, 16], "alpha_0": [0.1, 0.5], "train": [10000, 50000, 100000]}
+merge_threshold = 0.2
+
+file_path = 'som_results/'
+
+for xdim in parameters["xdim"]:
+    for ydim in parameters["ydim"]:
+        for alpha_0 in parameters["alpha_0"]:
+            for train in parameters["train"]:
+                print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
+                map = Lattice(xdim, ydim, alpha_0, train, )
+                map.train_lattice(iris_data_transformed, feature_names, labels)
+                map.compute_umat()
+                unique_centroids = map.get_unique_centroids(map.compute_centroids())
+                projection_2d = map.map_data_to_lattice()
+                final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
+                som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+                np.save(f'{file_path}/{xdim}-{ydim}-{alpha_0}-{train}.npy', som_labels)
+```
+
+This saves 36 realizations to the folder `som_results/` (you will need to create it in your working directory).
+In the CLI:
+
+```bash
+cd [path_to_current_dir]/som_results/
+python3 [path_to_aweSOM]/aweSOM/src/aweSOM/sce.py --subfolder SCE --dims 150
+```
+
+This will create (or append to) the `multimap_mappings.txt` file inside `som_results/SCE/` with the $G_{\rm sum}$ for each cluster. It also save the mask for each cluster $C$ as a `.npy` file.  
+
+In its simplest form, the SCE stacking can be performed point-by-point: $V_{\rm SCE, i} = \Sigma_C M_i \cdot G_{\rm sum, C}$
+
+Get the list of $G_{\rm sum}$ values, sorted in descending order
+
+```python
+file_path = 'som_results/SCE/'
+file_name = 'multimap_mappings.txt'
+
+from aweSOM.make_sce_clusters import get_gsum_values, plot_gsum_values
+
+ranked_gsum_list, map_list = get_gsum_values(file_path+file_name)
+```
+
+Add these values together
+
+```python
+sce_sum = np.zeros((len(iris_data_transformed)))
+for i in range(len(ranked_gsum_list)):
+    current_cluster_mask = np.load(f"{file_path}/mask-{map_list[i][2]}-id{map_list[i][1]}.npy")
+    sce_sum += current_cluster_mask
+```
+
+Visualize the result
+
+```python
+fig, axs = plt.subplots(1, 2, figsize=(20, 10))
+scatter_ground = axs[0].scatter(iris.data[:,1], iris.data[:,2], c=iris.target, cmap='viridis')
+axs[0].set_xlabel('Sepal Width')
+axs[0].set_ylabel('Petal Length')
+axs[0].legend(scatter_ground.legend_elements()[0], iris.target_names, loc="upper right", title="Classes")
+scatter_sce = axs[1].scatter(iris.data[:,1], iris.data[:,2], c=sce_sum, cmap='viridis')
+axs[1].set_xlabel('Sepal Width')
+axs[1].set_ylabel('Petal Length')
+plt.colorbar(scatter_sce, ax=axs[1])
+plt.show()
+```
+
+![Comparison between ground truth and SCE Gsum gradient](examples/iris/sce_gradient.png)
+
+Set a cutoff in $\Sigma G_{\rm sum}$ to obtain three clusters
+
+```python
+signal_cutoff = [8000, 15000]
+
+sce_clusters = np.zeros((len(iris_data_transformed)), dtype=int)
+for i in range(len(sce_sum)):
+    if sce_sum[i] < signal_cutoff[0]:
+        sce_clusters[i] = 0
+    elif sce_sum[i] < signal_cutoff[1]:
+        sce_clusters[i] = 1
+    else:
+        sce_clusters[i] = 2
+```
+
+The resulting SCE quality is (using the same code as in 2.):
+
+```text
+signal_cutoff = [8000, 15000]
+
+sce_clusters = np.zeros((len(iris_data_transformed)), dtype=int)
+for i in range(len(sce_sum)):
+    if sce_sum[i] < signal_cutoff[0]:
+        sce_clusters[i] = 0
+    elif sce_sum[i] < signal_cutoff[1]:
+        sce_clusters[i] = 1
+    else:
+        sce_clusters[i] = 2
+```
