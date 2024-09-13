@@ -7,6 +7,8 @@ aweSOM is developed specifically to identify intermittent structures (current sh
 However, it can be used for a variety of clustering and classification tasks.
 For example, see the [Iris dataset](examples/iris.ipynb).
 
+Author: [Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst.
+
 ## 1. Installation
 
 To install aweSOM:
@@ -268,14 +270,22 @@ for i in range(len(sce_sum)):
 The resulting SCE quality is (using the same code as in 2.):
 
 ```text
-signal_cutoff = [8000, 15000]
-
-sce_clusters = np.zeros((len(iris_data_transformed)), dtype=int)
-for i in range(len(sce_sum)):
-    if sce_sum[i] < signal_cutoff[0]:
-        sce_clusters[i] = 0
-    elif sce_sum[i] < signal_cutoff[1]:
-        sce_clusters[i] = 1
-    else:
-        sce_clusters[i] = 2
+Number of correct predictions:  142
+Accuracy =  94.66666666666667 %
+Precision:  [100.0, 92.0, 92.0] %
+Recall:  [100.0, 92.0, 92.0] %
 ```
+
+Because of the simplicity of the Iris dataset, not much improvement is made with SCE, but the result is nevertheless consistent with the single SOM result.
+
+## 4. License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 5. Contributing
+
+Anyone is welcome to contribute! Please fork the repository and create pull requests with proposed changes.
+
+## 6. Contact
+
+Addtional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
