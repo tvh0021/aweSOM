@@ -5,9 +5,11 @@ It is optimized for large datasets, up to $\sim 10^7$ points.
 
 aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations (link to paper).
 However, it can be used for a variety of clustering and classification tasks.
-For example, see the [Iris dataset](examples/iris.ipynb).
+For example, see the [Iris dataset](examples/iris/iris.ipynb).
 
 Author: [Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst.
+
+Version: 1.0.0
 
 ## 1. Installation
 
@@ -288,4 +290,4 @@ Anyone is welcome to contribute! Please fork the repository and create pull requ
 
 ## 6. Contact
 
-Addtional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
+Additional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
