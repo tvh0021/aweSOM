@@ -11,7 +11,7 @@ Authors:
 
 [Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst,
 
-[Joonas N\:attil\:a](https://natj.github.io) - University of Helsinki,
+[Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
