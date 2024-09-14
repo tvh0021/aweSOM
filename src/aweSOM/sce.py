@@ -194,6 +194,7 @@ def loop_over_all_clusters(
 
 
 def parse_args():
+    """argument parser for the sce.py script"""
     parser = argparse.ArgumentParser(description="SCE code")
     parser.add_argument(
         "--folder", type=str, dest="folder", default=os.getcwd(), help="Folder name"

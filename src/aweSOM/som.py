@@ -360,7 +360,6 @@ class Lattice:
                 numpy.ndarray: Array representing the assigned clusters for each lattice point.
         """
 
-        umat = self.umat
         naive_centroids = self.compute_centroids(
             False
         )  # all local minima are centroids
@@ -882,15 +881,19 @@ class Lattice:
         # normalize the cost such that the largest cost at each step is always one
         sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
 
-        # combine the centroids, going down the list until the threshold is reached
+        # combine the centroids recursively until the threshold is reached
         if sorted_cost[0][2] < threshold:
             centroid_a = tuple(sorted_cost[0][0])
             centroid_b = tuple(sorted_cost[0][1])
-            nodes_a = self.nodes_count[centroid_a]
-            nodes_b = self.nodes_count[centroid_b]
+            heat_a = heat[centroid_a[0], centroid_a[1]]
+            heat_b = heat[centroid_b[0], centroid_b[1]]
+            # nodes_a = self.nodes_count[centroid_a]
+            # nodes_b = self.nodes_count[centroid_b]
 
-            print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
-            print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
+            # print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
+            # print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
+            print(f"Centroid A: {centroid_a}, Umatrix value: {heat_a}", flush=True)
+            print(f"Centroid B: {centroid_b}, Umatrix value: {heat_b}", flush=True)
             print("Merging...", flush=True)
 
             replace_a_with_b = False
@@ -900,7 +903,7 @@ class Lattice:
             #     replace_a_with_b = True
 
             # this method takes the centroid with the smaller U-matrix value
-            if heat[centroid_a[0], centroid_a[1]] > heat[centroid_b[0], centroid_b[1]]:
+            if heat_a > heat_b:
                 replace_a_with_b = True
 
             if replace_a_with_b:

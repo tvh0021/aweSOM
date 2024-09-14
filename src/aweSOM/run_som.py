@@ -78,7 +78,75 @@ def manual_scaling(data: np.ndarray, bulk_range: float = 1.0) -> np.ndarray:
     return (data - np.mean(data, axis=0)) / two_sigma * bulk_range
 
 
+def save_som_object(
+    som: "Lattice",
+    xdim: int,
+    ydim: int,
+    alpha_0: float,
+    train: int,
+    batch: int = 1,
+    initial: str = "s",
+    name_of_dataset: str = "",
+):
+    """
+    Save the SOM object to a pickle file.
+
+    Args:
+        som (aweSOM.Lattice): The SOM object to be saved.
+        xdim (int): The x-dimension of the SOM lattice.
+        ydim (int): The y-dimension of the SOM lattice.
+        alpha_0 (float): The initial learning rate of the SOM.
+        train (int): The number of training iterations.
+        batch (int, optional): The batch size for training. Defaults to 1.
+        initial (str, optional): The type of initial weights. Defaults to "s".
+        name_of_dataset (str, optional): The name of the dataset. Defaults to "".
+    """
+
+    with open(
+        f"som_object.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.pkl",
+        "wb",
+    ) as file:
+        pickle.dump(som, file)
+    print(
+        f"SOM object saved to som_object.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.pkl"
+    )
+
+
+def save_cluster_labels(
+    som_labels: np.ndarray,
+    xdim: int,
+    ydim: int,
+    alpha_0: float,
+    train: int,
+    batch: int = 1,
+    initial: str = "s",
+    name_of_dataset: str = "",
+):
+    """
+    Saves the cluster labels to a numpy file.
+
+    Args:
+        som_labels (np.ndarray): The cluster labels to be saved.
+        xdim (int): The x-dimension of the SOM grid.
+        ydim (int): The y-dimension of the SOM grid.
+        alpha_0 (float): The initial learning rate.
+        train (int): The number of training iterations.
+        batch (int, optional): The batch size. Defaults to 1.
+        initial (str, optional): The type of initialization. Defaults to "s".
+        name_of_dataset (str, optional): The name of the dataset. Defaults to "".
+    """
+
+    np.save(
+        f"labels.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.npy",
+        som_labels,
+    )
+    print(
+        f"Cluster labels saved to labels.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.npy"
+    )
+
+
 def parse_args():
+    """CLI argument parser for run_som.py script."""
     parser = argparse.ArgumentParser(description="SOM code")
     parser.add_argument(
         "--features_path",
@@ -181,7 +249,7 @@ if __name__ == "__main__":
     xdim = args.xdim
     ydim = args.ydim
     ratio = args.ratio
-    alpha = args.alpha
+    alpha_0 = args.alpha
     train = args.train
     batch = args.batch
     pretrained = args.pretrained
@@ -192,20 +260,19 @@ if __name__ == "__main__":
         0
     ]  # all the data laps to process
 
-    f5 = h5.File(features_path + file_name, "r")
-    x = f5["features"][()]
-    feature_list = f5["names"][()]
-
+    # load data
+    with h5.File(features_path + file_name, "r") as f5:
+        x = f5["features"][()]
+        feature_list = f5["names"][()]
     feature_list = [n.decode("utf-8") for n in feature_list]
-    f5.close()
 
+    # figure out the number of training steps
     if train is None:
         train = len(x)
         print(
-            f"Training steps not provided, defaulting to # steps = # data points",
+            f"Training steps not provided, defaulting to # steps = # data points = {train}",
             flush=True,
         )
-        # print(f"Training steps: {train}", flush=True)
 
     # initialize lattice
     if xdim is None or ydim is None:
@@ -218,7 +285,7 @@ if __name__ == "__main__":
 
     print(f"Initialized lattice dimensions: {xdim}x{ydim}", flush=True)
     print(
-        f"File loaded, parameters: {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}",
+        f"File loaded, parameters: {name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}",
         flush=True,
     )
 
@@ -229,10 +296,12 @@ if __name__ == "__main__":
     else:
         scaler = MinMaxScaler()
         data_transformed = scaler.fit_transform(x)
+        scale_method = "MinMaxScaler"
+    print(f"Data scaled with {scale_method}", flush=True)
 
     # initialize SOM lattice
     som = Lattice(
-        xdim, ydim, alpha, train, alpha_type="decay", sampling_type=init_lattice
+        xdim, ydim, alpha_0, train, alpha_type="decay", sampling_type=init_lattice
     )
 
     # train SOM
@@ -277,20 +346,9 @@ if __name__ == "__main__":
         initial = "u"
 
     # save cluster ids
-    np.save(
-        f"{name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}"
-        + "_labels.npy",
-        som_labels,
-    )
-    print(
-        f"Cluster labels saved to {name_of_dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}_labels.npy"
+    save_cluster_labels(
+        som_labels, xdim, ydim, alpha_0, train, batch, initial, name_of_dataset
     )
 
     # save som object
-    with open(
-        f"som_object-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}.pkl", "wb"
-    ) as file:
-        pickle.dump(som, file)
-    print(
-        f"SOM object saved to som_object-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}.pkl"
-    )
+    save_som_object(som, xdim, ydim, alpha_0, train, batch, initial, name_of_dataset)

@@ -7,9 +7,15 @@ aweSOM is developed specifically to identify intermittent structures (current sh
 However, it can be used for a variety of clustering and classification tasks.
 For example, see the [Iris dataset](examples/iris/iris.ipynb).
 
-Author: [Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst.
+Authors: 
 
-Version: 1.0.0
+[Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst,
+
+[Joonas N\:attil\:a](https://natj.github.io) - University of Helsinki,
+
+[Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
+
+Version: 1.1.0
 
 ## 1. Installation
 

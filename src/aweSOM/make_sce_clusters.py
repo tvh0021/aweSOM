@@ -3,11 +3,247 @@ import os
 import matplotlib.pyplot as plt
 import shutil
 import numpy as np
-import h5py as h5
 from scipy.signal import savgol_filter
 
 
+def plot_gsum_values(
+    gsum_values: list[float], minimas: list[int] = None, file_path: str = None
+):
+    """
+    Plot the gsum values with optional minima markers.
+
+    Args:
+        gsum_values (list[float]): A list of gsum values to plot.
+        minimas (list[int], optional): A list of indices indicating the minima to highlight. Defaults to None.
+        file_path (str, optional): The directory path where the plot will be saved. If None, the plot will be displayed. Defaults to None.
+
+    Returns:
+        None: This function does not return a value. It either displays the plot or saves it to a file.
+    """
+    plt.figure(dpi=300)
+    plt.plot(
+        list(range(len(gsum_values))),
+        gsum_values,
+        marker="o",
+        c="k",
+        markersize=2,
+        linewidth=1,
+    )
+    if minimas is not None:
+        plt.scatter(
+            minimas,
+            [gsum_values[i] for i in minimas],
+            c="b",
+            marker="x",
+            label="Minimas",
+        )
+        plt.legend()
+    plt.title(f"Sorted gsum values")
+    plt.xlabel("Ranked clusters")
+    plt.ylabel("Gsum value")
+    plt.grid()
+    if file_path is None:
+        plt.show()
+    else:
+        plt.savefig(f"{file_path}/gsum_values.png")
+        print("Saved gsum values plot")
+
+
+def plot_gsum_deriv(
+    gsum_deriv: np.ndarray,
+    threshold: float,
+    minimas: list[int] = None,
+    file_path: str = None,
+):
+    """
+    Plots the gsum derivative with optional minima highlighted.
+
+    Args:
+        gsum_deriv (np.ndarray): An array of gsum derivative values to be plotted.
+        threshold (float): The threshold value to draw a horizontal line on the plot.
+        minimas (list[int], optional): A list of indices representing the minima to be highlighted on the plot. Defaults to None.
+        file_path (str, optional): The file path where the plot will be saved. If None, the plot will be displayed instead. Defaults to None.
+
+    Returns:
+        None: This function does not return a value. It either displays the plot or saves it to a file.
+    """
+
+    x_range = list(range(len(gsum_deriv)))
+    plt.figure(dpi=300)
+    print("minimas", minimas, flush=True)
+    plt.plot(x_range, gsum_deriv, marker="o", c="k", markersize=2, linewidth=1)
+    if minimas is not None:
+        plt.scatter(minimas, [gsum_deriv[i] for i in minimas], c="b", marker="x")
+    plt.ylim(threshold * 5, 0.0)
+    plt.title(f"Sorted gsum derivatives")
+    plt.xlabel("Ranked clusters")
+    plt.ylabel("Gsum derivative")
+    plt.grid()
+    plt.hlines(threshold, 0, x_range[-1], colors="r", linestyles="--")
+    if file_path is None:
+        plt.show()
+    else:
+        plt.savefig(f"{args.file_path}/gsum_deriv.png")
+        print("Saved gsum derivative plot")
+
+
+def get_gsum_values(mapping_file: str):
+    """Get the gsum values from the mapping file
+
+    Args:
+        mapping_file (str): path to the mapping file
+
+    Returns:
+        list: gsum values
+        dict: mapping of gsum values to cluster id and cluster name
+    """
+    mapping = dict()
+    with open(mapping_file, "r") as f:
+        for line in f:
+            line = line.strip("\n")
+            if "-" in line:
+                key_name = line
+                mapping[key_name] = []
+            else:
+                mapping[key_name].append(line.split(" "))
+
+    map_list = []
+    for key in mapping.keys():
+        map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
+
+    map_list.sort(key=lambda map_list: map_list[0], reverse=True)
+
+    gsum_values = [map_list[i][0] for i in range(len(map_list))]
+
+    return gsum_values, map_list
+
+
+def get_sce_cluster_separation(gsum_deriv: np.ndarray, threshold: float):
+    """
+    Identify the separation of clusters in a given derivative array based on a specified threshold.
+
+    Args:
+        gsum_deriv (np.ndarray): A 1D array representing the derivative values.
+        threshold (float): The threshold value used to determine cluster separation.
+
+    Returns:
+        tuple: A tuple containing:
+            - list: A list of ranges for the identified clusters, where each range is represented as a list of two integers.
+            - list: A list of indices representing the local minima found below the threshold.
+    """
+
+    threshold_crossed = False  # True if gsum_deriv[0] < threshold else False
+
+    minimas = []
+    for i in range(1, len(gsum_deriv) - 1):
+        if (
+            (gsum_deriv[i] < threshold)
+            & (gsum_deriv[i] < gsum_deriv[i - 1])
+            & (gsum_deriv[i] < gsum_deriv[i + 1])
+            & (threshold_crossed == True)
+        ):
+            minimas.append(i)
+            threshold_crossed = False
+
+        if (gsum_deriv[i] > threshold) & (threshold_crossed == False):
+            threshold_crossed = True
+
+    minimas.pop(
+        0
+    )  # remove the first minimum because it is usually part of the first cluster
+    # from the local minima, find the ranges of the clusters
+    cluster_ranges = []
+    for i in range(len(minimas) - 1):
+        if i == 0:
+            cluster_ranges.append([0, minimas[i]])
+
+        cluster_ranges.append([minimas[i], minimas[i + 1]])
+
+        if i == len(minimas) - 2:
+            cluster_ranges.append([minimas[i + 1], len(gsum_deriv)])
+
+    return cluster_ranges, minimas
+
+
+def combine_separated_clusters(
+    map_list: list, cluster_ranges: list[list[int]], dims: int, file_path: str
+):
+    """
+    Combine separated clusters by summing their corresponding gsum masks.
+
+    Args:
+        map_list (list): A list of instances representing the binary maps.
+        cluster_ranges (list[list[int]]): A list of ranges indicating the start and end indices for each cluster.
+        dims (int): The dimensions of the binary maps.
+        file_path (str): The file path where the binary maps are stored.
+
+    Returns:
+        np.ndarray: A numpy array containing the summed binary maps for each cluster.
+    """
+
+    remapped_clusters = dict()
+
+    for i in range(len(cluster_ranges)):
+        start_pointer, end_pointer = cluster_ranges[i]
+        remapped_clusters[i] = []
+        for j in range(start_pointer, end_pointer):
+            remapped_clusters[i].append(map_list[j])
+
+    print(
+        "Length of remapped clusters : ",
+        [len(remapped_clusters[k]) for k in remapped_clusters.keys()],
+        flush=True,
+    )
+
+    # Add values of the binary map of each cluster to obtain a new map
+    # read in each binary map within a cluster_range, then sum them up
+    all_signals_map = np.empty(([len(remapped_clusters)] + dims), dtype=np.float32)
+    for cluster in remapped_clusters.keys():
+        print("Currently analyzing cluster : ", cluster, flush=True)
+        print(
+            "Number of instances in cluster : ",
+            len(remapped_clusters[cluster]),
+            flush=True,
+        )
+
+        # cannot use jax here because it uses too much memory; cannot use numba because it does not support np.load; loading all binary maps in each cluster at once will use more memory, but is also ~30% faster than loading them sequentially and adding to total every step.
+        this_cluster_signal_map = np.zeros(
+            ([len(remapped_clusters[cluster])] + dims), dtype=np.float32
+        )
+        for i, instance in enumerate(remapped_clusters[cluster]):
+            if i % 10 == 0:
+                print("Instance", i, flush=True)
+            this_cluster_signal_map[i] = np.reshape(
+                np.load(file_path + f"/mask-{instance[2]}-id{instance[1]}.npy"),
+                newshape=dims,
+            )
+
+        all_signals_map[cluster] = np.sum(this_cluster_signal_map, axis=0)
+
+    return all_signals_map
+
+
+def makeFilename(n: int) -> str:
+    """Make a filename based on the number given.
+
+    Args:
+        n (int): number to be converted to a filename
+
+    Returns:
+        str: filename
+    """
+    if n < 10:
+        file_n = "000" + str(n)
+    elif (n >= 10) & (n < 100):
+        file_n = "00" + str(n)
+    else:
+        file_n = "0" + str(n)
+
+    return f"{file_n}.png"
+
+
 def parse_args():
+    """argument parser for the make_sce_clusters.py script"""
     parser = argparse.ArgumentParser(
         description="Use multimap mapping to analyze and segment groups of features"
     )
@@ -52,125 +288,15 @@ def parse_args():
         action="store_true",
         help="Save the combined map of all clusters",
     )
-    parser.add_argument(
-        "--return_fig", dest="return_fig", action="store_true", help="Return the figure"
-    )
-    parser.add_argument(
-        "--reference_file",
-        type=str,
-        dest="reference_file",
-        default="/mnt/home/tha10/ceph/SOM-tests/lr-d3x128/production/features_2j1b1e0r_5000_jasym.h5",
-        help="Reference file to compare the clusters to",
-        required=False,
-    )
-    parser.add_argument(
-        "--slice",
-        type=int,
-        dest="slice",
-        default=27,
-        help="Slice number, make sure this matches the slice number in the sce_slice.py call",
-    )
     return parser.parse_args()
-
-
-def plot_gsum_values(gsum_values, file_path: str = None):
-    plt.figure(dpi=300)
-    plt.plot(
-        list(range(len(gsum_values))),
-        gsum_values,
-        marker="o",
-        c="k",
-        markersize=2,
-        linewidth=1,
-    )
-    plt.title(f"Sorted gsum values")
-    plt.xlabel("Ranked clusters")
-    plt.ylabel("Gsum value")
-    plt.grid()
-    if file_path is None:
-        plt.show()
-    else:
-        plt.savefig(f"{file_path}/gsum_values.png")
-        print("Saved gsum values plot")
-
-
-def get_gsum_values(mapping_file: str):
-    """Get the gsum values from the mapping file
-
-    Args:
-        mapping_file (str): path to the mapping file
-
-    Returns:
-        list: gsum values
-        dict: mapping of gsum values to cluster id and cluster name
-    """
-    mapping = dict()
-    with open(mapping_file, "r") as f:
-        for line in f:
-            line = line.strip("\n")
-            if "-" in line:
-                key_name = line
-                mapping[key_name] = []
-            else:
-                mapping[key_name].append(line.split(" "))
-
-    map_list = []
-    for key in mapping.keys():
-        map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
-
-    map_list.sort(key=lambda map_list: map_list[0], reverse=True)
-
-    gsum_values = [map_list[i][0] for i in range(len(map_list))]
-
-    return gsum_values, map_list
-
-
-def makeFilename(n: int) -> str:
-    """Make a filename based on the number given
-
-    Args:
-        n (int): number to be converted to a filename
-
-    Returns:
-        str: filename
-    """
-    if n < 10:
-        file_n = "000" + str(n)
-    elif (n >= 10) & (n < 100):
-        file_n = "00" + str(n)
-    else:
-        file_n = "0" + str(n)
-
-    return f"{file_n}.png"
 
 
 if __name__ == "__main__":
 
     args = parse_args()
-    # mapping = dict()
 
-    # # read in the multimap mapping file and store in a dict that includes the file as key name, and the cluster_id and gsum as values
-    # with open(args.file_path + "/multimap_mappings.txt", "r") as f:
-    #     for line in f:
-    #         line = line.strip("\n")
-    #         if "-" in line:
-    #             key_name = line
-    #             mapping[key_name] = []
-    #         else:
-    #             mapping[key_name].append(line.split(" "))
-
-    # # convert the dict to a list to sort more easily
-    # map_list = []
-    # for key in mapping.keys():
-    #     map_list.extend([[float(i[1]), int(i[0]), key] for i in mapping[key]])
-    # # print("Map list length", len(map_list))
-
-    # # sort the list based on gsum value
-    # map_list.sort(key=lambda map_list: map_list[0], reverse=True)
-    # # print("Sorted map", map_list[0])
     gsum_values, map_list = get_gsum_values(args.file_path + "/multimap_mappings.txt")
     print("Length of sorted map", len(gsum_values), flush=True)
-    # gsum_values = [map_list[i] for i in range(len(map_list))]
 
     # now iterate through the list and copy the files to the appropriate cluster folder
     if args.copy_clusters:
@@ -189,10 +315,6 @@ if __name__ == "__main__":
 
         print("Done copying files")
 
-    # plot the gsum values
-    if args.return_gsum:
-        plot_gsum_values(gsum_values, args.file_path)
-
     # apply a Savitzky-Golay filter to smooth the gsum values
     smooth_fraction = 10
     order = 4
@@ -208,175 +330,28 @@ if __name__ == "__main__":
         / smoothed_map
     )
 
-    if False:
-        np.save(
-            f"{args.file_path}/gsum_deriv_smoothed_{smooth_fraction}_{order}.npy",
-            gsum_deriv,
-        )
-
     # iterate through the derivative and find the local minima
     threshold = args.threshold
+    cluster_ranges, minimas = get_sce_cluster_separation(gsum_deriv, threshold)
 
-    # gsum_deriv = np.load(f'/mnt/home/tha10/ceph/SOM-tests/hr-d3x640/{folder}/SCE/gsum_deriv_smoothed_10_4.npy')
-    cluster_order = np.array(list(range(1, len(gsum_deriv) + 1)))
+    print("Minimas", minimas, flush=True)
+    print("Cluster ranges", cluster_ranges, flush=True)
+    print("Number of clusters", len(cluster_ranges), flush=True)
 
-    if not args.save_combined_map:
-        plt.figure(dpi=300)
-        plt.plot(
-            cluster_order, gsum_deriv, marker="o", c="k", markersize=2, linewidth=1
+    # plot the gsum and gsum_deriv values
+    if args.return_gsum:
+        plot_gsum_values(gsum_values, minimas, args.file_path)
+        plot_gsum_deriv(gsum_deriv, threshold, minimas, args.file_path)
+
+    # save the separated SCE clusters
+    if args.save_combined_map:
+        combined_sce_clusters = combine_separated_clusters(
+            map_list, cluster_ranges, args.dims, args.file_path
         )
-        # plt.yscale('log')
-        plt.ylim(threshold * 3, 0.0)
-        plt.title(f"Sorted gsum derivatives")
-        plt.xlabel("Ranked clusters")
-        plt.ylabel("Gsum derivative")
-        plt.grid()
-        plt.hlines(threshold, 0, len(cluster_order))
-        plt.savefig(f"{args.file_path}/gsum_deriv.png")
-        print("Saved gsum derivative plot")
-
-    if (
-        args.save_combined_map
-    ):  # change the threshold to the appropriate value before running this
-        threshold_crossed = True if gsum_deriv[0] < threshold else False
-
-        peak_locations = []
-        for i in range(1, len(gsum_deriv) - 1):
-            if (
-                (gsum_deriv[i] < threshold)
-                & (gsum_deriv[i] < gsum_deriv[i - 1])
-                & (gsum_deriv[i] < gsum_deriv[i + 1])
-                & (threshold_crossed == True)
-            ):
-                # print("Local minima found at index ", i)
-                peak_locations.append(i)
-                threshold_crossed = False
-
-            if (gsum_deriv[i] > threshold) & (threshold_crossed == False):
-                threshold_crossed = True
-
-        print("Peak locations", peak_locations, flush=True)
-
-        # from the local minima, find the ranges of the clusters
-        cluster_ranges = []
-        for i in range(len(peak_locations) - 1):
-            if i == 0:
-                cluster_ranges.append([0, peak_locations[i]])
-
-            cluster_ranges.append([peak_locations[i], peak_locations[i + 1]])
-
-            if i == len(peak_locations) - 2:
-                cluster_ranges.append([peak_locations[i + 1], len(map_list)])
-
-        print("Cluster ranges", cluster_ranges, flush=True)
-        print("Number of clusters", len(cluster_ranges), flush=True)
-
-        # map the clusters back into output clusters
-        remapped_clusters = dict()
-
-        for i in range(len(cluster_ranges)):
-            start_pointer = cluster_ranges[i][0]
-            end_pointer = cluster_ranges[i][1]
-
-            key_name = str(i)
-            remapped_clusters[key_name] = []
-
-            # print("Start pointer", start_pointer)
-            # print("End pointer", end_pointer)
-
-            for j in range(start_pointer, end_pointer):
-                # print (map_list[j])
-                # print (i)
-                remapped_clusters[key_name].append(map_list[j])
-
-        print(
-            "Length of remapped clusters : ",
-            [len(remapped_clusters[k]) for k in remapped_clusters.keys()],
-            flush=True,
-        )
-        # print ("First cluster : ", remapped_clusters['0'])
-
-        # add values of the binary map of each cluster to obtain a new map
-        # read in the binary map
-        dims = args.dims
-        all_binary_maps = np.empty(([len(remapped_clusters)] + dims), dtype=np.float32)
-        for cluster in remapped_clusters.keys():
-            print("Currently analyzing cluster : ", cluster, flush=True)
-            print(
-                "Number of instances in cluster : ",
-                len(remapped_clusters[cluster]),
-                flush=True,
-            )
-
-            # cannot use jax here because it uses too much memory; cannot use numba because it does not support np.load; loading all binary maps in each cluster at once will use more memory, but is also ~30% faster than loading them sequentially and adding to total every step.
-            cluster_binary_map = np.zeros(
-                ([len(remapped_clusters[cluster])] + dims), dtype=np.float32
-            )
-            for i, instance in enumerate(remapped_clusters[cluster]):
-                print("Instance", i, flush=True)
-                cluster_binary_map[i] = np.reshape(
-                    np.load(
-                        args.file_path
-                        + "/mask-{}-id{}.npy".format(instance[2], instance[1])
-                    ),
-                    newshape=dims,
-                )
-
-            all_binary_maps[int(cluster)] = np.sum(cluster_binary_map, axis=0)
-
         # save the new binary map
-        np.save(args.file_path + f"/sce_clusters_{threshold}.npy", all_binary_maps)
-        print("Saved new binary map")
-
-        # plot the new binary map with j_par as reference
-        # load h5 file as comparison
-        if args.return_fig:
-
-            f_in = h5.File(args.reference_file, "r")
-
-            dataset = f_in["features"][()]
-            feature_names = f_in["names"][()]
-
-            all_data = np.array(dataset)
-
-            j_par = np.reshape(
-                (
-                    all_data[:, feature_names == b"j_par"]
-                    if b"j_par" in feature_names
-                    else all_data[:, feature_names == b"j_par_abs"]
-                ),
-                newshape=dims,
-            )
-            slice_number = args.slice
-
-            number_of_clusters = all_binary_maps.shape[0]
-            print("Identified {} clusters.".format(number_of_clusters))
-
-            ncols = 3
-            nrows = int(np.ceil((number_of_clusters + 1) / ncols))
-            fig, axs = plt.subplots(
-                nrows=nrows,
-                ncols=ncols,
-                figsize=(10, 10 / ncols * nrows),
-                sharex=True,
-                sharey=True,
-                dpi=300,
-            )
-            # fig, axs = plt.subplots(nrows=number_of_clusters+1, ncols=1, figsize=(4,number_of_clusters*4), dpi=200)
-
-            ref = axs[0, 0].pcolormesh(
-                j_par[slice_number, :, :], cmap="RdBu", vmin=-1.5, vmax=1.5
-            )
-            axs[0, 0].set_aspect("equal")
-            axs[0, 0].set_title("j_par")
-
-            for i, file in enumerate(all_binary_maps):
-                a, b = divmod(i + 1, ncols)
-                axs[a, b].pcolormesh(
-                    all_binary_maps[i, slice_number, :, :], cmap="Reds", vmin=0
-                )
-                axs[a, b].set_aspect("equal")
-                axs[a, b].set_title(f"Cluster {i}")
-
-            plt.savefig(f"{args.file_path}/combined_binary_map-z{slice_number}.png")
-        print("Saved combined binary map")
+        np.save(
+            args.file_path + f"/sce_clusters_{threshold}.npy", combined_sce_clusters
+        )
+        print(
+            f"Saved new combined clusters as {args.file_path}/sce_clusters_{threshold}.npy"
+        )
