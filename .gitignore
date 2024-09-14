@@ -1,4 +1,7 @@
 .venv/
 .vscode/
+
 test-output/
+build/
+
 examples/plasma-turbulence/som_object.fiducial-5000-64-37-0.1-2097152-1u.pkl
