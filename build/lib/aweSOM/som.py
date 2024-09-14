@@ -361,8 +361,6 @@ class Lattice:
                 numpy.ndarray: Array representing the assigned clusters for each lattice point.
         """
 
-        if smoothing is not None:  # smooth the Umatrix before computing the centroids
-            self.umat = self.compute_umat(smoothing)
         naive_centroids = self.compute_centroids(
             False
         )  # all local minima are centroids

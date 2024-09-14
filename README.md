@@ -10,12 +10,10 @@ For example, see the [Iris dataset](examples/iris/iris.ipynb).
 Authors: 
 
 [Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst,
-
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
-
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.1.0
+Version: 1.2.0
 
 ## 1. Installation
 
@@ -190,11 +188,10 @@ Instead, we can generate multiple SOM realizations with slightly different initi
 Let's use the same Iris dataset:
 
 ```python
+from aweSOM.run_som import save_cluster_labels
 # set a parameter space to scan
 parameters = {"xdim": [38, 40, 42], "ydim": [14, 16], "alpha_0": [0.1, 0.5], "train": [10000, 50000, 100000]}
 merge_threshold = 0.2
-
-file_path = 'som_results/'
 
 for xdim in parameters["xdim"]:
     for ydim in parameters["ydim"]:
@@ -203,19 +200,22 @@ for xdim in parameters["xdim"]:
                 print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
                 map = Lattice(xdim, ydim, alpha_0, train, )
                 map.train_lattice(iris_data_transformed, feature_names, labels)
-                map.compute_umat()
-                unique_centroids = map.get_unique_centroids(map.compute_centroids())
+                # map.umat = map.compute_umat()
                 projection_2d = map.map_data_to_lattice()
                 final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
                 som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
-                np.save(f'{file_path}/{xdim}-{ydim}-{alpha_0}-{train}.npy', som_labels)
+                save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
 ```
 
-This saves 36 realizations to the folder `som_results/` (you will need to create it in your working directory).
-In the CLI:
+This saves 36 realizations to the current working directory.
+
+In the terminal:
 
 ```bash
-cd [path_to_current_dir]/som_results/
+cd [path_to_working_dir]
+mkdir som_results
+mv labels* som_results/
+cd som_results/
 python3 [path_to_aweSOM]/aweSOM/src/aweSOM/sce.py --subfolder SCE --dims 150
 ```
 
