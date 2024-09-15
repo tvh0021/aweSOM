@@ -1,3 +1,6 @@
+## Example script to run the SOM code on plasma turbulence data
+## using the multiprocessing module to parallelize the runs
+
 import os
 import h5py as h5
 import argparse

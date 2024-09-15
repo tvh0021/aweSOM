@@ -111,9 +111,8 @@ map.plot_heat(map.umat, merge=True, merge_cost=merge_threshold)
 Now, we project each data point onto the lattice and get back cluster-id
 
 ```python
-projection_2d = map.map_data_to_lattice()
 final_clusters = map.assign_cluster_to_lattice(smoothing=None,merge_cost=merge_threshold)
-som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+som_labels = map.assign_cluster_to_data(map.projection_2d, final_clusters)
 ```
 
 Finally, we compare the aweSOM result to the ground truth
@@ -286,14 +285,18 @@ Recall:  [100.0, 92.0, 92.0] %
 
 Because of the simplicity of the Iris dataset, not much improvement is made with SCE, but the result is nevertheless consistent with the single SOM result.
 
-## 4. License
+## 4. Advanced Usage - Plasma Simulation
+
+The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/fiducial_plasma.ipynb).
+
+## 5. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 5. Contributing
+## 6. Contributing
 
 Anyone is welcome to contribute! Please fork the repository and create pull requests with proposed changes.
 
-## 6. Contact
+## 7. Contact
 
 Additional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)

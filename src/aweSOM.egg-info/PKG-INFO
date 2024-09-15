@@ -11,6 +11,14 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 License-File: LICENSE
+Requires-Dist: h5py
+Requires-Dist: jax==0.4.31
+Requires-Dist: jaxlib==0.4.31
+Requires-Dist: matplotlib
+Requires-Dist: numba
+Requires-Dist: numpy
+Requires-Dist: scikit-learn
+Requires-Dist: scipy
 
 # aweSOM - Accelerated Self-Organizing Map (SOM) and Statistically Combined Ensemble (SCE)
 

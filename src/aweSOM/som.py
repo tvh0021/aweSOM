@@ -888,26 +888,26 @@ class Lattice:
         if sorted_cost[0][2] < threshold:
             centroid_a = tuple(sorted_cost[0][0])
             centroid_b = tuple(sorted_cost[0][1])
-            heat_a = heat[centroid_a[0], centroid_a[1]]
-            heat_b = heat[centroid_b[0], centroid_b[1]]
-            # nodes_a = self.nodes_count[centroid_a]
-            # nodes_b = self.nodes_count[centroid_b]
+            # heat_a = heat[centroid_a[0], centroid_a[1]]
+            # heat_b = heat[centroid_b[0], centroid_b[1]]
+            nodes_a = self.nodes_count[centroid_a]
+            nodes_b = self.nodes_count[centroid_b]
 
-            # print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
-            # print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
-            print(f"Centroid A: {centroid_a}, Umatrix value: {heat_a}", flush=True)
-            print(f"Centroid B: {centroid_b}, Umatrix value: {heat_b}", flush=True)
+            print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
+            print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
+            # print(f"Centroid A: {centroid_a}, Umatrix value: {heat_a}", flush=True)
+            # print(f"Centroid B: {centroid_b}, Umatrix value: {heat_b}", flush=True)
             print("Merging...", flush=True)
 
             replace_a_with_b = False
 
             # this method takes the centroid with the larger number of nodes
-            # if nodes_a < nodes_b:
-            #     replace_a_with_b = True
+            if nodes_a < nodes_b:
+                replace_a_with_b = True
 
             # this method takes the centroid with the smaller U-matrix value
-            if heat_a > heat_b:
-                replace_a_with_b = True
+            # if heat_a > heat_b:
+            #     replace_a_with_b = True
 
             if replace_a_with_b:
                 centroids = self.replace_value(centroids, centroid_a, centroid_b)
