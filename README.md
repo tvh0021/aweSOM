@@ -27,7 +27,9 @@ pip install .
 
 ## 2. Basic Usage - SOM
 
-Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset
+Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset.
+
+The full Jupyter notebook can be found [here](examples/iris/iris.ipynb).
 
 ```python
 import numpy as np
