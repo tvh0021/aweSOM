@@ -4,12 +4,11 @@ This package combines a JIT-accelerated and parallelized implementation of SOM, 
 It is optimized for large datasets, up to $\sim 10^7$ points. 
 
 aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations (link to paper).
-However, it can be used for a variety of clustering and classification tasks.
-For example, see the [Iris dataset](examples/iris/iris.ipynb).
+However, it can also be used for a variety of clustering and classification tasks.
 
 Authors: 
 
-[Trung Ha](https://tvh0021.github.io/Astronomy/main_site_th.html) - University of Massachusetts Amherst,
+[Trung Ha](https://tvh0021.github.io) - University of Massachusetts Amherst,
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
