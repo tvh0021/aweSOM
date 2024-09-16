@@ -445,7 +445,7 @@ class Lattice:
             best_match_node = np.zeros((obs.shape[0], 1))
 
         for i in prange(obs.shape[0]):
-            diff = lattice - obs[i, :]
+            diff = lattice - obs[i]
             squ = diff**2
             s = np.sum(squ, axis=1)
 
@@ -982,7 +982,7 @@ class Lattice:
 
         return umat
 
-    def compute_heat(self, d, smoothing=None):  # WORKS / CHECKED 04/17
+    def compute_heat(self, d, smoothing=None):
         """
         Compute a heat value map representation of the given distance matrix.
 
@@ -1269,28 +1269,6 @@ class Lattice:
         ]
 
         return temp2 / temp3
-
-    def starburst(
-        self, explicit=False, smoothing=2, merge_clusters=True, merge_cost=0.25
-    ):
-        """
-        Compute and plot the starburst representation of clusters.
-
-        Args:
-                explicit (bool, optional): Controls the shape of the connected components. Defaults to False.
-                smoothing (int, optional): Controls the smoothing level of the umat. Defaults to 2.
-                merge_clusters (bool, optional): A switch that controls if the starburst clusters are merged together. Defaults to True.
-                merge_cost (float, optional): A threshold where centroids are close enough to merge. Defaults to .25.
-        """
-
-        umat = self.compute_umat(smoothing=smoothing)
-        self.plot_heat(
-            umat,
-            explicit=explicit,
-            comp=True,
-            merge=merge_clusters,
-            merge_cost=merge_cost,
-        )
 
     def plot_heat(self, heat, explicit=False, comp=True, merge=False, merge_cost=0.001):
         """

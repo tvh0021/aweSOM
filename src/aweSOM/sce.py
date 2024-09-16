@@ -1,6 +1,7 @@
 ## Statistically Combined Ensemble (SCE) code for N-dimensional data
 ## See Ha et al. (2024) for implementation details
 ## For detailed mathematical description, see Bussov & Nattila (2021)
+## https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning
 ## If GPU-enabled, capable of handling 1000^3 data with 1 A100-80GB GPU.
 
 import os

@@ -4,5 +4,6 @@ jaxlib==0.4.31
 matplotlib
 numba
 numpy
+pytest
 scikit-learn
 scipy
