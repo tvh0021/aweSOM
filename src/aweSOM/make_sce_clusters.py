@@ -83,7 +83,7 @@ def plot_gsum_deriv(
     if file_path is None:
         plt.show()
     else:
-        plt.savefig(f"{args.file_path}/gsum_deriv.png")
+        plt.savefig(f"{file_path}/gsum_deriv.png")
         print("Saved gsum derivative plot")
 
 
@@ -167,7 +167,7 @@ def get_sce_cluster_separation(gsum_deriv: np.ndarray, threshold: float):
 
 def combine_separated_clusters(
     map_list: list, cluster_ranges: list[list[int]], dims: int, file_path: str
-):
+) -> np.ndarray:
     """
     Combine separated clusters by summing their corresponding gsum masks.
 

@@ -88,7 +88,7 @@ def test_Gamma(trained_map: Lattice):
     dist_2d = np.abs(m2Ds - m2Ds[bmu_index])
     chebyshev_distance = np.max(dist_2d[reference_index])
     expected_value = alpha * np.exp(-(chebyshev_distance**2) / (2 * (nsize / 3) ** 2))
-    assert gamma[reference_index] == pytest.approx(expected_value, rel=1e-4)
+    assert np.abs(gamma[reference_index] - expected_value) < 1e-4
 
 
 def test_map_data_to_lattice(map_after_mapping: Lattice):

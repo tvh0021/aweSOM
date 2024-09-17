@@ -194,6 +194,26 @@ def loop_over_all_clusters(
     return 0
 
 
+def find_number_of_clusters(cluster_files: list[str]) -> array_lib.ndarray:
+    """
+    Find the number of clusters in each run.
+
+    Args:
+        cluster_files (list[str]): A list of data files saved in '.npy' format.
+
+    Returns:
+        number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
+    """
+
+    number_of_clusters = np.empty(len(cluster_files), dtype=int)
+    for run in range(len(cluster_files)):
+        clusters = load_som_npy(cluster_files[run])
+        ids = array_lib.unique(clusters)
+        number_of_clusters[run] = len(ids)
+
+    return number_of_clusters
+
+
 def parse_args():
     """argument parser for the sce.py script"""
     parser = argparse.ArgumentParser(description="SCE code")
@@ -232,14 +252,7 @@ if __name__ == "__main__":
 
     # --------------------------------------------------
     # calculate unique number of clusters per run
-
-    nids_array = np.empty(len(cluster_files), dtype=int)
-    for run in range(len(cluster_files)):
-        clusters = load_som_npy(cluster_files[run])
-        ids = array_lib.unique(clusters)
-        nids_array[run] = len(ids)
-        # print (nids_array[run])
-
+    nids_array = find_number_of_clusters(cluster_files)
     print("nids_array:", nids_array, flush=True)
     print("There are {} runs".format(len(cluster_files)), flush=True)
     print("There are {} clusters in total".format(np.sum(nids_array)), flush=True)
