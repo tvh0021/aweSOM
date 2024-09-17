@@ -12,7 +12,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.4.0
+Version: 1.4.1
 
 ## 1. Installation
 
@@ -24,7 +24,29 @@ cd aweSOM
 pip install .
 ```
 
-## 2. Basic Usage - SOM
+## 2. Testing
+
+We use `pytest` for the test module. Dependency has already been included in the `requirements.txt` file, and should be installed automatically with aweSOM
+
+To run tests for all modules:
+
+```bash
+pytest
+```
+
+You can also run specific test modules by specifying the path to the test file:
+
+```bash
+pytest tests/[module]_test.py
+```
+
+Or run a specific test function within a module:
+
+```bash
+pytest tests/[module]_test.py::test_[function]
+```
+
+## 3. Basic Usage - SOM
 
 Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset.
 
@@ -180,7 +202,7 @@ Recall:  [100.0, 92.0, 90.0] %
 
 Is the performance of the aweSOM model.
 
-## 3. Basic Usage - SCE
+## 4. Basic Usage - SCE
 
 If a dataset is complex, a single SOM result might not be sufficiently stable.
 Instead, we can generate multiple SOM realizations with slightly different initial parameters, then stack the results into a set of statistically significant clusters.
@@ -286,18 +308,18 @@ Recall:  [100.0, 92.0, 92.0] %
 
 Because of the simplicity of the Iris dataset, not much improvement is made with SCE, but the result is nevertheless consistent with the single SOM result.
 
-## 4. Advanced Usage - Plasma Simulation
+## 5. Advanced Usage - Plasma Simulation
 
 The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/fiducial_plasma.ipynb).
 
-## 5. License
+## 6. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 6. Contributing
+## 7. Contributing
 
 Anyone is welcome to contribute! Please fork the repository and create pull requests with proposed changes.
 
-## 7. Contact
+## 8. Contact
 
 Additional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
