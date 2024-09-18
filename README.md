@@ -16,12 +16,18 @@ Version: 1.4.1
 
 ## 1. Installation
 
-To install aweSOM:
+1. Install aweSOM and required dependencies:
 
 ```bash
 git clone https://github.com/tvh0021/aweSOM.git
 cd aweSOM
 pip install .
+```
+
+2. Install JAX with CUDA support separately
+
+```bash
+pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
 ## 2. Testing

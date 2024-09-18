@@ -1,6 +1,6 @@
 h5py
-jax
-jaxlib
+# jax
+# jaxlib
 matplotlib
 numba
 numpy
