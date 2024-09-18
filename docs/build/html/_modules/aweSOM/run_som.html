@@ -1,33 +1,75 @@
 <!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aweSOM.run_som &mdash; aweSOM 1.4.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
 
-<html lang="en" data-content_root="../../">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>aweSOM.run_som &#8212; aweSOM 0.0.1 documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=4f649999" />
-    <link rel="stylesheet" type="text/css" href="../../_static/alabaster.css?v=039e1c02" />
-    <script src="../../_static/documentation_options.js?v=d45e8c67"></script>
-    <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../../_static/documentation_options.js?v=350a9c04"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
-    <link rel="search" title="Search" href="../../search.html" />
-   
-  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
-  
-  
-  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
 
-  </head><body>
-  
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
 
-    <div class="document">
-      <div class="documentwrapper">
-        <div class="bodywrapper">
           
+          
+          <a href="../../index.html" class="icon icon-home">
+            aweSOM
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">API Reference:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../modules.html">src</a></li>
+</ul>
 
-          <div class="body" role="main">
-            
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">aweSOM</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">aweSOM.run_som</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
   <h1>Source code for aweSOM.run_som</h1><div class="highlight"><pre>
 <span></span><span class="c1">## Script to initialize and train SOM network with generic (1D flattened) data</span>
 
@@ -40,10 +82,11 @@
 
 <span class="kn">import</span> <span class="nn">pickle</span>
 
+
 <div class="viewcode-block" id="batch_separator">
 <a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.batch_separator">[docs]</a>
-<span class="k">def</span> <span class="nf">batch_separator</span><span class="p">(</span><span class="n">data</span> <span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">number_of_batches</span> <span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot; Given a dataset and a number of batches, return a list of datasets</span>
+<span class="k">def</span> <span class="nf">batch_separator</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">number_of_batches</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Given a dataset and a number of batches, return a list of datasets</span>
 <span class="sd">    each containing the same number of data points.</span>
 
 <span class="sd">    Args:</span>
@@ -59,15 +102,16 @@
 
     <span class="n">batches</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">number_of_batches</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">f</span><span class="p">))</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">number_of_batches</span><span class="p">):</span>
-        <span class="n">batches</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="o">*</span><span class="n">batch_size</span><span class="p">:(</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">batch_size</span><span class="p">]</span>
+        <span class="n">batches</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">i</span> <span class="o">*</span> <span class="n">batch_size</span> <span class="p">:</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">batch_size</span><span class="p">]</span>
 
     <span class="k">return</span> <span class="n">batches</span></div>
 
 
+
 <div class="viewcode-block" id="number_of_nodes">
 <a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.number_of_nodes">[docs]</a>
-<span class="k">def</span> <span class="nf">number_of_nodes</span><span class="p">(</span><span class="n">N</span> <span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">f</span> <span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot; Given a dataset with N data points and f features, return the number of nodes in the SOM lattice.</span>
+<span class="k">def</span> <span class="nf">number_of_nodes</span><span class="p">(</span><span class="n">N</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">f</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Given a dataset with N data points and f features, return the number of nodes in the SOM lattice.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        N (int): number of data points</span>
@@ -79,10 +123,11 @@
     <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="mi">5</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">N</span> <span class="o">*</span> <span class="n">f</span><span class="p">)</span> <span class="o">/</span> <span class="mi">6</span><span class="p">)</span></div>
 
 
+
 <div class="viewcode-block" id="initialize_lattice">
 <a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.initialize_lattice">[docs]</a>
-<span class="k">def</span> <span class="nf">initialize_lattice</span><span class="p">(</span><span class="n">data</span> <span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">ratio</span> <span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot; Given a N x f dataset and a ratio, return the dimensions of the SOM lattice based on Kohonen&#39;s advice.</span>
+<span class="k">def</span> <span class="nf">initialize_lattice</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">ratio</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Given a N x f dataset and a ratio, return the dimensions of the SOM lattice based on Kohonen&#39;s advice.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        data (np.ndarray): N x f dataset, N is the number of data points and f is the number of features</span>
@@ -100,9 +145,10 @@
     <span class="k">return</span> <span class="p">[</span><span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">]</span></div>
 
 
+
 <div class="viewcode-block" id="manual_scaling">
 <a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.manual_scaling">[docs]</a>
-<span class="k">def</span> <span class="nf">manual_scaling</span><span class="p">(</span><span class="n">data</span> <span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">bulk_range</span> <span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">manual_scaling</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">bulk_range</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Scale data to a range that centers on 0. and contains 95% of the data within the range.</span>
 
 <span class="sd">    Args:</span>
@@ -112,28 +158,173 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        np.ndarray: scaled data</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">two_sigma</span> <span class="o">=</span> <span class="mf">2.</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">two_sigma</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">data</span> <span class="o">-</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span> <span class="o">/</span> <span class="n">two_sigma</span> <span class="o">*</span> <span class="n">bulk_range</span></div>
+
+
+
+<div class="viewcode-block" id="save_som_object">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.save_som_object">[docs]</a>
+<span class="k">def</span> <span class="nf">save_som_object</span><span class="p">(</span>
+    <span class="n">som</span><span class="p">:</span> <span class="s2">&quot;Lattice&quot;</span><span class="p">,</span>
+    <span class="n">xdim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">ydim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">alpha_0</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">train</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">initial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;s&quot;</span><span class="p">,</span>
+    <span class="n">name_of_dataset</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Save the SOM object to a pickle file.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        som (aweSOM.Lattice): The SOM object to be saved.</span>
+<span class="sd">        xdim (int): The x-dimension of the SOM lattice.</span>
+<span class="sd">        ydim (int): The y-dimension of the SOM lattice.</span>
+<span class="sd">        alpha_0 (float): The initial learning rate of the SOM.</span>
+<span class="sd">        train (int): The number of training iterations.</span>
+<span class="sd">        batch (int, optional): The batch size for training. Defaults to 1.</span>
+<span class="sd">        initial (str, optional): The type of initial weights. Defaults to &quot;s&quot;.</span>
+<span class="sd">        name_of_dataset (str, optional): The name of the dataset. Defaults to &quot;&quot;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;som_object.</span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha_0</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">.pkl&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;wb&quot;</span><span class="p">,</span>
+    <span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">som</span><span class="p">,</span> <span class="n">file</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;SOM object saved to som_object.</span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha_0</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">.pkl&quot;</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="save_cluster_labels">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.save_cluster_labels">[docs]</a>
+<span class="k">def</span> <span class="nf">save_cluster_labels</span><span class="p">(</span>
+    <span class="n">som_labels</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">xdim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">ydim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">alpha_0</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">train</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="n">initial</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;s&quot;</span><span class="p">,</span>
+    <span class="n">name_of_dataset</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Saves the cluster labels to a numpy file.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        som_labels (np.ndarray): The cluster labels to be saved.</span>
+<span class="sd">        xdim (int): The x-dimension of the SOM grid.</span>
+<span class="sd">        ydim (int): The y-dimension of the SOM grid.</span>
+<span class="sd">        alpha_0 (float): The initial learning rate.</span>
+<span class="sd">        train (int): The number of training iterations.</span>
+<span class="sd">        batch (int, optional): The batch size. Defaults to 1.</span>
+<span class="sd">        initial (str, optional): The type of initialization. Defaults to &quot;s&quot;.</span>
+<span class="sd">        name_of_dataset (str, optional): The name of the dataset. Defaults to &quot;&quot;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;labels.</span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha_0</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">.npy&quot;</span><span class="p">,</span>
+        <span class="n">som_labels</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Cluster labels saved to labels.</span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha_0</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">.npy&quot;</span>
+    <span class="p">)</span></div>
+
 
 
 <div class="viewcode-block" id="parse_args">
 <a class="viewcode-back" href="../../aweSOM.html#aweSOM.run_som.parse_args">[docs]</a>
 <span class="k">def</span> <span class="nf">parse_args</span><span class="p">():</span>
-    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s1">&#39;SOM code&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--features_path&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;features_path&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;/mnt/ceph/users/tha10/SOM-tests/hr-d3x640/&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--file&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;file&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;features_4j1b1e_2800.h5&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--init_lattice&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;init_lattice&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;uniform&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Initial values of lattice. uniform or sampling&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--xdim&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;xdim&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;X dimension of the lattice&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--ydim&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;ydim&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Y dimension of the lattice&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--ratio&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;ratio&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Height to width ratio of the lattice&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--alpha&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;alpha&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Initial learning parameter&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--train&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;train&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Number of training steps&#39;</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--batch&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;batch&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Number of batches&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--pretrained&#39;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;pretrained&#39;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Pass this argument if supplying a pre-trained model&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--lattice_path&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;lattice_path&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Path to file containing lattice values&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--threshold&#39;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;threshold&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Threshold for merging clusters&#39;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;CLI argument parser for run_som.py script.&quot;&quot;&quot;</span>
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;SOM code&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--features_path&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;features_path&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;/mnt/ceph/users/tha10/SOM-tests/hr-d3x640/&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--file&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;file&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;features_4j1b1e_2800.h5&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--init_lattice&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;init_lattice&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;uniform&quot;</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Initial values of lattice. uniform or sampling&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--xdim&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;xdim&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;X dimension of the lattice&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--ydim&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;ydim&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Y dimension of the lattice&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--ratio&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;ratio&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Height to width ratio of the lattice&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--alpha&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;alpha&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Initial learning parameter&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--train&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Number of training steps&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--batch&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;batch&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Number of batches&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--pretrained&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;pretrained&quot;</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Pass this argument if supplying a pre-trained model&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--lattice_path&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;lattice_path&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Path to file containing lattice values&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--threshold&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;threshold&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Threshold for merging clusters&quot;</span><span class="p">,</span>
+        <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span></div>
+
 
 
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
@@ -141,7 +332,7 @@
 
     <span class="n">args</span> <span class="o">=</span> <span class="n">parse_args</span><span class="p">()</span>
 
-    <span class="c1">#--------------------------------------------------</span>
+    <span class="c1"># --------------------------------------------------</span>
     <span class="k">if</span> <span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">pretrained</span> <span class="o">==</span> <span class="kc">True</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">lattice_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">):</span>
         <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="s2">&quot;Cannot run, no lattice provided.&quot;</span><span class="p">)</span>
 
@@ -152,35 +343,45 @@
     <span class="n">xdim</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">xdim</span>
     <span class="n">ydim</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">ydim</span>
     <span class="n">ratio</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">ratio</span>
-    <span class="n">alpha</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">alpha</span>
+    <span class="n">alpha_0</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">alpha</span>
     <span class="n">train</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">train</span>
     <span class="n">batch</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">batch</span>
     <span class="n">pretrained</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">pretrained</span>
     <span class="n">neurons_path</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">neurons_path</span>
     <span class="n">threshold</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">threshold</span>
-    
-    <span class="n">name_of_dataset</span> <span class="o">=</span> <span class="n">file_name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.h5&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="c1"># all the data laps to process</span>
 
-    <span class="n">f5</span> <span class="o">=</span> <span class="n">h5</span><span class="o">.</span><span class="n">File</span><span class="p">(</span><span class="n">features_path</span><span class="o">+</span><span class="n">file_name</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">f5</span><span class="p">[</span><span class="s1">&#39;features&#39;</span><span class="p">][()]</span>
-    <span class="n">feature_list</span> <span class="o">=</span> <span class="n">f5</span><span class="p">[</span><span class="s1">&#39;names&#39;</span><span class="p">][()]</span>
+    <span class="n">name_of_dataset</span> <span class="o">=</span> <span class="n">file_name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.h5&quot;</span><span class="p">)[</span>
+        <span class="mi">0</span>
+    <span class="p">]</span>  <span class="c1"># all the data laps to process</span>
 
-    <span class="n">feature_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">n</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">feature_list</span><span class="p">]</span>
-    <span class="n">f5</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="c1"># load data</span>
+    <span class="k">with</span> <span class="n">h5</span><span class="o">.</span><span class="n">File</span><span class="p">(</span><span class="n">features_path</span> <span class="o">+</span> <span class="n">file_name</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f5</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">f5</span><span class="p">[</span><span class="s2">&quot;features&quot;</span><span class="p">][()]</span>
+        <span class="n">feature_list</span> <span class="o">=</span> <span class="n">f5</span><span class="p">[</span><span class="s2">&quot;names&quot;</span><span class="p">][()]</span>
+    <span class="n">feature_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">n</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">feature_list</span><span class="p">]</span>
 
+    <span class="c1"># figure out the number of training steps</span>
     <span class="k">if</span> <span class="n">train</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">train</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Training steps not provided, defaulting to # steps = # data points&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="c1"># print(f&quot;Training steps: {train}&quot;, flush=True)</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Training steps not provided, defaulting to # steps = # data points = </span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
 
     <span class="c1"># initialize lattice</span>
     <span class="k">if</span> <span class="n">xdim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">ydim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="c1"># NOTE: try PCA here to figure out the ratio of the map</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;No lattice dimensions provided, initializing lattice based on Kohonen&#39;s advice&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="s2">&quot;No lattice dimensions provided, initializing lattice based on Kohonen&#39;s advice&quot;</span><span class="p">,</span>
+            <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="p">[</span><span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">]</span> <span class="o">=</span> <span class="n">initialize_lattice</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">ratio</span><span class="p">)</span>
-    
+
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Initialized lattice dimensions: </span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;File loaded, parameters: </span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;File loaded, parameters: </span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha_0</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
 
     <span class="c1"># normalize data</span>
     <span class="n">scale_method</span> <span class="o">=</span> <span class="s2">&quot;manual&quot;</span>
@@ -189,32 +390,46 @@
     <span class="k">else</span><span class="p">:</span>
         <span class="n">scaler</span> <span class="o">=</span> <span class="n">MinMaxScaler</span><span class="p">()</span>
         <span class="n">data_transformed</span> <span class="o">=</span> <span class="n">scaler</span><span class="o">.</span><span class="n">fit_transform</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">scale_method</span> <span class="o">=</span> <span class="s2">&quot;MinMaxScaler&quot;</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Data scaled with </span><span class="si">{</span><span class="n">scale_method</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="c1"># initialize SOM lattice</span>
-    <span class="n">som</span> <span class="o">=</span> <span class="n">Lattice</span><span class="p">(</span><span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">train</span><span class="p">,</span> <span class="n">alpha_type</span><span class="o">=</span><span class="s2">&quot;decay&quot;</span><span class="p">,</span> <span class="n">sampling_type</span><span class="o">=</span><span class="n">init_lattice</span><span class="p">)</span>
-    
+    <span class="n">som</span> <span class="o">=</span> <span class="n">Lattice</span><span class="p">(</span>
+        <span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">,</span> <span class="n">alpha_0</span><span class="p">,</span> <span class="n">train</span><span class="p">,</span> <span class="n">alpha_type</span><span class="o">=</span><span class="s2">&quot;decay&quot;</span><span class="p">,</span> <span class="n">sampling_type</span><span class="o">=</span><span class="n">init_lattice</span>
+    <span class="p">)</span>
+
     <span class="c1"># train SOM</span>
     <span class="k">if</span> <span class="n">batch</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span><span class="n">data_transformed</span><span class="p">,</span> <span class="n">feature_list</span><span class="p">,)</span>
+        <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span>
+            <span class="n">data_transformed</span><span class="p">,</span>
+            <span class="n">feature_list</span><span class="p">,</span>
+        <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Training batch 1/</span><span class="si">{</span><span class="n">batch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">data_by_batch</span> <span class="o">=</span> <span class="n">batch_separator</span><span class="p">(</span><span class="n">data_transformed</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
-        <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span><span class="n">data_by_batch</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">feature_list</span><span class="p">,</span> <span class="n">number_of_steps</span><span class="o">=</span><span class="n">data_by_batch</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span>
+            <span class="n">data_by_batch</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">feature_list</span><span class="p">,</span> <span class="n">number_of_steps</span><span class="o">=</span><span class="n">data_by_batch</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="p">)</span>
         <span class="n">lattice_weights</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">lattice</span>
 
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span><span class="p">):</span>
             <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Training batch </span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">batch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-            <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span><span class="n">data_by_batch</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">feature_list</span><span class="p">,</span> <span class="n">number_of_steps</span><span class="o">=</span><span class="n">data_by_batch</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">restart_lattice</span><span class="o">=</span><span class="n">lattice_weights</span><span class="p">)</span>
+            <span class="n">som</span><span class="o">.</span><span class="n">train_lattice</span><span class="p">(</span>
+                <span class="n">data_by_batch</span><span class="p">[</span><span class="n">i</span><span class="p">],</span>
+                <span class="n">feature_list</span><span class="p">,</span>
+                <span class="n">number_of_steps</span><span class="o">=</span><span class="n">data_by_batch</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                <span class="n">restart_lattice</span><span class="o">=</span><span class="n">lattice_weights</span><span class="p">,</span>
+            <span class="p">)</span>
             <span class="n">lattice_weights</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">lattice</span>
 
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Random seed: </span><span class="si">{</span><span class="n">som</span><span class="o">.</span><span class="n">seed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="c1"># map data to lattice</span>
-    <span class="n">som</span><span class="o">.</span><span class="n">data_array</span> <span class="o">=</span> <span class="n">data_transformed</span> <span class="c1"># recover the full dataset instead of the batch</span>
+    <span class="n">som</span><span class="o">.</span><span class="n">data_array</span> <span class="o">=</span> <span class="n">data_transformed</span>  <span class="c1"># recover the full dataset instead of the batch</span>
     <span class="n">projection_2d</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">map_data_to_lattice</span><span class="p">()</span>
-    
+
     <span class="c1"># assign cluster ids to the lattice</span>
-    <span class="n">clusters</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">assign_cluster_to_lattice</span><span class="p">(</span><span class="n">smoothing</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span><span class="n">merge_cost</span><span class="o">=</span><span class="n">threshold</span><span class="p">)</span>
+    <span class="n">clusters</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">assign_cluster_to_lattice</span><span class="p">(</span><span class="n">smoothing</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">merge_cost</span><span class="o">=</span><span class="n">threshold</span><span class="p">)</span>
 
     <span class="c1"># assign cluster ids to the data</span>
     <span class="n">som_labels</span> <span class="o">=</span> <span class="n">som</span><span class="o">.</span><span class="n">assign_cluster_to_data</span><span class="p">(</span><span class="n">projection_2d</span><span class="p">,</span> <span class="n">clusters</span><span class="p">)</span>
@@ -225,78 +440,39 @@
         <span class="n">initial</span> <span class="o">=</span> <span class="s2">&quot;u&quot;</span>
 
     <span class="c1"># save cluster ids</span>
-    <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">&quot;</span><span class="o">+</span><span class="s2">&quot;_labels.npy&quot;</span><span class="p">,</span> <span class="n">som_labels</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Cluster labels saved to </span><span class="si">{</span><span class="n">name_of_dataset</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">_labels.npy&quot;</span><span class="p">)</span>
+    <span class="n">save_cluster_labels</span><span class="p">(</span>
+        <span class="n">som_labels</span><span class="p">,</span> <span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">,</span> <span class="n">alpha_0</span><span class="p">,</span> <span class="n">train</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">initial</span><span class="p">,</span> <span class="n">name_of_dataset</span>
+    <span class="p">)</span>
 
     <span class="c1"># save som object</span>
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;som_object-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">alpha</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s1">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s1">.pkl&#39;</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
-        <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">som</span><span class="p">,</span> <span class="n">file</span><span class="p">)</span>
-    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SOM object saved to som_object-</span><span class="si">{</span><span class="n">xdim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">ydim</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">alpha</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">train</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">batch</span><span class="si">}{</span><span class="n">initial</span><span class="si">}</span><span class="s2">.pkl&quot;</span><span class="p">)</span>
+    <span class="n">save_som_object</span><span class="p">(</span><span class="n">som</span><span class="p">,</span> <span class="n">xdim</span><span class="p">,</span> <span class="n">ydim</span><span class="p">,</span> <span class="n">alpha_0</span><span class="p">,</span> <span class="n">train</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">initial</span><span class="p">,</span> <span class="n">name_of_dataset</span><span class="p">)</span>
 </pre></div>
 
+           </div>
           </div>
-          
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Trung Ha.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
         </div>
       </div>
-      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
-        <div class="sphinxsidebarwrapper">
-<h1 class="logo"><a href="../../index.html">aweSOM</a></h1>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
 
-
-
-
-
-
-
-
-<h3>Navigation</h3>
-<p class="caption" role="heading"><span class="caption-text">API Reference:</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../../modules.html">src</a></li>
-</ul>
-
-<div class="relations">
-<h3>Related Topics</h3>
-<ul>
-  <li><a href="../../index.html">Documentation overview</a><ul>
-  <li><a href="../index.html">Module code</a><ul>
-  </ul></li>
-  </ul></li>
-</ul>
-</div>
-<div id="searchbox" style="display: none" role="search">
-  <h3 id="searchlabel">Quick search</h3>
-    <div class="searchformwrapper">
-    <form class="search" action="../../search.html" method="get">
-      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
-      <input type="submit" value="Go" />
-    </form>
-    </div>
-</div>
-<script>document.getElementById('searchbox').style.display = "block"</script>
-
-
-
-
-
-
-
-
-        </div>
-      </div>
-      <div class="clearer"></div>
-    </div>
-    <div class="footer">
-      &copy;2024, Trung Ha.
-      
-      |
-      Powered by <a href="http://sphinx-doc.org/">Sphinx 7.2.6</a>
-      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.13</a>
-      
-    </div>
-
-    
-
-    
-  </body>
+</body>
 </html>

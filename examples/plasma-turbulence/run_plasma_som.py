@@ -89,10 +89,10 @@ if __name__ == "__main__":
     merge_threshold = 0.2
 
     working_dir = os.getcwd() + "/"
-    file_name = "features_2j1b1e0r_5000_jasym.h5"
+    file_name = "features_2j1b1e0r_5000_jasym.h5"  # change this to the right file name
 
     name_of_dataset = file_name.split("_")[2].split(".h5")[0]
-    sampling_type = "u"
+    sampling_type = "u"  # uniform sampling; can be changed to "s" for random sampling
 
     # load data
     with h5.File(working_dir + file_name, "r") as f:

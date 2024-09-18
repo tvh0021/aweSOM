@@ -17,6 +17,7 @@ Below is a quick start guide to set up aweSOM for a few generic datasets.
    installation
    quickstart
    examples
+   faqs
 
 .. toctree::
    :maxdepth: 2
