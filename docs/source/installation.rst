@@ -14,3 +14,9 @@ Installation
     .. code-block:: bash
 
         pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+3. Install Sphinx and other required packages for building the documentation:
+
+    .. code-block:: bash
+
+        pip install Sphinx sphinx-rtd-theme

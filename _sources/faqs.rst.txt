@@ -1,5 +1,5 @@
-FAQs
-====
+Frequently Asked Questions
+==========================
 
 .. contents:: Table of Contents
     :depth: 2

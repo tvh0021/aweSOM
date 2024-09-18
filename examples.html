@@ -21,8 +21,8 @@
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="FAQs" href="faqs.html" />
-    <link rel="prev" title="aweSOM package" href="aweSOM.html" /> 
+    <link rel="next" title="Frequently Asked Questions" href="faqs.html" />
+    <link rel="prev" title="Installation" href="installation.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -47,9 +47,16 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="modules.html">aweSOM</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Examples</a></li>
-<li class="toctree-l1"><a class="reference internal" href="faqs.html">FAQs</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Examples</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#plasma-simulation">Plasma Simulation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#initialize-and-train-a-single-som-realization">Initialize and train a single SOM realization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#train-multiple-som-realizations-and-combine-them-with-sce">Train multiple SOM realizations and combine them with SCE</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="faqs.html">Frequently Asked Questions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="modules.html">API Reference</a></li>
 </ul>
 
         </div>
@@ -78,33 +85,34 @@
              
   <section id="examples">
 <h1>Examples<a class="headerlink" href="#examples" title="Link to this heading"></a></h1>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Example 1: Simple addition</span>
-<span class="k">def</span> <span class="nf">add</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="n">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>  <span class="c1"># Output: 5</span>
-</pre></div>
-</div>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Example 2: Class definition</span>
-<span class="k">class</span> <span class="nc">Dog</span><span class="p">:</span>
-    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
-
-    <span class="k">def</span> <span class="nf">bark</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> says woof!&quot;</span>
-
-<span class="n">my_dog</span> <span class="o">=</span> <span class="n">Dog</span><span class="p">(</span><span class="s2">&quot;Buddy&quot;</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">my_dog</span><span class="o">.</span><span class="n">bark</span><span class="p">())</span>  <span class="c1"># Output: Buddy says woof!</span>
-</pre></div>
-</div>
+<nav class="contents local" id="table-of-contents">
+<p class="topic-title">Table of Contents</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#plasma-simulation" id="id1">Plasma Simulation</a></p>
+<ul>
+<li><p><a class="reference internal" href="#initialize-and-train-a-single-som-realization" id="id2">Initialize and train a single SOM realization</a></p></li>
+<li><p><a class="reference internal" href="#train-multiple-som-realizations-and-combine-them-with-sce" id="id3">Train multiple SOM realizations and combine them with SCE</a></p></li>
+</ul>
+</li>
+</ul>
+</nav>
+<section id="plasma-simulation">
+<h2><a class="toc-backref" href="#id1" role="doc-backlink">Plasma Simulation</a><a class="headerlink" href="#plasma-simulation" title="Link to this heading"></a></h2>
+<section id="initialize-and-train-a-single-som-realization">
+<h3><a class="toc-backref" href="#id2" role="doc-backlink">Initialize and train a single SOM realization</a><a class="headerlink" href="#initialize-and-train-a-single-som-realization" title="Link to this heading"></a></h3>
+</section>
+<section id="train-multiple-som-realizations-and-combine-them-with-sce">
+<h3><a class="toc-backref" href="#id3" role="doc-backlink">Train multiple SOM realizations and combine them with SCE</a><a class="headerlink" href="#train-multiple-som-realizations-and-combine-them-with-sce" title="Link to this heading"></a></h3>
+</section>
+</section>
 </section>
 
 
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="aweSOM.html" class="btn btn-neutral float-left" title="aweSOM package" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="faqs.html" class="btn btn-neutral float-right" title="FAQs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="installation.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="faqs.html" class="btn btn-neutral float-right" title="Frequently Asked Questions" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
