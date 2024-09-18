@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aweSOM.sce &mdash; aweSOM 1.4.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=19f00094" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../../_static/documentation_options.js?v=350a9c04"></script>
+        <script src="../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            aweSOM
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../modules.html">aweSOM</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../faqs.html">FAQs</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">aweSOM</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">aweSOM.sce</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for aweSOM.sce</h1><div class="highlight"><pre>
+<span></span><span class="c1">## Statistically Combined Ensemble (SCE) code for N-dimensional data</span>
+<span class="c1">## See Ha et al. (2024) for implementation details</span>
+<span class="c1">## For detailed mathematical description, see Bussov &amp; Nattila (2021)</span>
+<span class="c1">## https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning</span>
+<span class="c1">## If GPU-enabled, capable of handling 1000^3 data with 1 A100-80GB GPU.</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">glob</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="kn">import</span> <span class="nn">jax</span>
+
+<span class="c1"># Use JAX if GPU is available, otherwise use NumPy</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">default_device</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">default_backend</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">default_device</span> <span class="o">==</span> <span class="s2">&quot;gpu&quot;</span><span class="p">:</span>
+        <span class="n">USE_JAX</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">USE_JAX</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="k">except</span><span class="p">:</span>
+    <span class="n">USE_JAX</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="c1"># Define a unified interface for the functions</span>
+<span class="k">if</span> <span class="n">USE_JAX</span><span class="p">:</span>
+    <span class="kn">from</span> <span class="nn">jax</span> <span class="kn">import</span> <span class="n">numpy</span> <span class="k">as</span> <span class="n">jnp</span>
+    <span class="kn">from</span> <span class="nn">jax</span> <span class="kn">import</span> <span class="n">jit</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Using JAX for GPU computation&quot;</span><span class="p">)</span>
+    <span class="n">array_lib</span> <span class="o">=</span> <span class="n">jnp</span>  <span class="c1"># Use JAX&#39;s numpy interface</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Using NumPy for CPU computation&quot;</span><span class="p">)</span>
+    <span class="n">array_lib</span> <span class="o">=</span> <span class="n">np</span>  <span class="c1"># Use NumPy</span>
+
+
+<span class="c1"># Define a conditional jit decorator</span>
+<div class="viewcode-block" id="conditional_jit">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.conditional_jit">[docs]</a>
+<span class="k">def</span> <span class="nf">conditional_jit</span><span class="p">(</span><span class="n">func</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">USE_JAX</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">jit</span><span class="p">(</span><span class="n">func</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">func</span></div>
+
+
+
+<span class="c1"># read array from clusterID.npy</span>
+<div class="viewcode-block" id="load_som_npy">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.load_som_npy">[docs]</a>
+<span class="k">def</span> <span class="nf">load_som_npy</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="create_mask">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.create_mask">[docs]</a>
+<span class="nd">@conditional_jit</span>
+<span class="k">def</span> <span class="nf">create_mask</span><span class="p">(</span><span class="n">img</span><span class="p">:</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">cid</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a mask for a given cluster id</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img (jnp.ndarray): 3D array of cluster ids</span>
+<span class="sd">        cid (int): cluster id to mask</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        (j)np.ndarray: masked cluster, 1 where cluster id is cid, 0 elsewhere</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">img</span> <span class="o">==</span> <span class="n">cid</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="compute_SQ">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.compute_SQ">[docs]</a>
+<span class="k">def</span> <span class="nf">compute_SQ</span><span class="p">(</span><span class="n">mask</span><span class="p">:</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">maskC</span><span class="p">:</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute the quality index between two masks</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        mask ((j)np.ndarray): mask of cluster C</span>
+<span class="sd">        maskC ((j)np.ndarray): mask of cluster C&#39;</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        SQ (float): quality index, equals to S/Q</span>
+<span class="sd">        SQ_matrix ((j)np.ndarray): pixelwise quality index, equals to S/Q * mask</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># product of two masked arrays; corresponds to intersection</span>
+    <span class="n">I</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">multiply</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">maskC</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># sum of two masked arrays; corresponds to union</span>
+    <span class="n">U</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ceil</span><span class="p">((</span><span class="n">mask</span> <span class="o">+</span> <span class="n">maskC</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.5</span><span class="p">)</span>
+    <span class="c1"># U_area = array_lib.sum(U) / (nx * ny * nz)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># Intersection signal strength of two masked arrays, S</span>
+    <span class="n">S</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">I</span><span class="p">)</span> <span class="o">/</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">U</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># Union quality of two masked arrays, Q</span>
+    <span class="k">if</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">maskC</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="n">Q</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">U</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span> <span class="o">+</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">maskC</span><span class="p">))</span> <span class="o">-</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span>
+        <span class="n">I</span>
+    <span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span> <span class="o">+</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">maskC</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">Q</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span>
+            <span class="n">mask</span><span class="o">.</span><span class="n">shape</span>
+        <span class="p">)</span>  <span class="c1"># break here because this causes NaNs that accumulate.</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># final measure for this comparison is (S/Q) x Union</span>
+    <span class="n">SQ</span> <span class="o">=</span> <span class="n">S</span> <span class="o">/</span> <span class="n">Q</span>
+    <span class="n">SQ_matrix</span> <span class="o">=</span> <span class="n">SQ</span> <span class="o">*</span> <span class="n">mask</span>
+
+    <span class="k">return</span> <span class="n">SQ</span><span class="p">,</span> <span class="n">SQ_matrix</span></div>
+
+
+
+<div class="viewcode-block" id="loop_over_all_clusters">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.loop_over_all_clusters">[docs]</a>
+<span class="k">def</span> <span class="nf">loop_over_all_clusters</span><span class="p">(</span>
+    <span class="n">all_files</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">number_of_clusters</span><span class="p">:</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">dimensions</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Loops over all clusters in the given data, compute goodness-of-fit, then save Gsum values to file.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        all_files (list[str]): A list of data files saved in &#39;.npy&#39; format.</span>
+<span class="sd">        number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.</span>
+<span class="sd">        dimensions (np.ndarray): A 1d array representing the dimensions of the clusters (can be any dimension but nx*ny*nz has to be equal to number of data points).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Save Gsum value of each cluster C to a file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span>
+
+    <span class="n">runs</span> <span class="o">=</span> <span class="n">all_files</span>  <span class="c1"># [file.strip(&#39;.npy&#39;) for file in all_files]</span>
+
+    <span class="c1"># loop over data files reading image by image</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">runs</span><span class="p">)):</span>
+        <span class="n">run</span> <span class="o">=</span> <span class="n">runs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+
+        <span class="n">clusters_1d</span> <span class="o">=</span> <span class="n">load_som_npy</span><span class="p">(</span><span class="n">run</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;-----------------------&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Run : &quot;</span><span class="p">,</span> <span class="n">run</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">subfolder</span> <span class="o">+</span> <span class="s2">&quot;/multimap_mappings.txt&quot;</span><span class="p">,</span> <span class="s2">&quot;a&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">run</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;.npy&quot;</span><span class="p">)))</span>
+
+        <span class="c1"># nx x ny x nz size maps</span>
+        <span class="c1"># nz,ny,nx = array_lib.cbrt(clusters_1d.shape[0]).astype(int), array_lib.cbrt(clusters_1d.shape[0]).astype(int), array_lib.cbrt(clusters_1d.shape[0]).astype(int)</span>
+        <span class="c1"># clusters = clusters_1d.reshape(nz,ny,nx)</span>
+        <span class="n">clusters</span> <span class="o">=</span> <span class="n">clusters_1d</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">dimensions</span><span class="p">)</span>
+
+        <span class="c1"># unique ids</span>
+        <span class="n">nids</span> <span class="o">=</span> <span class="n">number_of_clusters</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>  <span class="c1"># number of cluster ids in this run</span>
+        <span class="c1"># ids = np.arange(nids)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;nids : &quot;</span><span class="p">,</span> <span class="n">nids</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">cid</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nids</span><span class="p">):</span>
+            <span class="c1"># print(&#39;  -----------------------&#39;)</span>
+            <span class="c1"># print(&#39;  cid : &#39;, cid, flush=True)</span>
+
+            <span class="c1"># create masked array where only id == cid are visible</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="n">create_mask</span><span class="p">(</span><span class="n">clusters</span><span class="p">,</span> <span class="n">cid</span><span class="p">)</span>
+
+            <span class="n">total_mask</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">dimensions</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">float</span><span class="p">)</span>
+
+            <span class="n">total_SQ_scalar</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+            <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">runs</span><span class="p">)):</span>
+                <span class="n">runC</span> <span class="o">=</span> <span class="n">runs</span><span class="p">[</span><span class="n">j</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="n">j</span> <span class="o">==</span> <span class="n">i</span><span class="p">:</span>  <span class="c1"># don&#39;t compare to itself</span>
+                    <span class="k">continue</span>
+
+                <span class="n">clustersC_1d</span> <span class="o">=</span> <span class="n">load_som_npy</span><span class="p">(</span><span class="n">runC</span><span class="p">)</span>
+                <span class="n">clustersC</span> <span class="o">=</span> <span class="n">clustersC_1d</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">dimensions</span><span class="p">)</span>
+
+                <span class="c1"># print(&#39;    -----------------------&#39;)</span>
+                <span class="c1"># print(&#39;   &#39;,runC, flush=True)</span>
+
+                <span class="n">nidsC</span> <span class="o">=</span> <span class="n">number_of_clusters</span><span class="p">[</span><span class="n">j</span><span class="p">]</span>  <span class="c1"># number of cluster ids in this run</span>
+                <span class="c1"># print(&#39;    nidsC : &#39;, nidsC)</span>
+
+                <span class="k">for</span> <span class="n">cidC</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nidsC</span><span class="p">):</span>
+                    <span class="n">maskC</span> <span class="o">=</span> <span class="n">create_mask</span><span class="p">(</span><span class="n">clustersC</span><span class="p">,</span> <span class="n">cidC</span><span class="p">)</span>
+
+                    <span class="n">SQ</span><span class="p">,</span> <span class="n">SQ_matrix</span> <span class="o">=</span> <span class="n">compute_SQ</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">maskC</span><span class="p">)</span>
+
+                    <span class="c1"># pixelwise stacking of 2 masks</span>
+                    <span class="n">total_mask</span> <span class="o">+=</span> <span class="n">SQ_matrix</span>  <span class="c1"># for numpy array</span>
+
+                    <span class="n">total_SQ_scalar</span> <span class="o">+=</span> <span class="n">SQ</span>
+
+            <span class="c1"># save total mask to file</span>
+            <span class="c1"># print(&quot;Saving total mask to file&quot;, flush=True)</span>
+            <span class="n">array_lib</span><span class="o">.</span><span class="n">save</span><span class="p">(</span>
+                <span class="n">subfolder</span> <span class="o">+</span> <span class="s2">&quot;/mask-</span><span class="si">{}</span><span class="s2">-id</span><span class="si">{}</span><span class="s2">.npy&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">run</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;.npy&quot;</span><span class="p">),</span> <span class="n">cid</span><span class="p">),</span>
+                <span class="n">total_mask</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="c1"># print(&quot;Saving total SQ scalar to multimap_mapping&quot;, flush=True)</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">subfolder</span> <span class="o">+</span> <span class="s2">&quot;/multimap_mappings.txt&quot;</span><span class="p">,</span> <span class="s2">&quot;a&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cid</span><span class="p">,</span> <span class="n">total_SQ_scalar</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="mi">0</span></div>
+
+
+
+<div class="viewcode-block" id="find_number_of_clusters">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.find_number_of_clusters">[docs]</a>
+<span class="k">def</span> <span class="nf">find_number_of_clusters</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Find the number of clusters in each run.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        cluster_files (list[str]): A list of data files saved in &#39;.npy&#39; format.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">number_of_clusters</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">run</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">)):</span>
+        <span class="n">clusters</span> <span class="o">=</span> <span class="n">load_som_npy</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">[</span><span class="n">run</span><span class="p">])</span>
+        <span class="n">ids</span> <span class="o">=</span> <span class="n">array_lib</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">clusters</span><span class="p">)</span>
+        <span class="n">number_of_clusters</span><span class="p">[</span><span class="n">run</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ids</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">number_of_clusters</span></div>
+
+
+
+<div class="viewcode-block" id="parse_args">
+<a class="viewcode-back" href="../../aweSOM.html#aweSOM.sce.parse_args">[docs]</a>
+<span class="k">def</span> <span class="nf">parse_args</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;argument parser for the sce.py script&quot;&quot;&quot;</span>
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;SCE code&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--folder&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;folder&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">getcwd</span><span class="p">(),</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Folder name&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--subfolder&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;subfolder&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;SCE&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Subfolder name&quot;</span>
+    <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--dims&quot;</span><span class="p">,</span>
+        <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;+&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span>
+        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;dims&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="p">[</span><span class="mi">640</span><span class="p">,</span> <span class="mi">640</span><span class="p">,</span> <span class="mi">640</span><span class="p">],</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Dimensions of the data&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parse_args</span><span class="p">()</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Starting SCE3d&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">folder</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">folder</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">chdir</span><span class="p">(</span><span class="n">folder</span><span class="p">)</span>
+    <span class="n">cluster_files</span> <span class="o">=</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">&quot;*.npy&quot;</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># data</span>
+    <span class="n">subfolder</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">subfolder</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># calculate unique number of clusters per run</span>
+    <span class="n">nids_array</span> <span class="o">=</span> <span class="n">find_number_of_clusters</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;nids_array:&quot;</span><span class="p">,</span> <span class="n">nids_array</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;There are </span><span class="si">{}</span><span class="s2"> runs&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">)),</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;There are </span><span class="si">{}</span><span class="s2"> clusters in total&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">nids_array</span><span class="p">)),</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># generate index for multimap_mapping as the loop runs. Avoid declaring a dict beforehand to avoid memory leaks</span>
+
+    <span class="k">try</span><span class="p">:</span>  <span class="c1"># try to create subfolder, if it exists, pass</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">subfolder</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">FileExistsError</span><span class="p">:</span>
+        <span class="k">pass</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">subfolder</span> <span class="o">+</span> <span class="s2">&quot;/multimap_mappings.txt&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># make shape of the data</span>
+    <span class="n">data_dims</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">dims</span><span class="p">)</span>
+
+    <span class="c1"># --------------------------------------------------</span>
+    <span class="c1"># loop over data files reading image by image and do pairwise comparisons</span>
+    <span class="c1"># all wrapped inside the loop_over_all_clusters function, which uses JAX for fast computation</span>
+    <span class="n">loop_over_all_clusters</span><span class="p">(</span><span class="n">cluster_files</span><span class="p">,</span> <span class="n">nids_array</span><span class="p">,</span> <span class="n">data_dims</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Trung Ha.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

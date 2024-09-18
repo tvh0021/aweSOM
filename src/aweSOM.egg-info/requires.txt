@@ -1,0 +1,7 @@
+h5py
+matplotlib
+numba
+numpy
+pytest
+scikit-learn
+scipy

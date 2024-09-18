@@ -1,0 +1,9 @@
+h5py
+# jax
+# jaxlib
+matplotlib
+numba
+numpy
+pytest
+scikit-learn
+scipy

@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aweSOM package &mdash; aweSOM 1.4.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=19f00094" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="_static/jquery.js?v=5d32c60e"></script>
+        <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="_static/documentation_options.js?v=350a9c04"></script>
+        <script src="_static/doctools.js?v=9a2dae69"></script>
+        <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Examples" href="examples.html" />
+    <link rel="prev" title="aweSOM" href="modules.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            aweSOM
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">aweSOM</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">aweSOM package</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#submodules">Submodules</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#module-aweSOM.make_sce_clusters">aweSOM.make_sce_clusters module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.combine_separated_clusters"><code class="docutils literal notranslate"><span class="pre">combine_separated_clusters()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.get_gsum_values"><code class="docutils literal notranslate"><span class="pre">get_gsum_values()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.get_sce_cluster_separation"><code class="docutils literal notranslate"><span class="pre">get_sce_cluster_separation()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.makeFilename"><code class="docutils literal notranslate"><span class="pre">makeFilename()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.plot_gsum_deriv"><code class="docutils literal notranslate"><span class="pre">plot_gsum_deriv()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.make_sce_clusters.plot_gsum_values"><code class="docutils literal notranslate"><span class="pre">plot_gsum_values()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#module-aweSOM.run_som">aweSOM.run_som module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.batch_separator"><code class="docutils literal notranslate"><span class="pre">batch_separator()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.initialize_lattice"><code class="docutils literal notranslate"><span class="pre">initialize_lattice()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.manual_scaling"><code class="docutils literal notranslate"><span class="pre">manual_scaling()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.number_of_nodes"><code class="docutils literal notranslate"><span class="pre">number_of_nodes()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.save_cluster_labels"><code class="docutils literal notranslate"><span class="pre">save_cluster_labels()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.run_som.save_som_object"><code class="docutils literal notranslate"><span class="pre">save_som_object()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#module-aweSOM.sce">aweSOM.sce module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.compute_SQ"><code class="docutils literal notranslate"><span class="pre">compute_SQ()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.conditional_jit"><code class="docutils literal notranslate"><span class="pre">conditional_jit()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.create_mask"><code class="docutils literal notranslate"><span class="pre">create_mask()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.find_number_of_clusters"><code class="docutils literal notranslate"><span class="pre">find_number_of_clusters()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.load_som_npy"><code class="docutils literal notranslate"><span class="pre">load_som_npy()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.loop_over_all_clusters"><code class="docutils literal notranslate"><span class="pre">loop_over_all_clusters()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.sce.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#module-aweSOM.som">aweSOM.som module</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#aweSOM.som.Lattice"><code class="docutils literal notranslate"><span class="pre">Lattice</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#module-aweSOM">Module contents</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="examples.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faqs.html">FAQs</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">aweSOM</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="modules.html">aweSOM</a></li>
+      <li class="breadcrumb-item active">aweSOM package</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/aweSOM.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="awesom-package">
+<h1>aweSOM package<a class="headerlink" href="#awesom-package" title="Link to this heading"></a></h1>
+<section id="submodules">
+<h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading"></a></h2>
+</section>
+<section id="module-aweSOM.make_sce_clusters">
+<span id="awesom-make-sce-clusters-module"></span><h2>aweSOM.make_sce_clusters module<a class="headerlink" href="#module-aweSOM.make_sce_clusters" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.combine_separated_clusters">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">combine_separated_clusters</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map_list</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_ranges</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dims</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#combine_separated_clusters"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.combine_separated_clusters" title="Link to this definition"></a></dt>
+<dd><p>Combine separated clusters by summing their corresponding gsum masks.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>map_list</strong> (<em>list</em>) – A list of instances representing the binary maps.</p></li>
+<li><p><strong>cluster_ranges</strong> (<em>list</em><em>[</em><em>list</em><em>[</em><em>int</em><em>]</em><em>]</em>) – A list of ranges indicating the start and end indices for each cluster.</p></li>
+<li><p><strong>dims</strong> (<em>int</em>) – The dimensions of the binary maps.</p></li>
+<li><p><strong>file_path</strong> (<em>str</em>) – The file path where the binary maps are stored.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A numpy array containing the summed binary maps for each cluster.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.get_gsum_values">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">get_gsum_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mapping_file</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#get_gsum_values"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.get_gsum_values" title="Link to this definition"></a></dt>
+<dd><p>Get the gsum values from the mapping file</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>mapping_file</strong> (<em>str</em>) – path to the mapping file</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>gsum values
+dict: mapping of gsum values to cluster id and cluster name</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.get_sce_cluster_separation">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">get_sce_cluster_separation</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gsum_deriv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#get_sce_cluster_separation"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.get_sce_cluster_separation" title="Link to this definition"></a></dt>
+<dd><p>Identify the separation of clusters in a given derivative array based on a specified threshold.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>gsum_deriv</strong> (<em>np.ndarray</em>) – A 1D array representing the derivative values.</p></li>
+<li><p><strong>threshold</strong> (<em>float</em>) – The threshold value used to determine cluster separation.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>A tuple containing:</dt><dd><ul class="simple">
+<li><p>list: A list of ranges for the identified clusters, where each range is represented as a list of two integers.</p></li>
+<li><p>list: A list of indices representing the local minima found below the threshold.</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>tuple</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.makeFilename">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">makeFilename</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#makeFilename"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.makeFilename" title="Link to this definition"></a></dt>
+<dd><p>Make a filename based on the number given.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>n</strong> (<em>int</em>) – number to be converted to a filename</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>filename</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.parse_args">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">parse_args</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#parse_args"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.parse_args" title="Link to this definition"></a></dt>
+<dd><p>argument parser for the make_sce_clusters.py script</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.plot_gsum_deriv">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">plot_gsum_deriv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gsum_deriv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">minimas</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#plot_gsum_deriv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.plot_gsum_deriv" title="Link to this definition"></a></dt>
+<dd><p>Plots the gsum derivative with optional minima highlighted.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>gsum_deriv</strong> (<em>np.ndarray</em>) – An array of gsum derivative values to be plotted.</p></li>
+<li><p><strong>threshold</strong> (<em>float</em>) – The threshold value to draw a horizontal line on the plot.</p></li>
+<li><p><strong>minimas</strong> (<em>list</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – A list of indices representing the minima to be highlighted on the plot. Defaults to None.</p></li>
+<li><p><strong>file_path</strong> (<em>str</em><em>, </em><em>optional</em>) – The file path where the plot will be saved. If None, the plot will be displayed instead. Defaults to None.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>This function does not return a value. It either displays the plot or saves it to a file.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.make_sce_clusters.plot_gsum_values">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.make_sce_clusters.</span></span><span class="sig-name descname"><span class="pre">plot_gsum_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gsum_values</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">minimas</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/make_sce_clusters.html#plot_gsum_values"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.make_sce_clusters.plot_gsum_values" title="Link to this definition"></a></dt>
+<dd><p>Plot the gsum values with optional minima markers.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>gsum_values</strong> (<em>list</em><em>[</em><em>float</em><em>]</em>) – A list of gsum values to plot.</p></li>
+<li><p><strong>minimas</strong> (<em>list</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – A list of indices indicating the minima to highlight. Defaults to None.</p></li>
+<li><p><strong>file_path</strong> (<em>str</em><em>, </em><em>optional</em>) – The directory path where the plot will be saved. If None, the plot will be displayed. Defaults to None.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>This function does not return a value. It either displays the plot or saves it to a file.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-aweSOM.run_som">
+<span id="awesom-run-som-module"></span><h2>aweSOM.run_som module<a class="headerlink" href="#module-aweSOM.run_som" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.batch_separator">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">batch_separator</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">number_of_batches</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/run_som.html#batch_separator"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.batch_separator" title="Link to this definition"></a></dt>
+<dd><p>Given a dataset and a number of batches, return a list of datasets
+each containing the same number of data points.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> (<em>np.ndarray</em>) – N x f dataset, N is the number of data points and f is the number of features</p></li>
+<li><p><strong>number_of_batches</strong> (<em>int</em>) – number of batches to create (b)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>b x N//b x f list of datasets</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.initialize_lattice">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">initialize_lattice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ratio</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/aweSOM/run_som.html#initialize_lattice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.initialize_lattice" title="Link to this definition"></a></dt>
+<dd><p>Given a N x f dataset and a ratio, return the dimensions of the SOM lattice based on Kohonen’s advice.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> (<em>np.ndarray</em>) – N x f dataset, N is the number of data points and f is the number of features</p></li>
+<li><p><strong>ratio</strong> (<em>float</em>) – height to width ratio of the lattice, between 0 and 1.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>[xdim, ydim] dimensions of the lattice</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list[int]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.manual_scaling">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">manual_scaling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bulk_range</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/run_som.html#manual_scaling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.manual_scaling" title="Link to this definition"></a></dt>
+<dd><p>Scale data to a range that centers on 0. and contains 95% of the data within the range.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> (<em>np.ndarray</em>) – 2d array of data (N x f)</p></li>
+<li><p><strong>bulk_range</strong> (<em>float</em><em>, </em><em>optional</em>) – The extent to which 95% of the data resides in. Defaults to 1..</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>scaled data</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.number_of_nodes">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">number_of_nodes</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">N</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">f</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="reference internal" href="_modules/aweSOM/run_som.html#number_of_nodes"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.number_of_nodes" title="Link to this definition"></a></dt>
+<dd><p>Given a dataset with N data points and f features, return the number of nodes in the SOM lattice.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>N</strong> (<em>int</em>) – number of data points</p></li>
+<li><p><strong>f</strong> (<em>int</em>) – number of features</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>number of nodes in the lattice</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.parse_args">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">parse_args</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/run_som.html#parse_args"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.parse_args" title="Link to this definition"></a></dt>
+<dd><p>CLI argument parser for run_som.py script.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.save_cluster_labels">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">save_cluster_labels</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">som_labels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ydim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha_0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">train</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'s'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name_of_dataset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/run_som.html#save_cluster_labels"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.save_cluster_labels" title="Link to this definition"></a></dt>
+<dd><p>Saves the cluster labels to a numpy file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>som_labels</strong> (<em>np.ndarray</em>) – The cluster labels to be saved.</p></li>
+<li><p><strong>xdim</strong> (<em>int</em>) – The x-dimension of the SOM grid.</p></li>
+<li><p><strong>ydim</strong> (<em>int</em>) – The y-dimension of the SOM grid.</p></li>
+<li><p><strong>alpha_0</strong> (<em>float</em>) – The initial learning rate.</p></li>
+<li><p><strong>train</strong> (<em>int</em>) – The number of training iterations.</p></li>
+<li><p><strong>batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The batch size. Defaults to 1.</p></li>
+<li><p><strong>initial</strong> (<em>str</em><em>, </em><em>optional</em>) – The type of initialization. Defaults to “s”.</p></li>
+<li><p><strong>name_of_dataset</strong> (<em>str</em><em>, </em><em>optional</em>) – The name of the dataset. Defaults to “”.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.run_som.save_som_object">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.run_som.</span></span><span class="sig-name descname"><span class="pre">save_som_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">som</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#aweSOM.som.Lattice" title="aweSOM.som.Lattice"><span class="pre">Lattice</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">xdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ydim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha_0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">train</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'s'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name_of_dataset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/run_som.html#save_som_object"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.run_som.save_som_object" title="Link to this definition"></a></dt>
+<dd><p>Save the SOM object to a pickle file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>som</strong> (<em>aweSOM.Lattice</em>) – The SOM object to be saved.</p></li>
+<li><p><strong>xdim</strong> (<em>int</em>) – The x-dimension of the SOM lattice.</p></li>
+<li><p><strong>ydim</strong> (<em>int</em>) – The y-dimension of the SOM lattice.</p></li>
+<li><p><strong>alpha_0</strong> (<em>float</em>) – The initial learning rate of the SOM.</p></li>
+<li><p><strong>train</strong> (<em>int</em>) – The number of training iterations.</p></li>
+<li><p><strong>batch</strong> (<em>int</em><em>, </em><em>optional</em>) – The batch size for training. Defaults to 1.</p></li>
+<li><p><strong>initial</strong> (<em>str</em><em>, </em><em>optional</em>) – The type of initial weights. Defaults to “s”.</p></li>
+<li><p><strong>name_of_dataset</strong> (<em>str</em><em>, </em><em>optional</em>) – The name of the dataset. Defaults to “”.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-aweSOM.sce">
+<span id="awesom-sce-module"></span><h2>aweSOM.sce module<a class="headerlink" href="#module-aweSOM.sce" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.compute_SQ">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">compute_SQ</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">maskC</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/sce.html#compute_SQ"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.compute_SQ" title="Link to this definition"></a></dt>
+<dd><p>Compute the quality index between two masks</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mask</strong> (<em>(</em><em>j</em><em>)</em><em>np.ndarray</em>) – mask of cluster C</p></li>
+<li><p><strong>maskC</strong> (<em>(</em><em>j</em><em>)</em><em>np.ndarray</em>) – mask of cluster C’</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>quality index, equals to S/Q
+SQ_matrix ((j)np.ndarray): pixelwise quality index, equals to S/Q * mask</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>SQ (float)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.conditional_jit">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">conditional_jit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">func</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/sce.html#conditional_jit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.conditional_jit" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.create_mask">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">create_mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/sce.html#create_mask"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.create_mask" title="Link to this definition"></a></dt>
+<dd><p>Create a mask for a given cluster id</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>img</strong> (<em>jnp.ndarray</em>) – 3D array of cluster ids</p></li>
+<li><p><strong>cid</strong> (<em>int</em>) – cluster id to mask</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>masked cluster, 1 where cluster id is cid, 0 elsewhere</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>(j)np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.find_number_of_clusters">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">find_number_of_clusters</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster_files</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/sce.html#find_number_of_clusters"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.find_number_of_clusters" title="Link to this definition"></a></dt>
+<dd><p>Find the number of clusters in each run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>cluster_files</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – A list of data files saved in ‘.npy’ format.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>An array of the number of cluster ids in each run.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>number_of_clusters ((j)np.ndarray)</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.load_som_npy">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">load_som_npy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/sce.html#load_som_npy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.load_som_npy" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.loop_over_all_clusters">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">loop_over_all_clusters</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">all_files</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">number_of_clusters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dimensions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="reference internal" href="_modules/aweSOM/sce.html#loop_over_all_clusters"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.loop_over_all_clusters" title="Link to this definition"></a></dt>
+<dd><p>Loops over all clusters in the given data, compute goodness-of-fit, then save Gsum values to file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>all_files</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – A list of data files saved in ‘.npy’ format.</p></li>
+<li><p><strong>number_of_clusters</strong> (<em>(</em><em>j</em><em>)</em><em>np.ndarray</em>) – An array of the number of cluster ids in each run.</p></li>
+<li><p><strong>dimensions</strong> (<em>np.ndarray</em>) – A 1d array representing the dimensions of the clusters (can be any dimension but nx*ny*nz has to be equal to number of data points).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Save Gsum value of each cluster C to a file.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="aweSOM.sce.parse_args">
+<span class="sig-prename descclassname"><span class="pre">aweSOM.sce.</span></span><span class="sig-name descname"><span class="pre">parse_args</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/sce.html#parse_args"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.sce.parse_args" title="Link to this definition"></a></dt>
+<dd><p>argument parser for the sce.py script</p>
+</dd></dl>
+
+</section>
+<section id="module-aweSOM.som">
+<span id="awesom-som-module"></span><h2>aweSOM.som module<a class="headerlink" href="#module-aweSOM.som" title="Link to this heading"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">aweSOM.som.</span></span><span class="sig-name descname"><span class="pre">Lattice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">xdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ydim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha_0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">train</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1000</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'decay'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sampling_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'sampling'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.Gamma">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">Gamma</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">index_bmu</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">m2Ds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nsize</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gaussian</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.Gamma"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.Gamma" title="Link to this definition"></a></dt>
+<dd><p>Calculate the neighborhood function for a given BMU on a lattice.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>index_bmu</strong> (<em>int</em>) – The index of the BMU node on the lattice.</p></li>
+<li><p><strong>m2Ds</strong> (<em>np.ndarray</em>) – Lattice coordinate of each node.</p></li>
+<li><p><strong>alpha</strong> (<em>float</em>) – The amplitude parameter for the Gaussian function, AKA the learning rate.</p></li>
+<li><p><strong>nsize</strong> (<em>int</em>) – The size of the neighborhood.</p></li>
+<li><p><strong>gaussian</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use Gaussian function or not. Defaults to True.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The neighborhood function values for each node on the grid.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.assign_cluster_to_data">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">assign_cluster_to_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">projection_2d</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">clusters_on_lattice</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.assign_cluster_to_data"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.assign_cluster_to_data" title="Link to this definition"></a></dt>
+<dd><p>Given a lattice and cluster assignments on that lattice, return the cluster ids of the data (in a 1d array)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>projection_2d</strong> (<em>np.ndarray</em>) – 2d array with x-y coordinates of the node associated with each data point</p></li>
+<li><p><strong>clusters_on_lattice</strong> (<em>np.ndarray</em>) – X x Y matrix of cluster labels on lattice</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>cluster_id of each data point</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.assign_cluster_to_lattice">
+<span class="sig-name descname"><span class="pre">assign_cluster_to_lattice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">smoothing</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge_cost</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.005</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.assign_cluster_to_lattice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.assign_cluster_to_lattice" title="Link to this definition"></a></dt>
+<dd><p>Assigns clusters to the lattice based on the computed centroids.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>smoothing</strong> (<em>float</em><em>, </em><em>optional</em>) – Smoothing parameter for computing Umatrix. Defaults to None.</p></li>
+<li><p><strong>merge_cost</strong> (<em>float</em><em>, </em><em>optional</em>) – Cost threshold for merging similar centroids. Defaults to 0.005.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Array representing the assigned clusters for each lattice point.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.best_match">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">best_match</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lattice</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">obs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">full</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.best_match"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.best_match" title="Link to this definition"></a></dt>
+<dd><p>Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>lattice</strong> (<em>np.ndarray</em>) – weight values of the lattice</p></li>
+<li><p><strong>obs</strong> (<em>np.ndarray</em>) – observations (input vectors)</p></li>
+<li><p><strong>full</strong> (<em>bool</em><em>, </em><em>optional</em>) – indicate whether to return first and second best match. Defaults to False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>return the 1d index of the best-matched node (within the lattice) for each observation</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.compute_centroids">
+<span class="sig-name descname"><span class="pre">compute_centroids</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">explicit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.compute_centroids"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.compute_centroids" title="Link to this definition"></a></dt>
+<dd><p>Compute the centroid for each node in the lattice given a precomputed Umatrix.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>explicit</strong> (<em>bool</em>) – Controls the shape of the connected component.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary containing the matrices with the same x-y dimensions as the original map,
+containing the centroid x-y coordinates.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>dict</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.compute_heat">
+<span class="sig-name descname"><span class="pre">compute_heat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">d</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">smoothing</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.compute_heat"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.compute_heat" title="Link to this definition"></a></dt>
+<dd><p>Compute a heat value map representation of the given distance matrix.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>d</strong> (<em>numpy.ndarray</em>) – A distance matrix computed via the ‘dist’ function.</p></li>
+<li><p><strong>smoothing</strong> (<em>float</em><em>, </em><em>optional</em>) – A positive floating point value controlling the smoothing of the umat representation. Defaults to None.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A matrix with the same x-y dimensions as the original map containing the heat.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.compute_umat">
+<span class="sig-name descname"><span class="pre">compute_umat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">smoothing</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.compute_umat"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.compute_umat" title="Link to this definition"></a></dt>
+<dd><p>Compute the unified distance matrix.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>smoothing</strong> (<em>float</em><em>, </em><em>optional</em>) – A positive floating point value controlling the smoothing of the umat representation. Defaults to None.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A matrix with the same x-y dimensions as the original map containing the umat values.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.coordinate">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">coordinate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">rowix</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.coordinate"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.coordinate" title="Link to this definition"></a></dt>
+<dd><p>Convert from a list of row index to an array of xy-coordinates.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>rowix</strong> (<em>np.ndarray</em>) – 1d array with the 1d indices of the points of interest (n x 1 matrix)</p></li>
+<li><p><strong>xdim</strong> (<em>int</em>) – x dimension of the lattice</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>array with x and y coordinates of each point in rowix</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.fast_som">
+<span class="sig-name descname"><span class="pre">fast_som</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.fast_som"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.fast_som" title="Link to this definition"></a></dt>
+<dd><p>Performs the self-organizing map (SOM) training.</p>
+<p>This method initializes the SOM with random values or a subset of the data, and then trains the SOM by updating the
+node weights based on the input vectors. The training process includes adjusting the learning rate, shrinking the
+neighborhood size, and saving the node weights and U-matrix periodically.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.get_unique_centroids">
+<span class="sig-name descname"><span class="pre">get_unique_centroids</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">centroids</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.get_unique_centroids"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.get_unique_centroids" title="Link to this definition"></a></dt>
+<dd><p>Print out a list of unique centroids given a matrix of centroid locations.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>centroids</strong> – A matrix of the centroid locations in the map.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary containing the unique x and y positions of the centroids.
+The dictionary has the following keys:
+position_x: A list of unique x positions.
+position_y: A list of unique y positions.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.list_clusters">
+<span class="sig-name descname"><span class="pre">list_clusters</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">centroids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">unique_centroids</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.list_clusters"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.list_clusters" title="Link to this definition"></a></dt>
+<dd><p>Get the clusters as a list of lists., not very useful</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>centroids</strong> (<em>matrix</em>) – A matrix of the centroid locations in the map.</p></li>
+<li><p><strong>unique_centroids</strong> (<em>list</em>) – A list of unique centroid locations.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of clusters associated with each unique centroid.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.list_from_centroid">
+<span class="sig-name descname"><span class="pre">list_from_centroid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">centroids</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.list_from_centroid"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.list_from_centroid" title="Link to this definition"></a></dt>
+<dd><p>Get all cluster elements associated with one centroid.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> (<em>int</em>) – The x position of a centroid.</p></li>
+<li><p><strong>y</strong> (<em>int</em>) – The y position of a centroid.</p></li>
+<li><p><strong>centroids</strong> (<em>numpy.ndarray</em>) – A matrix of the centroid locations in the map.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of cluster elements associated with the given centroid.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.map_data_to_lattice">
+<span class="sig-name descname"><span class="pre">map_data_to_lattice</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.map_data_to_lattice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.map_data_to_lattice" title="Link to this definition"></a></dt>
+<dd><p>After training, map each data point to the nearest node in the lattice.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A 2D array with the x and y coordinates of the best matching nodes for each data point.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>np.ndarray[int]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.merge_similar_centroids">
+<span class="sig-name descname"><span class="pre">merge_similar_centroids</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">naive_centroids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.3</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.merge_similar_centroids"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.merge_similar_centroids" title="Link to this definition"></a></dt>
+<dd><p>Merge centroids that are close enough together.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>naive_centroids</strong> (<em>np.ndarray</em>) – original centroids before merging</p></li>
+<li><p><strong>threshold</strong> (<em>float</em><em>, </em><em>optional</em>) – Any centroids with pairwise cost less than this threshold is merged. Defaults to 0.3.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>new node map with combined centroids</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.node_weight">
+<span class="sig-name descname"><span class="pre">node_weight</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.node_weight"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.node_weight" title="Link to this definition"></a></dt>
+<dd><p>Returns the weight values of a node at (x,y) on the lattice.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> (<em>int</em>) – x-coordinate of the node.</p></li>
+<li><p><strong>y</strong> (<em>int</em>) – y-coordinate of the node.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>1d array of weight values of said node.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.plot_heat">
+<span class="sig-name descname"><span class="pre">plot_heat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">heat</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">explicit</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">comp</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge_cost</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.001</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.plot_heat"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.plot_heat" title="Link to this definition"></a></dt>
+<dd><p>Plot the heat map of the given data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>heat</strong> (<em>array-like</em>) – The data to be plotted.</p></li>
+<li><p><strong>explicit</strong> (<em>bool</em><em>, </em><em>optional</em>) – A flag indicating whether the connected components are explicit. Defaults to False.</p></li>
+<li><p><strong>comp</strong> (<em>bool</em><em>, </em><em>optional</em>) – A flag indicating whether to plot the connected components. Defaults to True.</p></li>
+<li><p><strong>merge</strong> (<em>bool</em><em>, </em><em>optional</em>) – A flag indicating whether to merge the connected components. Defaults to False.</p></li>
+<li><p><strong>merge_cost</strong> (<em>float</em><em>, </em><em>optional</em>) – The threshold for merging the connected components. Defaults to 0.001.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.replace_value">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">replace_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">centroids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">centroid_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">centroid_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.replace_value"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.replace_value" title="Link to this definition"></a></dt>
+<dd><p>Replaces the values of centroid_a with the values of centroid_b in the given centroids dictionary.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>centroids</strong> (<em>dict</em><em>[</em><em>str</em><em>, </em><em>np.ndarray</em><em>]</em>) – A dictionary containing the centroids.</p></li>
+<li><p><strong>centroid_a</strong> (<em>tuple</em>) – The coordinates of the centroid to be replaced.</p></li>
+<li><p><strong>centroid_b</strong> (<em>tuple</em>) – The coordinates of the centroid to replace with.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The updated centroids dictionary.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>dict[str, np.ndarray]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.rowix">
+<span class="sig-name descname"><span class="pre">rowix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.rowix"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.rowix" title="Link to this definition"></a></dt>
+<dd><p>Convert from a xy-coordinate to a row index.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> (<em>int</em>) – The x-coordinate of the map.</p></li>
+<li><p><strong>y</strong> (<em>int</em>) – The y-coordinate of the map.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The row index corresponding to the given xy-coordinate.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.smooth_2d">
+<span class="sig-name descname"><span class="pre">smooth_2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">Y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ind</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight_obj</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grid</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nrow</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">64</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ncol</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">64</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">surface</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">theta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.smooth_2d"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.smooth_2d" title="Link to this definition"></a></dt>
+<dd><p>Smooths 2D data using a kernel smoother., internal function, no user-facing aspect</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>Y</strong> (<em>array-like</em>) – The input data to be smoothed.</p></li>
+<li><p><strong>ind</strong> (<em>array-like</em><em>, </em><em>optional</em>) – The indices of the data to be smoothed. Defaults to None.</p></li>
+<li><p><strong>weight_obj</strong> (<em>dict</em><em>, </em><em>optional</em>) – The weight object used for smoothing. Defaults to None.</p></li>
+<li><p><strong>grid</strong> (<em>dict</em><em>, </em><em>optional</em>) – The grid object used for smoothing. Defaults to None.</p></li>
+<li><p><strong>nrow</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of rows in the grid. Defaults to 64.</p></li>
+<li><p><strong>ncol</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of columns in the grid. Defaults to 64.</p></li>
+<li><p><strong>surface</strong> (<em>bool</em><em>, </em><em>optional</em>) – Flag indicating whether the data represents a surface. Defaults to True.</p></li>
+<li><p><strong>theta</strong> (<em>float</em><em>, </em><em>optional</em>) – The theta value used in the exponential covariance function. Defaults to None.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The smoothed data.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>array-like</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>None</strong> – </p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="aweSOM.som.Lattice.train_lattice">
+<span class="sig-name descname"><span class="pre">train_lattice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">features_names</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">labels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">number_of_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">save_lattice</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">restart_lattice</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/aweSOM/som.html#Lattice.train_lattice"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#aweSOM.som.Lattice.train_lattice" title="Link to this definition"></a></dt>
+<dd><p>Train the Model with numba JIT acceleration.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> (<em>np.ndarray</em>) – A numpy 2D array where each row contains an unlabeled training instance.</p></li>
+<li><p><strong>features_names</strong> (<em>list</em><em>[</em><em>str</em><em>]</em>) – A list of feature names.</p></li>
+<li><p><strong>labels</strong> (<em>np.ndarray</em><em>, </em><em>optional</em>) – A vector with one label (ground truth) for each observation in data. Defaults to None.</p></li>
+<li><p><strong>number_of_steps</strong> (<em>int</em>) – Number of steps taken this batch, used for keeping track of training restarts. Default is self.train.</p></li>
+<li><p><strong>save_lattice</strong> (<em>bool</em><em>, </em><em>optional</em>) – A flag that determines whether the node weights are saved to a file at the end of training. Defaults to False.</p></li>
+<li><p><strong>restart_lattice</strong> (<em>np.ndarray</em><em>, </em><em>optional</em>) – Vectors for the weights of the nodes from past realizations. Defaults to None.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-aweSOM">
+<span id="module-contents"></span><h2>Module contents<a class="headerlink" href="#module-aweSOM" title="Link to this heading"></a></h2>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="modules.html" class="btn btn-neutral float-left" title="aweSOM" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="examples.html" class="btn btn-neutral float-right" title="Examples" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Trung Ha.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
