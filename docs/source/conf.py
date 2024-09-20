@@ -38,3 +38,5 @@ html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 html_static_path = ["_static"]
 
 # -- Options for specifying path ---------------------------------------------
+
+sys.path.insert(0, os.path.abspath("../../src/aweSOM/"))
