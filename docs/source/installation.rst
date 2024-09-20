@@ -15,7 +15,7 @@ Installation
 
         pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
-3. Install Sphinx and other required packages for building the documentation:
+3. Install Sphinx and other required packages for building the documentation (optional):
 
     .. code-block:: bash
 
