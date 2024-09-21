@@ -26,9 +26,7 @@ docs/build/html/_modules/aweSOM/som.html
 docs/build/html/_sources/aweSOM.rst.txt
 docs/build/html/_sources/index.rst.txt
 docs/build/html/_sources/modules.rst.txt
-docs/build/html/_static/alabaster.css
 docs/build/html/_static/basic.css
-docs/build/html/_static/custom.css
 docs/build/html/_static/doctools.js
 docs/build/html/_static/documentation_options.js
 docs/build/html/_static/file.png
@@ -211,11 +209,8 @@ examples/iris/som_results/SCE/mask-labels.iris-42-16-0.5-50000-1s-id2.npy
 examples/iris/som_results/SCE/multimap_mappings.txt
 examples/iris/som_results/SCE/sce_clusters_-0.02.npy
 examples/iris/som_results/SCE/sce_clusters_-0.05.npy
-examples/iris/som_results/SCE/sce_clusters_-0.1.npy
-examples/iris/som_results/SCE/sce_clusters_-0.5.npy
 examples/plasma-turbulence/initialize_turbulence.py
 examples/plasma-turbulence/obtain_features.py
-examples/plasma-turbulence/plot_sce_slice.py
 examples/plasma-turbulence/__pycache__/a_star.cpython-310.pyc
 examples/plasma-turbulence/__pycache__/initialize_turbulence.cpython-310.pyc
 examples/plasma-turbulence/pytools/.DS_Store

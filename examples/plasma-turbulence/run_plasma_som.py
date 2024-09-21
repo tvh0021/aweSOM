@@ -15,10 +15,16 @@ from multiprocessing import Pool, cpu_count
 def save_som_run(
     params, normalized_data, feature_list, merge_threshold, name_of_dataset
 ):
-    H, alpha_0, train = params
+    H, alpha_0, train, sampling_type = params
+
+    if sampling_type == "uniform":
+        initial = "u"
+    else:
+        initial = "s"
+
     print("H: {}, alpha_0: {}, train: {}".format(H, alpha_0, train))
     xdim, ydim = initialize_lattice(normalized_data, H)
-    map = Lattice(xdim, ydim, alpha_0, train, sampling_type="uniform")
+    map = Lattice(xdim, ydim, alpha_0, train, sampling_type=sampling_type)
     map.train_lattice(normalized_data, feature_list)
     projection_2d = map.map_data_to_lattice()
     final_clusters = map.assign_cluster_to_lattice(
@@ -31,7 +37,7 @@ def save_som_run(
         ydim,
         alpha_0,
         train,
-        initial="u",
+        initial=initial,
         name_of_dataset=name_of_dataset,
     )
     save_som_object(
@@ -40,7 +46,7 @@ def save_som_run(
         ydim,
         alpha_0,
         train,
-        initial="u",
+        initial=initial,
         name_of_dataset=name_of_dataset,
     )
 
@@ -86,13 +92,16 @@ if __name__ == "__main__":
     parameters["alpha_0"] = args.alpha_0
     parameters["train"] = args.train
 
-    merge_threshold = 0.2
+    merge_threshold = 0.2  # can change this value
 
     working_dir = os.getcwd() + "/"
     file_name = "features_2j1b1e0r_5000_jasym.h5"  # change this to the right file name
-
     name_of_dataset = file_name.split("_")[2].split(".h5")[0]
-    sampling_type = "u"  # uniform sampling; can be changed to "s" for random sampling
+
+    sampling_type = (
+        "uniform"  # uniform sampling; can be changed to "sampling" for random sampling
+    )
+    parameters["sampling"] = sampling_type
 
     # load data
     with h5.File(working_dir + file_name, "r") as f:
@@ -103,9 +112,13 @@ if __name__ == "__main__":
     # normalize data
     normalized_data = manual_scaling(x)
 
+    # make a list of all combinations of parameters
     combinations = list(
         itertools.product(
-            parameters["ratio"], parameters["alpha_0"], parameters["train"]
+            parameters["ratio"],
+            parameters["alpha_0"],
+            parameters["train"],
+            parameters["sampling"],
         )
     )
 

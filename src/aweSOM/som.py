@@ -349,13 +349,13 @@ class Lattice:
 
         return projection_2d
 
-    def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.005):
+    def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.0):
         """
         Assigns clusters to the lattice based on the computed centroids.
 
         Args:
                 smoothing (float, optional): Smoothing parameter for computing Umatrix. Defaults to None.
-                merge_cost (float, optional): Cost threshold for merging similar centroids. Defaults to 0.005.
+                merge_cost (float, optional): Cost threshold for merging similar centroids. Defaults to 0.0.
 
         Returns:
                 numpy.ndarray: Array representing the assigned clusters for each lattice point.

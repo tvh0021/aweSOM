@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>aweSOM – accelerated python library for Self-Organizing Maps &mdash; aweSOM 1.4.1 documentation</title>
+  <title>aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE) &mdash; aweSOM 1.4.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
       <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=19f00094" />
 
@@ -18,10 +18,13 @@
         <script src="_static/documentation_options.js?v=350a9c04"></script>
         <script src="_static/doctools.js?v=9a2dae69"></script>
         <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="src" href="modules.html" /> 
+    <link rel="next" title="Installation" href="installation.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -43,9 +46,12 @@
   </form>
 </div>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
-              <p class="caption" role="heading"><span class="caption-text">API Reference:</span></p>
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="modules.html">src</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faqs.html">Frequently Asked Questions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="modules.html">API Reference</a></li>
 </ul>
 
         </div>
@@ -62,7 +68,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">aweSOM – accelerated python library for Self-Organizing Maps</li>
+      <li class="breadcrumb-item active">aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)</li>
       <li class="wy-breadcrumbs-aside">
             <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -72,17 +78,52 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="awesom-accelerated-python-library-for-self-organizing-maps">
-<h1>aweSOM – accelerated python library for Self-Organizing Maps<a class="headerlink" href="#awesom-accelerated-python-library-for-self-organizing-maps" title="Link to this heading"></a></h1>
-<p>aweSOM is a parallel, JIT-optimized package for training and clustering large datasets using self-organing map (SOM). It is written in Python 3.10/11, and is written for the segmentation of current sheets in magnetized plasma turbulence simulations, but can also be used in generic multi-dimensional data.</p>
-<p>Below is a quick start guide to set up aweSOM for a few generic datasets.</p>
+  <section id="awesom-accelerated-self-organizing-map-som-and-statistically-combined-ensemble-sce">
+<h1>aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)<a class="headerlink" href="#awesom-accelerated-self-organizing-map-som-and-statistically-combined-ensemble-sce" title="Link to this heading"></a></h1>
+<p>The aweSOM package combines a JIT-accelerated and parallelized implementation of SOM,
+integrating parts of <a class="reference external" href="https://github.com/njali2001/popsom">POPSOM</a> and a GPU-accelerated implementation of
+SCE using <a class="reference external" href="https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning">ensemble learning</a>.</p>
+<p>aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations
+[link to paper available soon]. However, it can also be used for a variety of clustering and classification tasks.</p>
+<p><strong>Authors:</strong></p>
+<p><a class="reference external" href="https://tvh0021.github.io">Trung Ha</a> - University of Massachusetts-Amherst,
+<a class="reference external" href="https://natj.github.io">Joonas Nättilä</a> - University of Helsinki,
+and <a class="reference external" href="https://jordydavelaar.com">Jordy Davelaar</a> - Princeton University.</p>
+<p>Current version: 1.4.1</p>
 <div class="toctree-wrapper compound">
-</div>
-<div class="toctree-wrapper compound">
-<p class="caption" role="heading"><span class="caption-text">API Reference:</span></p>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="modules.html">src</a><ul>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples.html">Examples</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="examples.html#plasma-simulation">Plasma Simulation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html#iris-dataset">Iris Dataset</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="faqs.html">Frequently Asked Questions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="modules.html">API Reference</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="aweSOM.html">aweSOM package</a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#som.Lattice"><code class="docutils literal notranslate"><span class="pre">Lattice</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.batch_separator"><code class="docutils literal notranslate"><span class="pre">batch_separator()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.initialize_lattice"><code class="docutils literal notranslate"><span class="pre">initialize_lattice()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.manual_scaling"><code class="docutils literal notranslate"><span class="pre">manual_scaling()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.number_of_nodes"><code class="docutils literal notranslate"><span class="pre">number_of_nodes()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.save_cluster_labels"><code class="docutils literal notranslate"><span class="pre">save_cluster_labels()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#run_som.save_som_object"><code class="docutils literal notranslate"><span class="pre">save_som_object()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.compute_SQ"><code class="docutils literal notranslate"><span class="pre">compute_SQ()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.conditional_jit"><code class="docutils literal notranslate"><span class="pre">conditional_jit()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.create_mask"><code class="docutils literal notranslate"><span class="pre">create_mask()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.find_number_of_clusters"><code class="docutils literal notranslate"><span class="pre">find_number_of_clusters()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.load_som_npy"><code class="docutils literal notranslate"><span class="pre">load_som_npy()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.loop_over_all_clusters"><code class="docutils literal notranslate"><span class="pre">loop_over_all_clusters()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#sce.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.combine_separated_clusters"><code class="docutils literal notranslate"><span class="pre">combine_separated_clusters()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.get_gsum_values"><code class="docutils literal notranslate"><span class="pre">get_gsum_values()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.get_sce_cluster_separation"><code class="docutils literal notranslate"><span class="pre">get_sce_cluster_separation()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.makeFilename"><code class="docutils literal notranslate"><span class="pre">makeFilename()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.parse_args"><code class="docutils literal notranslate"><span class="pre">parse_args()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.plot_gsum_deriv"><code class="docutils literal notranslate"><span class="pre">plot_gsum_deriv()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="modules.html#make_sce_clusters.plot_gsum_values"><code class="docutils literal notranslate"><span class="pre">plot_gsum_values()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -101,7 +142,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="modules.html" class="btn btn-neutral float-right" title="src" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="installation.html" class="btn btn-neutral float-right" title="Installation" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

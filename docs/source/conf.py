@@ -3,49 +3,55 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+import os
+import sys
+import sphinx_rtd_theme
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "aweSOM"
 copyright = "2024, Trung Ha"
 author = "Trung Ha"
-release = "1.4.1"
+release = "1.5.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
+    "sphinx_rtd_theme",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.autosummary",
-    "sphinx.ext.intersphinx",
-    "sphinx_rtd_theme",
+    "nbsphinx",
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = []
+
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-import sphinx_rtd_theme
-
 html_theme = "sphinx_rtd_theme"
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
-
 html_static_path = ["_static"]
 
-# -- Import path -------------------------------------------------------------
+# -- Specifying path for autodoc ---------------------------------------------
 
-import os
-import sys
+sys.path.insert(0, os.path.abspath("../../src"))
 
-sys.path.insert(0, os.path.abspath("../../src/aweSOM"))
-sys.path.insert(0, os.path.abspath("."))
+# -- Options for autodoc -----------------------------------------------------
 
-# -- Napoleon settings --------------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html
-
-napoleon_google_docstring = True
-napoleon_numpy_docstring = True
+autodoc_mock_imports = [
+    "numpy",
+    "jax",
+    "matplotlib",
+    "sklearn",
+    "pytest",
+    "h5py",
+    "jaxlib",
+    "scipy",
+    "numba",
+]

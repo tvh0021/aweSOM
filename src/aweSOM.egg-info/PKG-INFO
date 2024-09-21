@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: aweSOM
-Version: 1.4.1
+Version: 1.5.0
 Summary: Accelerated Self-Organizing Maps and Statistically Combined Ensemble method for plasma intermittency detection
 Home-page: https://github.com/tvh0021/aweSOM.git
 Author: Trung Ha
@@ -12,11 +12,10 @@ Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: h5py
-Requires-Dist: jax==0.4.31
-Requires-Dist: jaxlib==0.4.31
 Requires-Dist: matplotlib
 Requires-Dist: numba
 Requires-Dist: numpy
+Requires-Dist: pytest
 Requires-Dist: scikit-learn
 Requires-Dist: scipy
 
@@ -26,8 +25,7 @@ This package combines a JIT-accelerated and parallelized implementation of SOM, 
 It is optimized for large datasets, up to $\sim 10^7$ points. 
 
 aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations (link to paper).
-However, it can be used for a variety of clustering and classification tasks.
-For example, see the [Iris dataset](examples/iris/iris.ipynb).
+However, it can also be used for a variety of clustering and classification tasks.
 
 Authors: 
 
@@ -35,11 +33,11 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.4.1
+Version: 1.5.0
 
 ## 1. Installation
 
-To install aweSOM:
+1. Install aweSOM and required dependencies:
 
 ```bash
 git clone https://github.com/tvh0021/aweSOM.git
@@ -47,9 +45,39 @@ cd aweSOM
 pip install .
 ```
 
-## 2. Basic Usage - SOM
+2. Install JAX with CUDA support separately
 
-Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset
+```bash
+pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+```
+
+## 2. Testing
+
+We use `pytest` for the test module. Dependency has already been included in the `requirements.txt` file, and should be installed automatically with aweSOM
+
+To run tests for all modules:
+
+```bash
+pytest
+```
+
+You can also run specific test modules by specifying the path to the test file:
+
+```bash
+pytest tests/[module]_test.py
+```
+
+Or run a specific test function within a module:
+
+```bash
+pytest tests/[module]_test.py::test_[function]
+```
+
+## 3. Basic Usage - SOM
+
+Here are the basic steps to initialize a lattice and train the SOM to classify the Iris dataset.
+
+The full Jupyter notebook can be found [here](examples/iris/iris.ipynb).
 
 ```python
 import numpy as np
@@ -133,9 +161,8 @@ map.plot_heat(map.umat, merge=True, merge_cost=merge_threshold)
 Now, we project each data point onto the lattice and get back cluster-id
 
 ```python
-projection_2d = map.map_data_to_lattice()
 final_clusters = map.assign_cluster_to_lattice(smoothing=None,merge_cost=merge_threshold)
-som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+som_labels = map.assign_cluster_to_data(map.projection_2d, final_clusters)
 ```
 
 Finally, we compare the aweSOM result to the ground truth
@@ -202,7 +229,7 @@ Recall:  [100.0, 92.0, 90.0] %
 
 Is the performance of the aweSOM model.
 
-## 3. Basic Usage - SCE
+## 4. Basic Usage - SCE
 
 If a dataset is complex, a single SOM result might not be sufficiently stable.
 Instead, we can generate multiple SOM realizations with slightly different initial parameters, then stack the results into a set of statistically significant clusters.
@@ -308,14 +335,18 @@ Recall:  [100.0, 92.0, 92.0] %
 
 Because of the simplicity of the Iris dataset, not much improvement is made with SCE, but the result is nevertheless consistent with the single SOM result.
 
-## 4. License
+## 5. Advanced Usage - Plasma Simulation
+
+The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/fiducial_plasma.ipynb).
+
+## 6. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 5. Contributing
+## 7. Contributing
 
 Anyone is welcome to contribute! Please fork the repository and create pull requests with proposed changes.
 
-## 6. Contact
+## 8. Contact
 
 Additional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
