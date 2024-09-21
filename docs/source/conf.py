@@ -38,6 +38,20 @@ html_theme = "sphinx_rtd_theme"
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 html_static_path = ["_static"]
 
-# -- Options for specifying path ---------------------------------------------
+# -- Specifying path for autodoc ---------------------------------------------
 
 sys.path.insert(0, os.path.abspath("../../src/aweSOM"))
+
+# -- Options for autodoc -----------------------------------------------------
+
+autodoc_mock_imports = [
+    "numpy",
+    "jax",
+    "matplotlib",
+    "sklearn",
+    "pytest",
+    "h5py",
+    "jaxlib",
+    "scipy",
+    "numba",
+]
