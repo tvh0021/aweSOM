@@ -1,2 +1,6 @@
 Sphinx
 sphinx_rtd_theme
+nbsphinx
+sphinxcontrib-napoleon
+ipython
+jupyter

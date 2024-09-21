@@ -9,7 +9,7 @@ Installation
         cd aweSOM
         pip install .
 
-2. Install JAX with CUDA support separately:
+2. Install JAX with CUDA support separately, otherwise JAX will not recognize the GPU:
 
     .. code-block:: bash
 
@@ -19,4 +19,12 @@ Installation
 
     .. code-block:: bash
 
-        pip install Sphinx sphinx-rtd-theme
+        pip install -r docs/requirements.txt
+
+4. Build the documentation (optional):
+    
+        .. code-block:: bash
+    
+            cd docs
+            make html
+            open build/html/index.html

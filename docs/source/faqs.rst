@@ -1,28 +1,30 @@
 Frequently Asked Questions
 ==========================
 
-.. contents:: Table of Contents
-    :depth: 2
-    :local:
+*Under Construction*
 
-General Questions
------------------
+.. .. contents:: Table of Contents
+..     :depth: 2
+..     :local:
 
-What is the purpose of this project?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The purpose of this project is to ...
+.. General Questions
+.. -----------------
 
-How can I contribute?
-~~~~~~~~~~~~~~~~~~~~~
-You can contribute by ...
+.. What is the purpose of this project?
+.. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. The purpose of this project is to ...
 
-Technical Questions
--------------------
+.. How can I contribute?
+.. ~~~~~~~~~~~~~~~~~~~~~
+.. You can contribute by ...
 
-What technologies are used in this project?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-This project uses ...
+.. Technical Questions
+.. -------------------
 
-How do I set up the development environment?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-To set up the development environment, you need to ...
+.. What technologies are used in this project?
+.. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. This project uses ...
+
+.. How do I set up the development environment?
+.. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. To set up the development environment, you need to ...
