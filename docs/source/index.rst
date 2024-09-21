@@ -36,12 +36,10 @@ Current version: 1.4.1
    :caption: Contents:
 
    installation
-   examples
+   notebooks/iris
+   notebooks/plasma
    faqs
    modules
-   notebooks/iris
-   notebooks/fiducial_plasma
-   notebooks/sce_plasma
 
 Indices and tables
 ==================
