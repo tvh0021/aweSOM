@@ -36,6 +36,7 @@ Current version: 1.5.0
    :caption: Contents:
 
    installation
+   testing
    notebooks/plasma
    notebooks/iris
    faqs

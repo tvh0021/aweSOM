@@ -1,4 +1,4 @@
-# aweSOM - Accelerated Self-Organizing Map (SOM) and Statistically Combined Ensemble (SCE)
+# aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)
 
 This package combines a JIT-accelerated and parallelized implementation of SOM, integrating parts of [POPSOM](https://github.com/njali2001/popsom) and a GPU-accelerated implementation of SCE using [ensemble learning](https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning). 
 It is optimized for large datasets, up to $\sim 10^7$ points. 
@@ -8,7 +8,7 @@ However, it can also be used for a variety of clustering and classification task
 
 Authors: 
 
-[Trung Ha](https://tvh0021.github.io) - University of Massachusetts Amherst,
+[Trung Ha](https://tvh0021.github.io) - University of Massachusetts-Amherst,
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
@@ -316,7 +316,7 @@ Because of the simplicity of the Iris dataset, not much improvement is made with
 
 ## 5. Advanced Usage - Plasma Simulation
 
-The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/fiducial_plasma.ipynb).
+The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/plasma.ipynb).
 
 ## 6. License
 
