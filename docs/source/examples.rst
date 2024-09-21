@@ -27,22 +27,22 @@ for each argument.
     python run_plasma_som.py --ratio 0.6 --alpha_0 0.1 --train 2097152
     
 This will train a SOM realization with an initial learning rate :math:`\alpha_0 = 0.1`, a lattice ratio
-:math:`H = 0.6`, and :math:`N = 2,097,152` training steps (the entire simulation domain, :math:`L^3 = 128^3`).
+:math:`H = 0.6`, and :math:`N = 2097152` training steps (the entire simulation domain, :math:`L^3 = 128^3`).
 Optional toggles inside the script can be modified as needed. `file_name` points to the hdf5 file containing the
 simulation snapshot, `sampling_type` can be either "uniform" (random initial weights between -1 and 1) or "sampling"
 (random initial weights sampled from the data), and `merge_threshold` sets the threshold of cost for merging two
 cluster centroids.
 
 Two files will be generated: `som_object.*.pkl` and `labels.*.npy`. The former contains the trained SOM object
-and the latter contains the cluster IDs for each data point. You can visualize the results following these example 
+and the latter contains the cluster IDs for each data point. You can visualize the results following this example 
 Jupyter notebook
 
-.. nbsphinx:: fiducial_plasma.ipynb
+.. nbsphinx:: notebooks/fiducial_plasma
 
 Train multiple SOM realizations and combine them with SCE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. nbsphinx:: sce_plasma.ipynb
+.. nbsphinx:: notebooks/sce_plasma
 
 
 .. _optional-plasma:
