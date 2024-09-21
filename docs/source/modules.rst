@@ -6,22 +6,22 @@ API Reference
 
    aweSOM
 
-.. automodule:: som
+.. automodule:: aweSOM.som
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: run_som
+.. automodule:: aweSOM.run_som
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: sce
+.. automodule:: aweSOM.sce
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: make_sce_clusters
+.. automodule:: aweSOM.make_sce_clusters
    :members:
    :undoc-members:
    :show-inheritance:

@@ -36,8 +36,8 @@ Current version: 1.4.1
    :caption: Contents:
 
    installation
-   notebooks/iris
    notebooks/plasma
+   notebooks/iris
    faqs
    modules
 

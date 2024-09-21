@@ -40,7 +40,7 @@ html_static_path = ["_static"]
 
 # -- Specifying path for autodoc ---------------------------------------------
 
-sys.path.insert(0, os.path.abspath("../../src/aweSOM"))
+sys.path.insert(0, os.path.abspath("../../"))
 
 # -- Options for autodoc -----------------------------------------------------
 
