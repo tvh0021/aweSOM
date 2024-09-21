@@ -17,7 +17,7 @@ Past implementations of Self-organizing Maps (SOM) and Statistically Combined En
 Using a combination of JIT-accelerated and parallelized SOM and GPU-accelerated SCE, aweSOM can handle datasets with up to $\sim 10^7$ points running on a single GPU/CPU node.
 
 Additionally, aweSOM is designed to be general-purpose, so it can be used for a variety of clustering and classification tasks beyond its original purpose.
-See the :ref:`notebook <notebooks/iris>`_ for an example application on the classic Iris dataset.
+See the :doc:`notebook <notebooks/iris>` for an example application on the classic Iris dataset.
 
 How can I contribute?
 ~~~~~~~~~~~~~~~~~~~~~
@@ -33,11 +33,16 @@ Technical Questions
 
 How can I make aweSOM return more/less clusters?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-There are two main ways to control the number of clusters returned by aweSOM.
+There are three main ways to control the number of clusters returned by aweSOM.
 
-1. Modify the smoothing factor of the U-matrix. The smoother the U-matrix, the less local minimas will be found, and the fewer clusters will be returned. The default smoothing factor is None.
+1. Increase the number of nodes in the SOM lattice. The more nodes in the lattice, the more local minimas tend to appear. The default lattice size is 10x10.
 
-2. Modify the merge threshold between cluster centroids. The higher the merge threshold, the more clusters will be merged together, and the fewer clusters will be returned. The default merge threshold is 0.
+2. Modify the smoothing factor of the U-matrix. The smoother the U-matrix, the less local minimas will be found, and the fewer clusters will be returned. The default smoothing factor is None.
+
+3. Modify the merge threshold between cluster centroids. The higher the merge threshold, the more clusters will be merged together, and the fewer clusters will be returned. The default merge threshold is 0.
 
 Given an aweSOM object `map`, you can set the smoothing factor and merge threshold by calling `map.assign_cluster_to_lattice(smoothing=[some_value], merge_cost=[some_value])`.
 This will identify/merge cluster centroids, then assign each node to the nearest cluster centroid.
+
+A more subtle way to control the number of clusters is to modify the SOM hyperparameters, such as the aspect ratio of the lattice, the learning rate, and the number of epochs. These parameters are less trivial
+in how they modify the number of clusters, so it is recommended to start with the three main ways mentioned above.
