@@ -1,5 +1,5 @@
-Test that aweSOM installed correctly
-====================================
+Testing
+=======
 
 We use `pytest`_ for the test module. The dependency has already been included in the `requirements.txt` file and should be installed automatically with aweSOM.
 
