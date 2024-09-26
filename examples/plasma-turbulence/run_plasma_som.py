@@ -118,9 +118,17 @@ if __name__ == "__main__":
             parameters["ratio"],
             parameters["alpha_0"],
             parameters["train"],
-            parameters["sampling"],
         )
     )
+
+    # add sampling type to the combinations
+    combinations = [
+        tuple(list(combinations[i]) + [sampling_type]) for i in range(len(combinations))
+    ]
+
+    print("Number of combinations: ", len(combinations))
+    print("Number of CPU processes: ", cpu_count())
+    print("Combination: ", combinations)
 
     with Pool(cpu_count()) as p:
         items = [
