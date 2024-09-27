@@ -13,7 +13,7 @@ import sphinx_rtd_theme
 project = "aweSOM"
 copyright = "2024, Trung Ha"
 author = "Trung Ha"
-release = "1.5.0"
+release = "1.5.1"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

@@ -28,7 +28,7 @@ aweSOM is developed specifically to identify intermittent structures (current sh
 `Joonas Nättilä <https://natj.github.io>`_ - University of Helsinki,
 and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
-Current version: 1.5.0
+Current version: 1.5.1
 
 
 .. toctree::
