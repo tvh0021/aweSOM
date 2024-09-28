@@ -54,9 +54,7 @@ In modern, state-of-the-art plasma simulations, there are hundreds of possible l
 ## The SOM algorithm
 
 SOM is an unsupervised ML algorithm that excels at dimensionality reduction, clustering, and classification tasks.
-It consists of a 2-dimension (2D) lattice of nodes. Each node has a weight vector that is of the same dimension as the input data.  
-A SOM performs the clustering by changing the weight vectors such that the lattice's topology conforms to the intrinsic clustering of the input data. 
-In this manner, a SOM lattice can capture multidimensional correlations in the input data.
+It consists of a 2-dimension (2D) lattice of nodes. Each node has a weight vector that is of the same dimension as the input data. A SOM performs the clustering by changing the weight vectors such that the lattice's topology conforms to the intrinsic clustering of the input data. In this manner, a SOM lattice can capture multidimensional correlations in the input data.
 
 <!-- In particular, SOM is appropriate for use in detecting intermittency in plasma turbulence because it does not require prior knowledge about the number of clusters (i.e., *physical structures*). In practice, the complex interactions between the charged particles and the magnetic field in plasma turbulence would require such a model to adequately capture their interplay. Lastly, the resulting clusters obtained from a SOM are easily interpretable. -->
 

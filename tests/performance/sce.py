@@ -1,3 +1,6 @@
+## Original sce.py script from https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning.git
+## This script is used to compare the performance of the aweSOM package against the original SCE implementation
+
 import numpy as np
 import h5py as h5
 import collections
