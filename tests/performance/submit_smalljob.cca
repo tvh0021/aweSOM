@@ -2,12 +2,12 @@
 #SBATCH -J perf_test
 #SBATCH --output=%J.out
 #SBATCH --error=%J.err
-#SBATCH -t 02:00:00
+#SBATCH -t 04:00:00
 #SBATCH --nodes 1
-#SBATCH --ntasks-per-node=128
-#SBATCH --mail-type=ALL --mail-user=tha@flatironinstitute.org
+#SBATCH --ntasks-per-node 64
+#SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
 #SBATCH -p cca
-#SBATCH -C rome
+#SBATCH -C icelake
 
 # activate threading
 # export OMP_NUM_THREADS=1
@@ -16,4 +16,4 @@ export PYTHONDONTWRITEBYTECODE=true
 
 source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 
-python popsom_test.py
+python popsom_bench.py --N 1000000 --F 4

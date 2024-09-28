@@ -223,11 +223,12 @@ def combine_separated_clusters(
     return all_signals_map
 
 
-def makeFilename(n: int) -> str:
-    """Make a filename based on the number given.
+def make_file_name(n: int, ext: str) -> str:
+    """Make a filename based on the number and the extension given.
 
     Args:
         n (int): number to be converted to a filename
+        ext (str): file extension
 
     Returns:
         str: filename
@@ -239,7 +240,7 @@ def makeFilename(n: int) -> str:
     else:
         file_n = "0" + str(n)
 
-    return f"{file_n}.png"
+    return f"{file_n}.{ext}"
 
 
 def parse_args():
@@ -309,7 +310,7 @@ if __name__ == "__main__":
                 args.file_path, map_list[i][2], map_list[i][1]
             )
             destination_file_name = "{}/ranked-clusters/{}".format(
-                args.file_path, makeFilename(i)
+                args.file_path, make_file_name(i)
             )
             shutil.copyfile(origin_file_name, destination_file_name)
 

@@ -107,7 +107,10 @@ def compute_SQ(mask: array_lib.ndarray, maskC: array_lib.ndarray):
 
 
 def loop_over_all_clusters(
-    all_files: list[str], number_of_clusters: array_lib.ndarray, dimensions: np.ndarray
+    all_files: list[str],
+    number_of_clusters: array_lib.ndarray,
+    dimensions: np.ndarray,
+    subfolder: str = "SCE",
 ) -> int:
     """
     Loops over all clusters in the given data, compute goodness-of-fit, then save Gsum values to file.
@@ -116,6 +119,7 @@ def loop_over_all_clusters(
         all_files (list[str]): A list of data files saved in '.npy' format.
         number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
         dimensions (np.ndarray): A 1d array representing the dimensions of the clusters (can be any dimension but nx*ny*nz has to be equal to number of data points).
+        subfolder (str): The name of the subfolder to save the results to.
 
     Returns:
         Save Gsum value of each cluster C to a file.
@@ -241,7 +245,7 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    print("Starting SCE3d", flush=True)
+    print("Starting SCE", flush=True)
     folder = args.folder
     os.chdir(folder)
     cluster_files = glob.glob("*.npy")
@@ -276,4 +280,4 @@ if __name__ == "__main__":
     # --------------------------------------------------
     # loop over data files reading image by image and do pairwise comparisons
     # all wrapped inside the loop_over_all_clusters function, which uses JAX for fast computation
-    loop_over_all_clusters(cluster_files, nids_array, data_dims)
+    loop_over_all_clusters(cluster_files, nids_array, data_dims, subfolder)

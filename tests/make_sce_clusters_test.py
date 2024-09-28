@@ -9,7 +9,7 @@ from src.aweSOM.make_sce_clusters import (
     get_gsum_values,
     get_sce_cluster_separation,
     combine_separated_clusters,
-    makeFilename,
+    make_file_name,
 )
 
 
@@ -99,10 +99,10 @@ def test_combine_separated_clusters():
     assert combined_clusters.shape == (7, 150)
 
 
-def test_makeFilename():
-    assert makeFilename(1) == "0001.png"
-    assert makeFilename(10) == "0010.png"
-    assert makeFilename(100) == "0100.png"
+def test_make_file_name():
+    assert make_file_name(1, "png") == "0001.png"
+    assert make_file_name(10, "png") == "0010.png"
+    assert make_file_name(100, "png") == "0100.png"
 
 
 if __name__ == "__main__":

@@ -11,3 +11,5 @@ examples/plasma-turbulence/som_results/
 
 *.out
 *.err
+
+tests/performance/som_out/

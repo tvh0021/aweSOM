@@ -198,13 +198,8 @@ if __name__ == "__main__":
             "F": f,
             "POPSOM": time_popsom,
             "aweSOM": time_aweSOM,
-            "ratio": time_aweSOM / time_popsom,
+            "ratio": time_popsom / time_aweSOM,
         }
     )
-
-    # print(
-    #     f"Ratio of time taken by aweSOM to POPSOM for N = {n}, F = {f} : {time_aweSOM/time_popsom}",
-    #     flush=True,
-    # )
 
     print(results)
