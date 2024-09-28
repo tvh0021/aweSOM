@@ -1,5 +1,6 @@
 .venv/
 .vscode/
+*.egg-info/
 
 test-output/
 build/
