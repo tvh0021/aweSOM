@@ -10,7 +10,7 @@ To run tests for all modules:
 
 .. code-block:: bash
 
-    pytest --ignore=tests/performance
+    pytest
 
 You can also run specific test modules by specifying the path to the test file:
 
@@ -23,6 +23,9 @@ Or run a specific test function within a module:
 .. code-block:: bash
 
     pytest tests/[module]_test.py::test_[function]
+
+If there is no GPU on the machine, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially.
+This is expected behavior, and SCE analysis should still fall back on the GPU.
 
 Performance tests
 -----------------

@@ -188,19 +188,9 @@ if __name__ == "__main__":
 
     results = []
 
-    # data_dims = (n, f)
-    # training_steps = data_dims[0]
-    # features_names = [f"feature{i}" for i in range(1, f + 1)]
-    # alpha_0 = 0.5
-
-    # xdim, ydim = initialize_lattice(random_data(data_dims), 0.5)
-    # data = random_data(data_dims)
-
-    # params = (xdim, ydim, alpha_0, training_steps, "uniform")
-
-    time_popsom = test_popsom(generated_data)
-    print("---------------------------------------------------", flush=True)
     time_aweSOM = test_aweSOM(generated_data)
+    print("---------------------------------------------------", flush=True)
+    time_popsom = test_popsom(generated_data)
 
     results.append(
         {
