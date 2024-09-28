@@ -9,10 +9,10 @@ import glob
 import argparse
 import numpy as np
 
-import jax
-
-# Use JAX if GPU is available, otherwise use NumPy
+# Use JAX if GPU/the jax package is installed, otherwise use NumPy
 try:
+    import jax
+
     default_device = jax.default_backend()
     if default_device == "gpu":
         USE_JAX = True

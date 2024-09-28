@@ -12,7 +12,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.5.2
+Version: 1.5.3
 
 ## 1. Installation
 

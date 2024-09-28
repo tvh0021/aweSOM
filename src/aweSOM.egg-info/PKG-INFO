@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: aweSOM
-Version: 1.5.2
+Version: 1.5.3
 Summary: Accelerated Self-Organizing Maps and Statistically Combined Ensemble method for plasma intermittency detection
 Home-page: https://github.com/tvh0021/aweSOM.git
 Author: Trung Ha
@@ -33,7 +33,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.5.2
+Version: 1.5.3
 
 ## 1. Installation
 

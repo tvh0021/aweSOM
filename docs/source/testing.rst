@@ -29,7 +29,7 @@ Performance tests
 
 To benchmark the performance of aweSOM compared to `POPSOM <https://github.com/njali2001/popsom>`_ and the original 
 implementation of `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_,
-first install the dependencies:
+first install the dependencies of these legacy packages:
 
 .. code-block:: bash
 
@@ -42,12 +42,13 @@ Benchmarking aweSOM against POPSOM
 
 .. code-block:: bash
 
-    python popsom_test.py --n 10000 --f 4
+    python popsom_test.py --N 10000 --F 4
 
-For a personal computer, we recommend using a smaller number of points (:math:`\leq 10000`) and features (:math:`< 10`)
+For a personal computer, we recommend using a smaller number of points (:math:`N \sim 10^4`) and features (:math:`F < 10`)
 for the test to complete in a reasonable amount of time. More extensive tests can be run on a high-performance computing
 cluster. For example, one modern compute node with 40+ cores can perform this benchmark up to :math:`10^6` points and
-:math:`\sim 20` features. POPSOM generally cannot handle more than :math:`10^6` points.
+:math:`\sim 20` features. POPSOM generally cannot handle more than :math:`10^6` points, since training time can exceeds 2
+hours at these parameters.
 
 The expected performance of aweSOM is a speedup of :math:`\sim 8-20` times compared to POPSOM, depending on the number of
 points and features.
