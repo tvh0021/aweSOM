@@ -74,9 +74,14 @@ IDs for the dataset and save them as `npy` files. Then it will perform the SCE a
 and legacy implementations, and compare the training time of the two algorithms.
 
 In general, the Numpy version of aweSOM is around 2x faster than the legacy implementation. However, the GPU version of
-aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4``). The GPU 
+aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4`). The GPU 
 version of aweSOM is only faster for large datasets (:math:`N > 10^5`), and is exponentially faster as you scale up beyond
 :math:`N \sim 10^6`.
+
+We tested the performance of the SCE implementation on a single NVIDIA V-100 GPU with 32 GB of memory. At :math:`N = 10^6`
+and :math:`R = 10`, aweSOM is faster than the legacy implementation by a factor of :math:`\sim 15`. At :math:`N = 10^7`,
+aweSOM is faster by a factor of :math:`\sim 60`. In high-resolution simulations, :math:`L^3 \gtrsim 500; N = 10^8`, aweSOM
+is the only feasible option for performing the SCE analysis.
 
 
 .. _pytest: https://docs.pytest.org/en/stable/
