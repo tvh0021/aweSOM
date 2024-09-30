@@ -16,4 +16,4 @@ export PYTHONDONTWRITEBYTECODE=true
 
 source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 
-python popsom_bench.py --N 1000000 --F 4
+python popsom_bench.py --N 1000000 --F 6

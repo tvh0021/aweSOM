@@ -29,7 +29,10 @@ def random_data(data_dims: tuple):
 def test_popsom(generated_data):
     data, features_names, params = generated_data
 
-    print(f"Benchmarking POPSOM with {data.shape[0]} points", flush=True)
+    print(
+        f"Benchmarking POPSOM with {data.shape[0]} points and {data.shape[1]} features",
+        flush=True,
+    )
     start = time.time()
 
     xdim, ydim, alpha_0, training_steps, sampling_type = params
@@ -111,7 +114,7 @@ def test_popsom(generated_data):
     print("Time taken: ", cluster_labels_time - centroids_time, flush=True)
 
     end = time.time()
-    print("Total time taken: ", end - start, flush=True)
+    print(f"Total time taken: {end - start:.3f} s", flush=True)
 
     return end - start
 
@@ -119,7 +122,10 @@ def test_popsom(generated_data):
 def test_aweSOM(generated_data):
     data, features_names, params = generated_data
 
-    print(f"Benchmarking aweSOM with {data.shape[0]} points", flush=True)
+    print(
+        f"Benchmarking aweSOM with {data.shape[0]} points and {data.shape[1]} features",
+        flush=True,
+    )
     start = time.time()
 
     xdim, ydim, alpha_0, training_steps, sampling_type = params
@@ -164,7 +170,7 @@ def test_aweSOM(generated_data):
     print("Time taken: ", cluster_labels_time - som_labels_time, flush=True)
 
     end = time.time()
-    print("Total time taken: ", end - start, flush=True)
+    print(f"Total time taken: {end - start:.3f} s", flush=True)
 
     return end - start
 
@@ -185,6 +191,10 @@ if __name__ == "__main__":
     f = args.F
 
     generated_data = generate_data(f, n)
+    data, features_names, params = generated_data
+    xdim, ydim, alpha_0, training_steps, sampling_type = params
+
+    print(f"SOM lattice of size {xdim}x{ydim} trained for {training_steps} steps")
 
     results = []
 
