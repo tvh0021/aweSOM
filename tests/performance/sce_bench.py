@@ -63,7 +63,7 @@ def test_aweSOM(folder, number_of_points):
     # all wrapped inside the loop_over_all_clusters function, which uses JAX for fast computation
     loop_over_all_clusters(cluster_files, nids_array, data_dims)
     end = time.time()
-    print("Total time taken: ", end - start, flush=True)
+    print(f"Total time taken: {end - start:.3f} s", flush=True)
 
     return end - start
 
@@ -77,7 +77,7 @@ def test_ensemble_learning():
 
     subprocess.run(["python", "sce_adapted.py"])
     end = time.time()
-    print("Total time taken: ", end - start, flush=True)
+    print(f"Total time taken: {end - start:.3f} s", flush=True)
 
     return end - start
 
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     time_aweSOM = test_aweSOM(folder, args.N)
     print("---------------------------------------------------", flush=True)
     os.chdir("../")
-    time_ensemble = test_ensemble_learning()
+    # time_ensemble = test_ensemble_learning()
 
     print("Done, cleaning up", flush=True)
     shutil.rmtree(folder)
@@ -123,5 +123,5 @@ if __name__ == "__main__":
     print("Results:")
     print("Using N =", number_of_points, "and R =", number_of_realizations)
     print(f"aweSOM time: {time_aweSOM}")
-    print(f"Ensemble learning time: {time_ensemble}")
-    print(f"Ratio: {time_ensemble / time_aweSOM}")
+    # print(f"Ensemble learning time: {time_ensemble}")
+    # print(f"Ratio: {time_ensemble / time_aweSOM}")

@@ -1,0 +1,21 @@
+#!/usr/bin/bash
+#SBATCH -p gpu
+#SBATCH --output=%J.out
+#SBATCH --error=%J.err
+#SBATCH --gpus-per-task=1
+#SBATCH --cpus-per-task=8
+#SBATCH --ntasks=1
+#SBATCH --mem=100G
+#SBATCH --constraint=a100-40gb  # if you want a particular type of GPU
+#SBATCH --time=0-2
+#SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
+
+# activate threading
+# export OMP_NUM_THREADS=1
+export PYTHONDONTWRITEBYTECODE=true
+# export HDF5_USE_FILE_LOCKING=FALSE
+
+module load cuda
+source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
+
+python sce_bench.py --N 1000000 --R 30
