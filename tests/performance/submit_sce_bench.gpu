@@ -5,7 +5,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
-#SBATCH --mem=100G
+#SBATCH --mem=40G
 #SBATCH --constraint=a100-40gb  # if you want a particular type of GPU
 #SBATCH --time=0-2
 #SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
@@ -18,4 +18,11 @@ export PYTHONDONTWRITEBYTECODE=true
 module load cuda
 source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 
-python sce_bench.py --N 1000000 --R 30
+python sce_bench.py --N 100 --R 20
+python sce_bench.py --N 200 --R 20
+python sce_bench.py --N 400 --R 20
+python sce_bench.py --N 800 --R 20
+python sce_bench.py --N 1600 --R 20
+python sce_bench.py --N 3125 --R 20
+python sce_bench.py --N 6250 --R 20
+python sce_bench.py --N 12500 --R 20

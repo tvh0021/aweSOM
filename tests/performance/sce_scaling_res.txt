@@ -1,0 +1,114 @@
+Results:
+Using N = 100 and R = 20
+aweSOM time: 25.966966152191162
+Ensemble learning time: 9.575311183929443
+Ratio: 0.36874970791000367
+
+Results:
+Using N = 200 and R = 20
+aweSOM time: 25.883908987045288
+Ensemble learning time: 9.754431009292603
+Ratio: 0.3768530871505778
+
+Results:
+Using N = 400 and R = 20
+aweSOM time: 25.792073488235474
+Ensemble learning time: 9.69668436050415
+Ratio: 0.3759559837221732
+
+Results:
+Using N = 800 and R = 20
+aweSOM time: 25.995396852493286
+Ensemble learning time: 9.899963855743408
+Ratio: 0.38083526525558226
+
+Results:
+Using N = 1600 and R = 20
+aweSOM time: 26.073118209838867
+Ensemble learning time: 10.3741934299469
+Ratio: 0.39788848216981304
+
+Using N = 3125 and R = 20
+aweSOM time: 26.12288522720337
+Ensemble learning time: 11.213395833969116
+Ratio: 0.42925564065534066
+
+Results:
+Using N = 6250 and R = 20
+aweSOM time: 25.921364307403564
+Ensemble learning time: 12.460475444793701
+Ratio: 0.4807029173705485
+
+Results:
+Using N = 12500 and R = 20
+aweSOM time: 26.75512385368347
+Ensemble learning time: 15.721453666687012
+Ratio: 0.5876053406690765
+
+Results:
+Using N = 25000 and R = 20
+aweSOM time: 27.637009382247925
+Ensemble learning time: 20.307985067367554
+Ratio: 0.7348112375867983
+
+Results:
+Using N = 50000 and R = 20
+aweSOM time: 28.39127230644226
+Ensemble learning time: 29.83175230026245
+Ratio: 1.050736718603954
+
+Results:
+Using N = 100000 and R = 20
+aweSOM time: 29.723650217056274
+Ensemble learning time: 52.29924559593201
+Ratio: 1.7595162509993882
+
+Results:
+Using N = 200000 and R = 20
+aweSOM time: 31.8835232257843
+Ensemble learning time: 93.42710328102112
+Ratio: 2.9302628388780554
+
+Results:
+Using N = 400000 and R = 20
+aweSOM time: 36.62167978286743
+Ensemble learning time: 177.54374408721924
+Ratio: 4.848050257112422
+
+Results:
+Using N = 800000 and R = 20
+aweSOM time: 39.07804036140442
+Ensemble learning time: 401.7120170593262
+Ratio: 10.27973801511497
+
+Results:
+Using N = 1600000 and R = 20
+aweSOM time: 47.48567271232605
+Ensemble learning time: 810.1364097595215
+Ratio: 17.06064931768843
+
+Results:
+Using N = 3200000 and R = 20
+aweSOM time: 60.862900257110596
+Ensemble learning time: 1714.0029835700989
+Ratio: 28.16170403200351
+
+Results:
+Using N = 6400000 and R = 20
+aweSOM time: 86.39489889144897
+
+Results:
+Using N = 12800000 and R = 20
+aweSOM time: 157.81980800628662
+
+Results:
+Using N = 25600000 and R = 20
+aweSOM time: 310.1219673156738
+
+Results:
+Using N = 51200000 and R = 20
+aweSOM time: 622.2160723209381
+
+Results:
+Using N = 102400000 and R = 20
+aweSOM time: 1192.0474691390991

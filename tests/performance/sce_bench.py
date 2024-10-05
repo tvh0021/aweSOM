@@ -91,9 +91,10 @@ if __name__ == "__main__":
 
     number_of_points = args.N
     number_of_realizations = args.R
-    number_of_clusters = [
-        np.random.randint(6, 10) for _ in range(number_of_realizations)
-    ]
+    # number_of_clusters = [
+    #     np.random.randint(6, 10) for _ in range(number_of_realizations)
+    # ]
+    number_of_clusters = [7] * number_of_realizations
 
     cluster_files = [
         f"labels.{make_file_name(i,'npy')}" for i in range(number_of_realizations)
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     time_aweSOM = test_aweSOM(folder, args.N)
     print("---------------------------------------------------", flush=True)
     os.chdir("../")
-    # time_ensemble = test_ensemble_learning()
+    time_ensemble = test_ensemble_learning()
 
     print("Done, cleaning up", flush=True)
     shutil.rmtree(folder)
@@ -123,5 +124,5 @@ if __name__ == "__main__":
     print("Results:")
     print("Using N =", number_of_points, "and R =", number_of_realizations)
     print(f"aweSOM time: {time_aweSOM}")
-    # print(f"Ensemble learning time: {time_ensemble}")
-    # print(f"Ratio: {time_ensemble / time_aweSOM}")
+    print(f"Ensemble learning time: {time_ensemble}")
+    print(f"Ratio: {time_ensemble / time_aweSOM}")
