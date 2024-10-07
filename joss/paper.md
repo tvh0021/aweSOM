@@ -63,7 +63,7 @@ It consists of a 2-dimension (2D) lattice of nodes. Each node has a weight vecto
 
 To combat these challenges, we rewrite `POPSOM` using more modern `NumPy` functions whenever the lattice (which is a 3D array) is updated. This legacy implementation was originally written in R, then translated to Python, so there are numerous instances where the algorithm could be optimized. Furthermore, for the steps where parallelization could be leveraged, we integrate `Numba` to take advantage of its Just-In-Time (JIT) compiler and simple parallelization of loops. These optimizations translate to up to $20\times$ faster mapping of cluster labels to the input data, and up to $10\times$ faster training time.
 
-The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and `POPSOM` given a range of $N$ and two values of $F$. `POPSOM` is slightly faster than `aweSOM` for $N \lessim 10^4$, although both complete their training very quickly. At $N \gtrsim 5 \times 10^5$, `aweSOM` is consistently faster than `POPSOM` by roughly a factor of $10$.
+The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and `POPSOM` given a range of $N$ and two values of $F$. `POPSOM` is slightly faster than `aweSOM` for $N \lesssim 10^4$, although both complete their training very quickly. At $N \gtrsim 5 \times 10^5$, `aweSOM` is consistently faster than `POPSOM` by roughly a factor of $10$.
 
 ## SCE
 
