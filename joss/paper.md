@@ -65,15 +65,15 @@ To combat these challenges, we rewrite `POPSOM` using more modern `NumPy` functi
 
 ## SCE
 
-SCE is a statistical ensemble method that works by stacking multiple independent clustering results into a statistically significant set of clusters. SCE can be used independently from the base SOM algorithm, and was developed for general unsupervised classification algorithms [@bussov2021]. In its original implementation, the SCE was saved as a nested dictionary of boolean arrays, each of which contains the spatial similarity index $g$ between cluster $C$ and cluster $C'$. The total number of operations scales as $N_{C}^R$, where $N_C$ is the number of clusters in each realization, and $R$ is the number of realization. In practice, each SOM realization trained on the plasma simulation contains on average 7 clusters. When we generate 36 realizations, there are a total of $T \approx 7^36 \sim 10^30$ array-to-array comparisons.
+SCE is a statistical ensemble method that works by stacking multiple independent clustering results into a statistically significant set of clusters. SCE can be used independently from the base SOM algorithm, and was developed for general unsupervised classification algorithms [@bussov2021]. In its original implementation, the SCE was saved as a nested dictionary of boolean arrays, each of which contains the spatial similarity index $g$ between cluster $C$ and cluster $C'$. The total number of operations scales as $N_{C}^R$, where $N_C$ is the number of clusters in each realization, and $R$ is the number of realization. In practice, each SOM realization trained on the plasma simulation contains on average 7 clusters. When we generate 36 realizations, there are a total of $T \approx 7^{36} \sim 10^{30}$ array-to-array comparisons.
 
 We use `JAX` [@jax] to significantly improve the performance of the array-to-array comparison procedure by leveraging the GPU's advantage over CPU in parallel computing.  
 <!-- since each value in the boolean arrays can be manipulated independently.  -->
-We implement this optimization by eliminating the need for nested dictionaries, instead replacing them with `jax.numpy` arrays. Beyond that, every instance of matrix operation using `NumPy` is converted to `jax.numpy`. Additionally, we implement internal checks such that the SCE code automatically reverts to `NumPy` if GPU-accelerated `JAX` is not available.
+We implement this optimization by eliminating the need for nested dictionaries, instead replacing them with data arrays. Beyond that, every instance of matrix operation using `NumPy` is converted to `jax.numpy`. Additionally, we implement internal checks such that the SCE code automatically reverts to `NumPy` if GPU-accelerated `JAX` is not available.
 
-Similar to the SOM implementation, the SCE implementation in `aweSOM` scales extremely well with increasing number of data points. \autoref{fig:sce_scaling} shows a graph of the performance between the two implementations given $R = 20$. At $N < 10^5$, the legacy implementation is faster due to the overhead from loading `JAX` and the JIT compiler. However, `aweSOM` quickly exceeds the performance of the legacy code, and begins to approach its maximum speed-up of $\sim 100$ at $N \gtrsim 10^7$.
+Similar to the SOM implementation, the SCE implementation in `aweSOM` scales extremely well with increasing number of data points. \autoref{fig:sce_scaling} shows a graph of the performance between the two implementations given $R = 20$. At $N < 5 \times 10^4$, the legacy implementation is faster due to the overhead from loading `JAX` and the JIT compiler. However, `aweSOM` quickly exceeds the performance of the legacy code, and begins to approach its maximum speed-up of $\sim 100$ at $N \gtrsim 10^7$. On the other hand, simply using `aweSOM` with `NumPy` only yeilds a consistent $2\times$ speedup compared to the legacy implementation.
 
-![Performance comparison of `aweSOM` and the legacy SCE implementation. \label{fig:sce_scaling}](sce_scaling.png)
+![Performance comparison between `aweSOM` and the legacy SCE implementation. The top panel shows the time for each implementation to complete SCE analysis of $N$ number of data points and $R = 20$ realizations. The bottom panel shows the ratio between the time taken by the legacy code divided by the time taken by `aweSOM`. `JAX`-accelerated `aweSOM` provides more than $10\times$ speedup when $N > 10^6$, while the CPU version is only $\approx 2 \times$ faster. \label{fig:sce_scaling}](sce_scaling.png)
 
 # Mathematical descriptions of `aweSOM`
 
@@ -85,10 +85,10 @@ Fundamentally, a SOM is a 2D lattice of nodes that, through training, adapts to 
 2. The initial weight value of each node, $\omega_0$, can be drawn from a uniform random distribution or based on random sampling of the input data.
 3. Multiple considerations are made during training:
 - At each epoch, $t$, one input vector is randomly drawn. Then, the Euclidean distances, $D_{\rm E}$, between this vector and all nodes in the lattice are calculated. The node with the smallest distance is chosen as the best-matching unit (BMU). The weight value of each node is updated as follows: $$w_{i,j}(t) = w_{i,j}(t-1) - D_{\mathrm{E}|i,j} \cdot \gamma(t), $$ where $i,j$ represent the node's location in the lattice, and $\gamma(t)$ is the neighborhood function: $$\gamma(t)= \begin{cases} \alpha(t) e^{\frac{-d_{\rm C}^2}{2(s(t)/3)^2}}, & \text{if $d_{\rm C} \leq s(t)$},\\ 0, & \text{if $d_{\rm C} > s(t)$},\end{cases}$$ where $\alpha(t)$ is the learning rate at epoch $t$, $d_{\rm C}$ is the Chebyshev distance between the BMU and the node at $(i,j)$, and $s(t)$ is the neighborhood width at epoch $t$.
-- Initially, $s_0 = \mathrm{max}(X,Y)$ such that earlier training steps adjust the weight values across the entire lattice.As training progresses, $s$ gradually decreases until only a small number of nodes (or just the BMU) are updated each epoch. In `aweSOM`, the final neighborhood size is set to $s_{\rm f} = 8$. This ensures that learning localizes to a specific region of the lattice without being overly restrictive, thereby preserving generalization.
-- Simultaneously, $\alpha$ also decays exponentially by a factor of 0.75 at regular interval such that $\alpha_{\rm final} = \alpha_0 \times 0.75^{24} \approx 10^{-3}\,\alpha_0$.
-4. After training, clustering is performed on the lattice based on the geometry of the unified distance matrix (U-matrix). Cluster centroids are identified by finding local minima in the U-matrix. A ``merging cost" is then calculated by line integration between all pairs of centroids. If the cost is below a normalized threshold (often set to 0.2-0.3), the clusters are merged.
-5. Lastly, the cells in the simulation are mapped to the nearest node in the lattice, each of which has been assigned a cluster label. This label is then transferred to the corresponding input vector, resulting in visualization of the clustering in the input space. 
+- Initially, $s_0 = \mathrm{max}(X,Y)$ such that earlier training steps adjust the weight values across the entire lattice. $s$ gradually decreases as $t$ increases until only a small number of nodes (or just the BMU) are updated each epoch. In `aweSOM`, the final neighborhood size is set to $s_{\rm f} = 8$. This ensures that learning localizes to a specific region of the lattice without being overly restrictive, thereby preserving generalization.
+- $\alpha$ also decays exponentially by a factor of 0.75 at regular interval such that $\alpha_{\rm final} = \alpha_0 \times 0.75^{24} \approx 10^{-3}\,\alpha_0$.
+4. After training, clustering is performed on the lattice based on the clustering of the unified distance matrix (U-matrix). Initial cluster centroids are identified by finding local minima in the U-matrix. A ``merging cost" is then calculated by line integration between all pairs of centroids. If the cost is below a normalized threshold (often set to 0.2-0.3), the clusters are merged.
+5. The input data is mapped to the nearest node in the lattice, each of which has been assigned a cluster label. This label is then transferred to the corresponding input vector, resulting in visualization of the clustering in the input space. 
 
 A list of plasma simulations that we applied the `aweSOM` framework on, as well as convergence metrics, are discussed in @ha2024.
 
@@ -96,11 +96,8 @@ A list of plasma simulations that we applied the `aweSOM` framework on, as well 
 
 
 
-<!-- Most notably, we use `Numba` for its ,   -->
-
-
 # Acknowledgements
-<!-- 
-`squishyplanet` relies on `quadax` [@quadax], an open-source library for numerical quadrature and integration in `JAX`. `squishyplanet` also uses the Kepler's equation solver from `jaxoplanet` [@jaxoplanet] and the finite exposure time correction from `starry` [@starry]. `squishyplanet` is built with the `JAX` library [@jax]. We thank the developers of these packages for their work and for making their code available to the community. -->
+
+The authors would like to thank Kaze Wong for his valuable help and guidance in setting up `JAX` for the SCE analysis. 
 
 # References

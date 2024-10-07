@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH -J perf_test
+#SBATCH -J perf_sce_cpu
 #SBATCH --output=%J.out
 #SBATCH --error=%J.err
-#SBATCH -t 02:00:00
+#SBATCH -t 06:00:00
 #SBATCH --nodes 1
-#SBATCH --ntasks-per-node 64
+#SBATCH --ntasks-per-node 20
 #SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
 #SBATCH -C icelake
-#SBATCH -p cca
+#SBATCH -p genx
 
 # activate threading
 # export OMP_NUM_THREADS=1
@@ -16,4 +16,21 @@ export PYTHONDONTWRITEBYTECODE=true
 
 source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 
-python sce_bench.py --N 1000000 --R 30
+# python sce_bench.py --N 100 --R 20
+# python sce_bench.py --N 200 --R 20
+# python sce_bench.py --N 400 --R 20
+# python sce_bench.py --N 800 --R 20
+# python sce_bench.py --N 1600 --R 20
+# python sce_bench.py --N 3125 --R 20
+# python sce_bench.py --N 6250 --R 20
+# python sce_bench.py --N 12500 --R 20
+# python sce_bench.py --N 25000 --R 20
+# python sce_bench.py --N 50000 --R 20
+# python sce_bench.py --N 100000 --R 20
+# python sce_bench.py --N 200000 --R 20
+# python sce_bench.py --N 400000 --R 20
+# python sce_bench.py --N 800000 --R 20
+# python sce_bench.py --N 1600000 --R 20
+# python sce_bench.py --N 3200000 --R 20
+# python sce_bench.py --N 6400000 --R 20
+python sce_bench.py --N 12800000 --R 20
