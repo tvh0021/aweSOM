@@ -16,18 +16,23 @@ export PYTHONDONTWRITEBYTECODE=true
 
 source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 
-python popsom_bench.py --N 100 --F 10
-python popsom_bench.py --N 200 --F 10
-python popsom_bench.py --N 400 --F 10
-python popsom_bench.py --N 800 --F 10
-python popsom_bench.py --N 1600 --F 10
-python popsom_bench.py --N 3125 --F 10
-python popsom_bench.py --N 6250 --F 10
-python popsom_bench.py --N 12500 --F 10
-python popsom_bench.py --N 25000 --F 10
-python popsom_bench.py --N 50000 --F 10
-python popsom_bench.py --N 100000 --F 10
-python popsom_bench.py --N 200000 --F 10
-python popsom_bench.py --N 400000 --F 10
-python popsom_bench.py --N 800000 --F 10
-# python popsom_bench.py --N 1600000 --F 6
+# python popsom_bench.py --N 100 --F 10
+# python popsom_bench.py --N 200 --F 10
+# python popsom_bench.py --N 400 --F 10
+# python popsom_bench.py --N 800 --F 10
+# python popsom_bench.py --N 1600 --F 10
+# python popsom_bench.py --N 3125 --F 10
+# python popsom_bench.py --N 6250 --F 10
+# python popsom_bench.py --N 12500 --F 10
+# python popsom_bench.py --N 25000 --F 10
+# python popsom_bench.py --N 50000 --F 10
+# python popsom_bench.py --N 100000 --F 10
+# python popsom_bench.py --N 200000 --F 10
+# python popsom_bench.py --N 400000 --F 10
+# python popsom_bench.py --N 800000 --F 10
+python popsom_bench.py --N 1600000 --F 6 &
+python popsom_bench.py --N 1600000 --F 10
+python popsom_bench.py --N 3200000 --F 6 &
+python popsom_bench.py --N 3200000 --F 10
+python popsom_bench.py --N 6400000 --F 6 &
+python popsom_bench.py --N 6400000 --F 10

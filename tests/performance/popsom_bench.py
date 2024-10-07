@@ -200,16 +200,17 @@ if __name__ == "__main__":
 
     time_aweSOM = test_aweSOM(generated_data)
     print("---------------------------------------------------", flush=True)
-    time_popsom = test_popsom(generated_data)
+    # time_popsom = test_popsom(generated_data)
 
     results.append(
         {
             "N": n,
             "F": f,
-            "POPSOM": time_popsom,
+            # "POPSOM": time_popsom,
             "aweSOM": time_aweSOM,
-            "ratio": time_popsom / time_aweSOM,
+            # "ratio": time_popsom / time_aweSOM,
         }
     )
 
     print(results)
+    print("--------------------", flush=True)

@@ -100,4 +100,8 @@ aweSOM time: 2631.4256958961487
 Ensemble learning time: 5038.391722202301
 Ratio: 1.9147003580834323
 
-
+Results:
+Using N = 12800000 and R = 20
+aweSOM time: 5529.438
+Ensemble learning time: 9854.857748031616
+Ratio: 1.78225

@@ -68,12 +68,11 @@ To combat these challenges, we rewrite `POPSOM` using more modern `NumPy` functi
 SCE is a statistical ensemble method that works by stacking multiple independent clustering results into a statistically significant set of clusters. SCE can be used independently from the base SOM algorithm, and was developed for general unsupervised classification algorithms [@bussov2021]. In its original implementation, the SCE was saved as a nested dictionary of boolean arrays, each of which contains the spatial similarity index $g$ between cluster $C$ and cluster $C'$. The total number of operations scales as $N_{C}^R$, where $N_C$ is the number of clusters in each realization, and $R$ is the number of realization. In practice, each SOM realization trained on the plasma simulation contains on average 7 clusters. When we generate 36 realizations, there are a total of $T \approx 7^{36} \sim 10^{30}$ array-to-array comparisons.
 
 We use `JAX` [@jax] to significantly improve the performance of the array-to-array comparison procedure by leveraging the GPU's advantage over CPU in parallel computing.  
-<!-- since each value in the boolean arrays can be manipulated independently.  -->
 We implement this optimization by eliminating the need for nested dictionaries, instead replacing them with data arrays. Beyond that, every instance of matrix operation using `NumPy` is converted to `jax.numpy`. Additionally, we implement internal checks such that the SCE code automatically reverts to `NumPy` if GPU-accelerated `JAX` is not available.
 
-Similar to the SOM implementation, the SCE implementation in `aweSOM` scales extremely well with increasing number of data points. \autoref{fig:sce_scaling} shows a graph of the performance between the two implementations given $R = 20$. At $N < 5 \times 10^4$, the legacy implementation is faster due to the overhead from loading `JAX` and the JIT compiler. However, `aweSOM` quickly exceeds the performance of the legacy code, and begins to approach its maximum speed-up of $\sim 100$ at $N \gtrsim 10^7$. On the other hand, simply using `aweSOM` with `NumPy` only yeilds a consistent $2\times$ speedup compared to the legacy implementation.
+Similar to the SOM implementation, the SCE implementation in `aweSOM` scales extremely well with increasing number of data points. \autoref{fig:sce_scaling} shows a graph of the performance between the two implementations given $R = 20$. At $N < 5 \times 10^4$, the legacy implementation is faster due to the overhead from loading `JAX` and the JIT compiler. However, `aweSOM` quickly exceeds the performance of the legacy code, and begins to approach its maximum speed-up of $\sim 100$ at $N \gtrsim 10^7$. On the other hand, simply using `aweSOM` with `NumPy` only yeilds a consistent $2\times$ speedup compared to the legacy implementation. Altogether, it is best to use `aweSOM` with `Numpy` when $N \lesssim 10^5$, and with `JAX` when $N \gtrsim 10^5$.
 
-![Performance comparison between `aweSOM` and the legacy SCE implementation. The top panel shows the time for each implementation to complete SCE analysis of $N$ number of data points and $R = 20$ realizations. The bottom panel shows the ratio between the time taken by the legacy code divided by the time taken by `aweSOM`. `JAX`-accelerated `aweSOM` provides more than $10\times$ speedup when $N > 10^6$, while the CPU version is only $\approx 2 \times$ faster. \label{fig:sce_scaling}](sce_scaling.png)
+![Performance comparison between `aweSOM` and the legacy SCE implementation. The top panel shows the time for each implementation to complete SCE analysis of $N$ number of data points and $R = 20$ realizations. The dashed lines shows linear extrapolations from the data in order to estimate the speedup. The bottom panel shows the ratio between the time taken by the legacy code divided by the time taken by `aweSOM`. `JAX`-accelerated `aweSOM` provides more than $10\times$ speedup when $N > 10^6$, while the CPU version is only $\approx 2 \times$ faster. \label{fig:sce_scaling}](joss_scaling.pdf)
 
 # Mathematical descriptions of `aweSOM`
 
@@ -94,7 +93,12 @@ A list of plasma simulations that we applied the `aweSOM` framework on, as well 
 
 ## SCE implementation
 
+The mathematical details of the SCE framework are discussed in @bussov2021. Below, we briefly summarize the key concepts of SCE.
 
+SCE involves a series of steps that stacks $n$~number of SOM realizations. For each cluster $C$ in a SOM realization $R$, its spatial distribution is compared with all other clusters $C'$ in $R' \neq R$ to obtain a goodness-of-fit index $g$. Then, each cluster $C$ is associated with a sum of goodness-of-fit (i.e. ``quality index"): $$G_{\rm sum} = \sum_{C_i' \in R'} g_i.$$
+
+Once all $G_{\rm sum}$ values are obtained, they are ranked in descending order, and groups of similar $G_{\rm sum}$ values are combined to form SCE clusters. 
+This approach works because clusters with similar spatial distributions tend to have similar $G_{\rm sum}$ values [see Fig. 6 of @bussov2021]. In practice, we do not rank the $G_{\rm sum}$ values, but instead sum this index point-by-point to obtain a general ``signal strength" of each cell in the simulation.
 
 # Acknowledgements
 
