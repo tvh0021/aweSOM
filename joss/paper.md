@@ -16,9 +16,9 @@ authors:
     orcid: 0000-0002-2685-2434
     affiliation: "6, 7, 1, 5"
 affiliations:
- - name: Center for Computational Astrophysics, Flatiron Institute, 162 Fifth Avenue, New York, NY 10010, USA
-   index: 1
  - name: Department of Astronomy, University of Massachusetts-Amherst, Amherst, MA 01003, USA
+   index: 1
+ - name: Center for Computational Astrophysics, Flatiron Institute, 162 Fifth Avenue, New York, NY 10010, USA
    index: 2
  - name: Department of Physics, University of North Texas, Denton, TX 76203, USA
    index: 3
@@ -41,12 +41,17 @@ bibliography: paper.bib
 
 # Summary
 
-Magnetized plasma turbulence is a ubiquitous and complex mechanism in high-energy astrophysics and space plasma physics. In a classical Kolmogorov turbulence flow [@kolmogorov1941], kinetic energy is continuously transferred from the driving scale down to smaller scales, where the resulting cascade is self-similar in nature. In a magnetized plasma, however, non-linear interactions between the charged particles and the external magnetic field give rise to *intermittency*--spatio-temporal fluctuations in the turbulent flow. So far, numerical simulations and experiments have demonstrated the manifestation of such intermittency in the form of *current sheets*. 
+We introduce `aweSOM`, an open-source Python package for machine learning clustering and classification, based on a Self-organizing Maps [SOM, @kohonen1990] algorithm that incorporates CPU/GPU acceleration to handle large ($N > 10^6$), multidimensional datasets. `aweSOM` consists of two main modules, one that handles the intialization and training of the SOM, and one that takes multiple realizations of the SOMs and stacks their clustering results to obtain a set of statistically significant clusters.
+
+Many Python-based SOM implementations already exists in the literature (e.g., `POPSOM`, @yuan2018; `MiniSom`, @minisom; `sklearn-som`). However, they primarily serve as simple, minimalistic demonstrations only applicable to small datasets, while lacking the ability to scale up to large, multidimensional datsets. `aweSOM` provides a solution for this gap in capability, and is especially appropriate for use in high-resolution simulations and large sky surveys, where data comes in $10^6$ to $10^9$ individual points, together with multiple features per point. Specifically, we demonstrate that, compared to the legacy implementations `aweSOM` is based on, our package provides between $10-100 \times$ speedup, as well as vastly better memory performance thanks to the many built-in optimizations.
+
+As a companion to this paper, we demonstrate the capabilities of `aweSOM` in detecting the structures of intermittency in plasma turbulence [@ha2024].
+
+<!-- Magnetized plasma turbulence is a ubiquitous and complex mechanism in high-energy astrophysics and space plasma physics. In a classical Kolmogorov turbulence flow [@kolmogorov1941], kinetic energy is continuously transferred from the driving scale down to smaller scales, where the resulting cascade is self-similar in nature. In a magnetized plasma, however, non-linear interactions between the charged particles and the external magnetic field give rise to *intermittency*--spatio-temporal fluctuations in the turbulent flow. So far, numerical simulations and experiments have demonstrated the manifestation of such intermittency in the form of *current sheets*. 
 <!-- These current sheets arise via interactions between magnetic coils within the flow, and are important in regulating the dissipation of magnetic energy via reconnection [e.g., @priest2000] and (non-thermal) particle acceleration [e.g., @lemoine2023].  -->
 
-Until recently, detection and statistically analysis of these intermittent structures have been done mostly by hand, obtained via simple, and often arbitrary, criteria.
-<!-- via a combination of simple thresholds in the current density [@zhdankin2013] and manual verification of magnetic-field reversal across a boundary [@kadowaki2018].  -->
-In modern, state-of-the-art plasma simulations, there are hundreds of possible locations where these structures are found; manually tracking these location simultaneously is a time-consuming task, and the result can depend strongly on individual observers. Recent advancements in computational techniques, particularly the rapid development of machine learning (ML) methodologies and their application to astrophysics research, have highlighted the need for a more robust and efficient approach to understanding the nature of the intermittency in plasma turbulence. To this end, we introduce `aweSOM`, a Python package based on Self-organizing Maps [SOM, @kohonen1990] that provides a fast and statistically significant framework to perform clustering analysis.
+<!-- Until recently, detection and statistically analysis of these intermittent structures have been done mostly by hand, obtained via simple, and often arbitrary, criteria.
+In modern, state-of-the-art plasma simulations, there are hundreds of possible locations where these structures are found; manually tracking these location simultaneously is a time-consuming task, and the result can depend strongly on individual observers. Recent advancements in computational techniques, particularly the rapid development of machine learning (ML) methodologies and their application to astrophysics research, have highlighted the need for a more robust and efficient approach to understanding the nature of the intermittency in plasma turbulence. To this end, we introduce `aweSOM`, a Python package based on Self-organizing Maps [SOM, @kohonen1990] that provides a fast and statistically significant framework to perform clustering analysis. -->
 
 # The SOM algorithm: the basics
 
@@ -59,11 +64,11 @@ It consists of a 2-dimension (2D) lattice of nodes. Each node has a weight vecto
 
 ## SOM 
 
-`POPSOM` was developed as a single-threaded, stochastic training algorithm with advanced visualization capabilites built-in. However, due to this single-threaded nature, the algorithm does not scale well with large datasets. For astrophysics applications such as in high-resolution simulations, where $N \gtrsim 10^6$, `POPSOM` is unable to complete the training process as the dimensionality of the input data increases due to its much higher memory usage. As a demonstration, we generated a mock dataset with $N = 10^6$ and $F = 6$, then trained it on a SOM lattice of $X = 63$, and $Y = 32$, where $X, Y$ are the dimensions of the lattice using both `aweSOM` and `POPSOM`. We used one Intel Icelake node with 64 cores and 1 TB memory for this test. `aweSOM` took $\approx 200$ s and consumed $\approx 450$ MB of memory to complete the training and clustering, while `POPSOM` took $\approx 2200$ s and consumed $\approx 600$ GB of system memory at its peak.
+`POPSOM` was developed as a single-threaded, stochastic training algorithm with advanced visualization capabilites built-in. However, due to this single-threaded nature, the algorithm does not scale well with large datasets. For astrophysics applications such as in high-resolution simulations, where $N \gtrsim 10^6$, `POPSOM` is unable to complete the training process as the dimensionality of the input data increases due to its much higher memory usage. As a demonstration, we generated a mock dataset with $N = 10^6$ and $F = 6$ dimensions, then trained it on a SOM lattice of $X = 63$, and $Y = 32$, where $X, Y$ are the dimensions of the lattice using both `aweSOM` and `POPSOM`. We used one Intel Icelake node with 64 cores and 1 TB memory for this test. `aweSOM` took $\approx 200$ s and consumed $\approx 450$ MB of memory to complete the training and clustering, while `POPSOM` took $\approx 2200$ s and consumed $\approx 600$ GB of system memory at its peak.
 
-To combat these challenges, we rewrite `POPSOM` using more modern `NumPy` functions whenever the lattice (which is a 3D array) is updated. This legacy implementation was originally written in R, then translated to Python, so there are numerous instances where the algorithm could be optimized. Furthermore, for the steps where parallelization could be leveraged, we integrate `Numba` to take advantage of its Just-In-Time (JIT) compiler and simple parallelization of loops. These optimizations translate to up to $20\times$ faster mapping of cluster labels to the input data, and up to $10\times$ faster training time.
+To combat these challenges, we rewrite `POPSOM` using more modern `NumPy` functions whenever the lattice (which is a 3D array) is updated. This legacy implementation was originally written in R, then translated to Python, so there are numerous instances where the algorithm could be optimized. Furthermore, for the steps where parallelization could be leveraged, we integrate `Numba` [@numba] to take advantage of its Just-In-Time (JIT) compiler and simple parallelization of loops. These optimizations translate to up to $20\times$ faster mapping of cluster labels to the input data, and up to $10\times$ faster training time.
 
-The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and `POPSOM` given a range of $N$ and two values of $F$. `POPSOM` is slightly faster than `aweSOM` for $N \lesssim 10^4$, although both complete their training very quickly. At $N \gtrsim 5 \times 10^5$, `aweSOM` is consistently faster than `POPSOM` by roughly a factor of $10$.
+The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and `POPSOM` given a range of $N$ and $F$. `POPSOM` is slightly faster than `aweSOM` for $N \lesssim 10^4$, although both complete their training very quickly. At $N \gtrsim 5 \times 10^5$, `aweSOM` is consistently faster than `POPSOM` by roughly a factor of $10$. Most importantly, `POPSOM` fails to complete its clusters mapping for $N > 10^6, F > 4$ because the memory buffer (1 TB) was exceeded.
 
 ## SCE
 
@@ -100,7 +105,7 @@ The mathematical details of the SCE framework are discussed in @bussov2021. Belo
 SCE involves a series of steps that stacks $n$~number of SOM realizations. For each cluster $C$ in a SOM realization $R$, its spatial distribution is compared with all other clusters $C'$ in $R' \neq R$ to obtain a goodness-of-fit index $g$. Then, each cluster $C$ is associated with a sum of goodness-of-fit (i.e. ``quality index"): $$G_{\rm sum} = \sum_{C_i' \in R'} g_i.$$
 
 Once all $G_{\rm sum}$ values are obtained, they are ranked in descending order, and groups of similar $G_{\rm sum}$ values are combined to form SCE clusters. 
-This approach works because clusters with similar spatial distributions tend to have similar $G_{\rm sum}$ values [see Fig. 6 of @bussov2021]. In practice, we do not rank the $G_{\rm sum}$ values, but instead sum this index point-by-point to obtain a general ``signal strength" of each cell in the simulation.
+This approach works because clusters with similar spatial distributions tend to have similar $G_{\rm sum}$ values [see Fig. 6 of @bussov2021]. In practice, we do not rank the $G_{\rm sum}$ values, but instead sum this index point-by-point to obtain a general ``signal strength" of each input vector. Then, we make cuts from this signal strength to obtain the final clustering result.
 
 # Acknowledgements
 

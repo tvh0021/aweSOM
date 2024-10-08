@@ -96,6 +96,8 @@ Ratio: 28.16170403200351
 Results:
 Using N = 6400000 and R = 20
 aweSOM time: 86.39489889144897
+Ensemble learning time: 3902.368109226227
+Ratio: 45.16896436
 
 Results:
 Using N = 12800000 and R = 20
@@ -112,3 +114,11 @@ aweSOM time: 622.2160723209381
 Results:
 Using N = 102400000 and R = 20
 aweSOM time: 1192.0474691390991
+
+Results:
+Using N = 204800000 and R = 20
+aweSOM time: 2319.6151823997498
+
+Results:
+Using N = 409600000 and R = 20
+aweSOM time: 10961.773335695267
