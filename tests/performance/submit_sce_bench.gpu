@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+#SBATCH -J sce_scale_a100_80gb
 #SBATCH -p gpu
 #SBATCH --output=%J.out
 #SBATCH --error=%J.err
@@ -6,8 +7,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
 #SBATCH --mem=40G
-#SBATCH --constraint=a100-40gb  # if you want a particular type of GPU
-#SBATCH --time=0-8
+#SBATCH --constraint=a100-80gb  # if you want a particular type of GPU
+#SBATCH --time=0-4
 #SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
 
 # activate threading
@@ -25,9 +26,9 @@ source /mnt/home/tha10/git_repos/aweSOM/.venv/bin/activate
 # python sce_bench.py --N 1600 --R 20
 # python sce_bench.py --N 3125 --R 20
 # python sce_bench.py --N 6250 --R 20
-# python sce_bench.py --N 12500 --R 20
-python sce_bench.py --N 6400000 --R 20
-python sce_bench.py --N 12800000 --R 20
+python sce_bench.py --N 100000 --R 20
+# python sce_bench.py --N 6400000 --R 20
+# python sce_bench.py --N 12800000 --R 20
 # python sce_bench.py --N 204800000 --R 20
-# python sce_bench.py --N 409600000 --R 20
+python sce_bench.py --N 409600000 --R 20
 # python sce_bench.py --N 819200000 --R 20

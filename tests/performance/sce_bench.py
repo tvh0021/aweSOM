@@ -112,10 +112,10 @@ if __name__ == "__main__":
         save_mock_clusters(clusters, folder + cluster_files[i])
     print(f"Mock clusters generated and saved in {folder}", flush=True)
 
-    # time_aweSOM = test_aweSOM(folder, args.N)
-    # print("---------------------------------------------------", flush=True)
-    # os.chdir("../")
-    time_ensemble = test_ensemble_learning()
+    time_aweSOM = test_aweSOM(folder, args.N)
+    print("---------------------------------------------------", flush=True)
+    os.chdir("../")
+    # time_ensemble = test_ensemble_learning()
 
     print("Done, cleaning up", flush=True)
     shutil.rmtree(folder)
@@ -123,6 +123,6 @@ if __name__ == "__main__":
 
     print("Results:")
     print("Using N =", number_of_points, "and R =", number_of_realizations)
-    # print(f"aweSOM time: {time_aweSOM}")
-    print(f"Ensemble learning time: {time_ensemble}")
+    print(f"aweSOM time: {time_aweSOM}")
+    # print(f"Ensemble learning time: {time_ensemble}")
     # print(f"Ratio: {time_ensemble / time_aweSOM}")
