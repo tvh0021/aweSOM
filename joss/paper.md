@@ -109,6 +109,8 @@ This approach works because clusters with similar spatial distributions tend to 
 
 # Acknowledgements
 
-The authors would like to thank Kaze Wong for the valuable input in setting up `JAX` for the SCE analysis and Shirley Ho for the useful discussions.
+The authors would like to thank Kaze Wong for the valuable input in setting up `JAX` for the SCE analysis. The authors would also like to thank Shirley Ho and Lorenzo Sironi for the useful discussions.
+TH acknowledges support from a pre-doctoral program at the Center for Computational Astrophysics, which is part of the Flatiron Institute. JN is supported by an ERC grant (ILLUMINATOR, 101114623). JD is supported by NASA through the NASA Hubble Fellowship grant HST-HF2-51552.001-A, awarded by the Space Telescope Science Institute, which is operated by the Association of Universities for Research in Astronomy, Incorporated, under NASA contract NAS5-26555.
+`aweSOM` was developed and primarily run at facilities supported by the Scientific Computing Core at the Flatiron Institute. Research at the Flatiron Institute is supported by the Simons Foundation.
 
 # References
