@@ -53,6 +53,10 @@ Benchmarking aweSOM against POPSOM
 where `N` is the number of points and `F` is the number of features. The script will train a POPSOM map and an aweSOM map
 given the same mock dataset, and compare the training time of the two algorithms.
 
+Additionally, high-level controls include: `--nodes` to specify the number of nodes in the lattice, which might be useful 
+for isolated scaling tests; `--procedure [training, mapping, both]` to specify which part of the algorithm to benchmark; 
+and `--popsom` or `--awesom` to specify one of the two algorithms to benchmark separately.
+
 For a personal computer, we recommend using a smaller number of points (:math:`N \sim 10^4`) and features (:math:`F < 5`)
 for the test to complete in a reasonable amount of time. More extensive tests can be run on a high-performance computing
 cluster. For example, one modern compute node with 40+ cores can perform this benchmark up to :math:`10^6` points and

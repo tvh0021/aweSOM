@@ -45,14 +45,16 @@ We introduce `aweSOM`, an open-source Python package for machine learning (ML) c
 
 Many Python-based SOM implementations already exist in the literature (e.g., `POPSOM`, @yuan2018; `MiniSom`, @minisom; `sklearn-som`). However, they primarily serve as proof-of-concept demonstrations that are optimized for smaller datasets, while lacking the ability to scale up to large, multidimensional datsets. `aweSOM` provides a solution for this gap in capability, and is especially appropriate for use in high-resolution simulations and large sky surveys, where data comes in $10^6 - 10^9$ individual points, together with multiple features per point. Specifically, we demonstrate that, compared to the legacy implementations `aweSOM` is based on, our package provides between $10-100 \times$ speedup, as well as vastly better memory performance thanks to the many built-in optimizations.
 
-As a companion to this paper, we demonstrate the capabilities of `aweSOM` in detecting the structures of intermittency in plasma turbulence in @ha2024.
+As a companion to this paper, we demonstrate the capabilities of `aweSOM` in detecting the structures of intermittency in plasma turbulence in @ha2024. Detailed instructions on how to install, test, and replicate the results of the paper are available in the online [documentation](https://awesom.readthedocs.io/en/latest/). Also included in the documentation is an example of applying `aweSOM` to the Iris dataset [@iris53].
 
 # Statement of need
 
-## The self-organizing map method
+## The self-organizing map algorithm
 
-SOM is an unsupervised ML algorithm that excels at dimensionality reduction, clustering, and classification tasks.
-It consists of a 2-dimension (2D) lattice of nodes. Each node has a weight vector that is of the same dimension as the input data. A SOM performs the clustering by changing the weight vectors of a group of nodes such that the lattice's topology eventually conforms to the intrinsic clustering of the input data. In this manner, a SOM lattice can capture multidimensional correlations in the input data.
+SOM is an unsupervised ML technique that excels at dimensionality reduction, clustering, and classification tasks.
+It consists of a 2-dimensional (2D) lattice of nodes. Each node contains a weight vector that is of the same dimension as the input data. A SOM performs the clustering by changing the weight vectors of a group of nodes such that the lattice's topology eventually conforms to the intrinsic clustering of the input data. In this manner, a SOM lattice can capture multidimensional correlations in the multidimensional input data.
+
+
 
 ### `POPSOM`
 
@@ -60,7 +62,7 @@ We base the SOM module in `aweSOM` on `POPSOM` [@hamel2019; @yuan2018], a R-base
 
 ### Rewriting `POPSOM` into `aweSOM`
 
-To combat the long training time and extremely large memory usage, we rewrite `POPSOM` with multiple optimizations/parallelizations. We use more modern `NumPy` functions whenever the lattice (which is a 3D array) is updated. This legacy implementation was originally written in R, then translated to Python, so there are numerous instances where the algorithm was inefficient. Furthermore, for the steps where parallelization could be leveraged (such as when the cluster labels are mapped to the lattice, then to the input data), we integrate `Numba` [@numba] to take advantage of its Just-In-Time (JIT) compiler and simple parallelization of loops. These optimizations translate to up to $20\times$ faster mapping of cluster labels to the input data, and up to $10\times$ faster training time. In the same example as above, `aweSOM` takes $\approx 200$ s and consumes $\approx 450$ MB of memory to complete the training and clustering. In addition to the $\sim 10 \times$ speedup, `aweSOM` is also $\sim 10^3 \times$ more memory-efficient.
+To combat the long training time and extremely large memory usage, we rewrite `POPSOM` with multiple optimizations/parallelizations. We use more modern `NumPy` functions whenever the lattice (which is a 3D array) is updated. This legacy implementation converts the input vectors into `pandas` DataFrame [@pandas], where each column is a dimension of the vector. This approach uses considerably more memory than `NumPy` arrays, and modifying the weight values of nodes inside a DataFrame is also less efficient than inside an array. Furthermore, for the steps where parallelization could be leveraged (such as when the cluster labels are mapped to the lattice, then to the input data), we integrate `Numba` [@numba] to take advantage of its Just-In-Time (JIT) compiler and simple parallelization of loops. In the same example as above, `aweSOM` takes $\approx 200$ s and consumes $\approx 450$ MB of memory to complete the training and clustering. In addition to the $\sim 10 \times$ speedup, `aweSOM` is also $\sim 10^3 \times$ more memory-efficient.
 
 The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and `POPSOM` given a range of $N$ and $F$. `POPSOM` is slightly faster than `aweSOM` for $N \lesssim 10^4$, although both complete their training very quickly. At $N \gtrsim 5 \times 10^5$, `aweSOM` is consistently faster than `POPSOM` by roughly a factor of $10$. Most importantly, `POPSOM` fails to complete its clusters mapping for $N \gtrsim 10^6, F > 4$ because the memory buffer (1 TB) of the test node was exceeded.
 
@@ -80,32 +82,6 @@ We implement this optimization by eliminating the need for nested dictionaries, 
 Similar to the SOM implementation, the SCE implementation in `aweSOM` scales extremely well with increasing number of data points. The right hand side of \autoref{fig:sce_scaling} shows a graph of the performance between the two implementations given $R = 20$. At $N < 5 \times 10^4$, the legacy implementation is faster due to the overhead from loading `JAX` and the JIT compiler. However, `aweSOM` quickly exceeds the performance of the legacy code, and begins to approach its maximum speed-up of $\sim 100$ at $N \gtrsim 10^7$. On the other hand, simply using `aweSOM` with `NumPy` only yeilds a consistent $2\times$ speedup compared to the legacy implementation. Altogether, it is best to use `aweSOM` with `Numpy` when $N \lesssim 10^5$, and with `JAX` when $N \gtrsim 10^5$.
 
 ![Performance scaling for `aweSOM` vs. the legacy SOM (left) and SCE (right) implementation. The top panels show the time for each implementation to complete analysis of $N$ number of data points. The dotted lines shows linear extrapolations from the data in order to estimate the speedup. The bottom panels show the ratio between the time taken by the legacy code divided by the time taken by `aweSOM`. In the SOM analysis, we consider a dataset with $F = 6$ and $F = 10$ dimensions. In the SCE analysis, we test the scaling of both a GPU-accelerated implementation (with `JAX`) and a CPU-only implementation (with `NumPy`). \label{fig:sce_scaling}](joss_scaling.pdf)
-
-<!-- # Mathematical descriptions of `aweSOM`
-
-## SOM implementation
-
-Fundamentally, a SOM is a 2D lattice of nodes that, through training, adapts to the intrinsic orientation of high-dimensional input data. The following steps are followed in constructing and training an `aweSOM` lattice:
-
-1. Initialize a lattice of size $X\times Y \times F$, where $X$ and $Y$ are the dimensions of the lattice, and $F$ denotes the number of features supplied to the model. We follow a tailored formula for the number of nodes: $N_{\rm node} = \frac{5}{6} \sqrt{N \cdot F}$ such that the map both scales with the number of features in addition to the size of the data.
-2. The initial weight value of each node, $\omega_0$, can be drawn from a uniform random distribution or based on random sampling of the input data.
-3. Multiple considerations are made during training:
-- At each epoch, $t$, one input vector is randomly drawn. Then, the Euclidean distances, $D_{\rm E}$, between this vector and all nodes in the lattice are calculated. The node with the smallest distance is chosen as the best-matching unit (BMU). The weight value of each node is updated as follows: $$w_{i,j}(t) = w_{i,j}(t-1) - D_{\mathrm{E}|i,j} \cdot \gamma(t), $$ where $i,j$ represent the node's location in the lattice, and $\gamma(t)$ is the neighborhood function: $$\gamma(t)= \begin{cases} \alpha(t) e^{\frac{-d_{\rm C}^2}{2(s(t)/3)^2}}, & \text{if $d_{\rm C} \leq s(t)$},\\ 0, & \text{if $d_{\rm C} > s(t)$},\end{cases}$$ where $\alpha(t)$ is the learning rate at epoch $t$, $d_{\rm C}$ is the Chebyshev distance between the BMU and the node at $(i,j)$, and $s(t)$ is the neighborhood width at epoch $t$.
-- Initially, $s_0 = \mathrm{max}(X,Y)$ such that earlier training steps adjust the weight values across the entire lattice. $s$ gradually decreases as $t$ increases until only a small number of nodes (or just the BMU) are updated each epoch. In `aweSOM`, the final neighborhood size is set to $s_{\rm f} = 8$. This ensures that learning localizes to a specific region of the lattice without being overly restrictive, thereby preserving generalization.
-- $\alpha$ also decays exponentially by a factor of 0.75 at regular interval such that $\alpha_{\rm final} = \alpha_0 \times 0.75^{24} \approx 10^{-3}\,\alpha_0$.
-4. After training, clustering is performed on the lattice based on the clustering of the unified distance matrix (U-matrix). Initial cluster centroids are identified by finding local minima in the U-matrix. A ``merging cost" is then calculated by line integration between all pairs of centroids. If the cost is below a normalized threshold (often set to 0.2-0.3), the clusters are merged.
-5. The input data is mapped to the nearest node in the lattice, each of which has been assigned a cluster label. This label is then transferred to the corresponding input vector, resulting in visualization of the clustering in the input space. 
-
-A list of plasma simulations that we applied the `aweSOM` framework on, as well as convergence metrics, are discussed in @ha2024.
-
-## SCE implementation
-
-The mathematical details of the SCE framework are discussed in @bussov2021. Below, we briefly summarize the key concepts of SCE.
-
-SCE involves a series of steps that stacks $n$~number of SOM realizations. For each cluster $C$ in a SOM realization $R$, its spatial distribution is compared with all other clusters $C'$ in $R' \neq R$ to obtain a goodness-of-fit index $g$. Then, each cluster $C$ is associated with a sum of goodness-of-fit (i.e. ``quality index"): $$G_{\rm sum} = \sum_{C_i' \in R'} g_i.$$
-
-Once all $G_{\rm sum}$ values are obtained, they are ranked in descending order, and groups of similar $G_{\rm sum}$ values are combined to form SCE clusters. 
-This approach works because clusters with similar spatial distributions tend to have similar $G_{\rm sum}$ values [see Fig. 6 of @bussov2021]. In practice, we do not rank the $G_{\rm sum}$ values, but instead sum this index point-by-point to obtain a general ``signal strength" of each input vector. Then, we make cuts from this signal strength to obtain the final clustering result. -->
 
 # Acknowledgements
 

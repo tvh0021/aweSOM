@@ -55,7 +55,12 @@ class Lattice:
         else:
             sys.exit("alpha_type must be either 'static' or 'decay'")
 
-        self.save_frequency = self.train // 200  # how often to save the node weights
+        if self.train > 200:
+            self.save_frequency = (
+                self.train // 200
+            )  # how often to save the node weights
+        else:
+            self.save_frequency = 5
         self.lattice_history = []
         self.umat_history = []
 
@@ -141,7 +146,11 @@ class Lattice:
 
             # compute the initial neighborhood size and step
         nsize_max = max(self.xdim, self.ydim) + 1
-        nsize_min = 8
+        nsize_min = (
+            8
+            if this_batch_train // 4 > nsize_max - 8
+            else nsize_max - this_batch_train // 4
+        )  # minimum neighborhood size; avoid the case where there are less training steps than available to shrink the neighborhood to 8
         nsize_step = (
             this_batch_train // 4
         )  # for the third quarter of the training steps, shrink the neighborhood

@@ -13,14 +13,12 @@
 aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)
 ========================================================================================
 
-The aweSOM package combines a JIT-accelerated and parallelized implementation of SOM,
+The `aweSOM <https://github.com/tvh0021/aweSOM>`_` package combines a JIT-accelerated and parallelized implementation of SOM,
 integrating parts of `POPSOM <https://github.com/njali2001/popsom>`_, and a GPU-accelerated implementation of
-SCE using `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_. 
-
-.. aweSOM is optimized for large datasets, up to $\sim 10^7$ points. 
+SCE using `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_.  
 
 aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations 
-[link to paper available soon]. However, it can also be used for a variety of clustering and classification tasks.
+(`link to arXiv pre-print <https://doi.org/10.48550/arXiv.2410.01878>`_). However, it can also be used for a variety of clustering and classification tasks.
 
 **Authors:**
 
@@ -28,7 +26,7 @@ aweSOM is developed specifically to identify intermittent structures (current sh
 `Joonas Nättilä <https://natj.github.io>`_ - University of Helsinki,
 and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
-Current version: 1.5.4
+Current version: 1.0.0
 
 
 .. toctree::
