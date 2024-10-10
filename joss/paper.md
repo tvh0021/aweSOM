@@ -54,7 +54,7 @@ As a companion to this paper, we demonstrate the capabilities of `aweSOM` in det
 SOM is an unsupervised ML technique that excels at dimensionality reduction, clustering, and classification tasks.
 It consists of a 2-dimensional (2D) lattice of nodes. Each node contains a weight vector that is of the same dimension as the input data. A SOM performs the clustering by changing the weight vectors of a group of nodes such that the lattice's topology eventually conforms to the intrinsic clustering of the input data. In this manner, a SOM lattice can capture multidimensional correlations in the input data.
 
-
+SOM is commonly used in various real-world applications, such as in the financial sector [e.g., @Alshantti2021; @Pei2023], in environmental surveys [e.g., @Alvarez2008, @Li2020], in medical technology [e.g., @Hautaniemi2003, @Kawaguchi2024], among others. `aweSOM` is originally developed to be used in analyzing astrophysical simulations, but can be applied to a wide variety of real-world datasets.
 
 ### `POPSOM`
 
