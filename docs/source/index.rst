@@ -13,7 +13,7 @@
 aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)
 ========================================================================================
 
-The `aweSOM <https://github.com/tvh0021/aweSOM>`_` package combines a JIT-accelerated and parallelized implementation of SOM,
+The `aweSOM <https://github.com/tvh0021/aweSOM>`_ package combines a JIT-accelerated and parallelized implementation of SOM,
 integrating parts of `POPSOM <https://github.com/njali2001/popsom>`_, and a GPU-accelerated implementation of
 SCE using `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_.  
 
