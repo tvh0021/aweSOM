@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from unittest.mock import patch
 
-from src.aweSOM.make_sce_clusters import (
+from aweSOM.make_sce_clusters import (
     plot_gsum_values,
     plot_gsum_deriv,
     get_gsum_values,
