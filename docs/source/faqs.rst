@@ -14,7 +14,7 @@ What is the purpose of this project?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 aweSOM was developed for machine-learning clustering and classification tasks, with a focus on identifying intermittent structures in 3D plasma simulations.
 Past implementations of Self-organizing Maps (SOM) and Statistically Combined Ensemble (SCE) were not optimized for large datasets, so aweSOM was developed to address this issue.
-Using a combination of JIT-accelerated and parallelized SOM and GPU-accelerated SCE, aweSOM can handle datasets with up to $\sim 10^7$ points running on a single GPU/CPU node.
+Using a combination of JIT-accelerated and parallelized SOM and GPU-accelerated SCE, aweSOM can handle datasets with up to :math:`\sim 10^8` points running on a single GPU/CPU node.
 
 Additionally, aweSOM is designed to be general-purpose, so it can be used for a variety of clustering and classification tasks beyond its original purpose.
 See the :doc:`notebook <notebooks/iris>` for an example application on the classic Iris dataset.
@@ -41,7 +41,7 @@ There are three main ways to control the number of clusters returned by aweSOM.
 
 3. Modify the merge threshold between cluster centroids. The higher the merge threshold, the more clusters will be merged together, and the fewer clusters will be returned. The default merge threshold is 0.
 
-Given an aweSOM object `map`, you can set the smoothing factor and merge threshold by calling `map.assign_cluster_to_lattice(smoothing=[some_value], merge_cost=[some_value])`.
+Given an aweSOM object ``map``, you can set the smoothing factor and merge threshold by calling ``map.assign_cluster_to_lattice(smoothing=[some_value], merge_cost=[some_value])``.
 This will identify/merge cluster centroids, then assign each node to the nearest cluster centroid.
 
 A more subtle way to control the number of clusters is to modify the SOM hyperparameters, such as the aspect ratio of the lattice, the learning rate, and the number of epochs. These parameters are less trivial
