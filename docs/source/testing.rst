@@ -16,13 +16,13 @@ You can also run specific test modules by specifying the path to the test file:
 
 .. code-block:: bash
 
-    pytest tests/[module]_test.py
+    python -m pytest tests/[module]_test.py
 
 Or run a specific test function within a module:
 
 .. code-block:: bash
 
-    pytest tests/[module]_test.py::test_[function]
+    python -m pytest tests/[module]_test.py::test_[function]
 
 If there is no GPU, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially.
 This is expected behavior, and SCE computation should still fall back to the CPU.
@@ -50,12 +50,12 @@ Benchmarking aweSOM against POPSOM
 
     python popsom_bench.py --N 10000 --F 4
 
-where `N` is the number of points and `F` is the number of features. The script will train a POPSOM map and an aweSOM map
+where ``N`` is the number of points and ``F`` is the number of features. The script will train a POPSOM map and an aweSOM map
 given the same mock dataset, and compare the training time of the two algorithms.
 
-Additionally, high-level controls include: `--nodes` to specify the number of nodes in the lattice, which might be useful 
-for isolated scaling tests; `--procedure [training, mapping, both]` to specify which part of the algorithm to benchmark; 
-and `--popsom` or `--awesom` to specify one of the two algorithms to benchmark separately.
+Additionally, high-level controls include: ``--nodes`` to specify the number of nodes in the lattice, which might be useful 
+for isolated scaling tests; ``--procedure [training, mapping, both]`` to specify which part of the algorithm to benchmark; 
+and ``--popsom`` or ``--awesom`` to specify one of the two algorithms to benchmark separately.
 
 For a personal computer, we recommend using a smaller number of points (:math:`N \sim 10^4`) and features (:math:`F < 5`)
 for the test to complete in a reasonable amount of time. More extensive tests can be run on a high-performance computing
@@ -73,14 +73,14 @@ Benchmarking aweSOM against ensemble learning
 
     python sce_bench.py --N 100000 --R 20
 
-where `N` is the number of points and `R` is the number of independent realizations. The script will generate mock cluster
-IDs for the dataset and save them as `npy` files. Then it will perform the SCE analysis on the dataset using both the aweSOM
+where ``N`` is the number of points and ``R`` is the number of independent realizations. The script will generate mock cluster
+IDs for the dataset and save them as ``npy`` files. Then it will perform the SCE analysis on the dataset using both the aweSOM
 and legacy implementations, and compare the training time of the two algorithms.
 
-Additionally, high-level controls include: `--C` to specify the number of clusters per realization; `--legacy` or `--awesom`
-to specify one of the two algorithms to benchmark separately.
+Additionally, high-level controls include: ``--C`` to specify the number of clusters per realization; ``--legacy`` or 
+``--awesom`` to specify one of the two algorithms to benchmark separately.
 
-NOTE: If the test did not complete successfully, there will be a directory named `som_out` in the current working directory.
+NOTE: If the test did not complete successfully, there will be a directory named ``som_out`` in the current working directory.
 This should be cleaned up manually.
 
 In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of
