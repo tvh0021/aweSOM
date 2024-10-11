@@ -15,6 +15,9 @@ Installation
 
         pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
+If your system does not support CUDA, you can skip this step. SCE will automatically fall back to the CPU. However, the 
+CPU-only version can be significantly slower for large datasets (see the `performance tests <testing>`_).
+
 3. Install Sphinx and other required packages for building the documentation (optional):
 
     .. code-block:: bash

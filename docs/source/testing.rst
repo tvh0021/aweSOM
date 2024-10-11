@@ -6,11 +6,11 @@ We use `pytest`_ for the test module. The dependency has already been included i
 Functionality tests
 -------------------
 
-To run tests for all modules:
+Run tests for all modules in the root directory of the repository:
 
 .. code-block:: bash
 
-    pytest
+    python -m pytest
 
 You can also run specific test modules by specifying the path to the test file:
 
@@ -25,7 +25,7 @@ Or run a specific test function within a module:
     pytest tests/[module]_test.py::test_[function]
 
 If there is no GPU, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially.
-This is expected behavior, and SCE analysis should still fall back on the GPU.
+This is expected behavior, and SCE computation should still fall back to the CPU.
 
 Performance tests
 -----------------
@@ -63,7 +63,7 @@ cluster. For example, one modern compute node with 40+ cores can perform this be
 :math:`\sim 20` features. POPSOM generally cannot handle more than :math:`10^6` points, since training time can exceeds 2
 hours at these parameters and/or an out-of-memory error will be raised (even with 1 TB of memory per node).
 
-The expected performance of aweSOM is a speedup of :math:`\sim 8-20` times compared to POPSOM, depending on the number of
+The expected performance of aweSOM is a speedup of :math:`\sim 8-20 \times` compared to POPSOM, depending on the number of
 points and features.
 
 Benchmarking aweSOM against ensemble learning
@@ -77,7 +77,13 @@ where `N` is the number of points and `R` is the number of independent realizati
 IDs for the dataset and save them as `npy` files. Then it will perform the SCE analysis on the dataset using both the aweSOM
 and legacy implementations, and compare the training time of the two algorithms.
 
-In general, the Numpy version of aweSOM is around 2x faster than the legacy implementation. However, the GPU version of
+Additionally, high-level controls include: `--C` to specify the number of clusters per realization; `--legacy` or `--awesom`
+to specify one of the two algorithms to benchmark separately.
+
+NOTE: If the test did not complete successfully, there will be a directory named `som_out` in the current working directory.
+This should be cleaned up manually.
+
+In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of
 aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4`). The GPU 
 version of aweSOM is only faster for large datasets (:math:`N > 10^5`), and is exponentially faster as you scale up beyond
 :math:`N \sim 10^6`.
@@ -85,7 +91,7 @@ version of aweSOM is only faster for large datasets (:math:`N > 10^5`), and is e
 We tested the performance of the SCE implementation on a single NVIDIA V-100 GPU with 32 GB of memory. At :math:`N = 10^6`
 and :math:`R = 10`, aweSOM is faster than the legacy implementation by a factor of :math:`\sim 15`. At :math:`N = 10^7` and
 :math:`R = 10`, aweSOM is faster by a factor of :math:`\sim 60`. In high-resolution simulations where 
-:math:`L^3 \gtrsim 500; N = 10^8`, aweSOM is the only feasible option for performing the SCE analysis.
+:math:`L^3 \gtrsim 500, N = 10^8`, aweSOM is the only feasible option for performing the SCE analysis.
 
 
 .. _pytest: https://docs.pytest.org/en/stable/

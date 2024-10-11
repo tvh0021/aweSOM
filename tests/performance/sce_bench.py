@@ -86,15 +86,30 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SCE benchmark")
     parser.add_argument("--N", type=int, default=10000, help="Number of data points")
     parser.add_argument("--R", type=int, default=20, help="Number of realizations")
+    parser.add_argument(
+        "--C", type=int, default=7, help="Number of clusters per realization"
+    )
+    parser.add_argument("--legacy", action="store_true", help="Run legacy SCE")
+    parser.add_argument("--awesom", action="store_true", help="Run aweSOM")
 
     args = parser.parse_args()
 
     number_of_points = args.N
     number_of_realizations = args.R
-    # number_of_clusters = [
-    #     np.random.randint(6, 10) for _ in range(number_of_realizations)
-    # ]
-    number_of_clusters = [7] * number_of_realizations
+    number_of_clusters_per_realization = args.C
+    number_of_clusters = [number_of_clusters_per_realization] * number_of_realizations
+
+    print("---------------------------------------", flush=True)
+    print("| SCALING TEST FOR SCE IMPLEMENTATION |", flush=True)
+    print("---------------------------------------", flush=True)
+    print("Number of data points:", number_of_points, flush=True)
+    print("Number of realizations:", number_of_realizations, flush=True)
+    print(
+        "Number of clusters per realization:",
+        number_of_clusters_per_realization,
+        flush=True,
+    )
+    print("\n", flush=True)
 
     cluster_files = [
         f"labels.{make_file_name(i,'npy')}" for i in range(number_of_realizations)
@@ -112,17 +127,61 @@ if __name__ == "__main__":
         save_mock_clusters(clusters, folder + cluster_files[i])
     print(f"Mock clusters generated and saved in {folder}", flush=True)
 
-    time_aweSOM = test_aweSOM(folder, args.N)
-    print("---------------------------------------------------", flush=True)
-    os.chdir("../")
-    # time_ensemble = test_ensemble_learning()
+    results = []
+
+    if args.legacy:
+        print("Running legacy SCE", flush=True)
+        time_legacy = test_ensemble_learning()
+        results.append(
+            {
+                "N": args.N,
+                "R": args.R,
+                "C": args.C,
+                "legacy": time_legacy,
+            }
+        )
+        print("---------------------------------------------------", flush=True)
+    elif args.awesom:
+        print("Running aweSOM", flush=True)
+        time_aweSOM = test_aweSOM(folder, args.N)
+        os.chdir("../")
+        results.append(
+            {
+                "N": args.N,
+                "R": args.R,
+                "C": args.C,
+                "awesom": time_aweSOM,
+            }
+        )
+        print("---------------------------------------------------", flush=True)
+    else:
+        print("Running both legacy SCE and aweSOM", flush=True)
+        time_legacy = test_ensemble_learning()
+        results.append(
+            {
+                "N": args.N,
+                "R": args.R,
+                "C": args.C,
+                "legacy": time_legacy,
+            }
+        )
+        print("---------------------------------------------------", flush=True)
+        time_aweSOM = test_aweSOM(folder, args.N)
+        os.chdir("../")
+        results.append(
+            {
+                "N": args.N,
+                "R": args.R,
+                "C": args.C,
+                "awesom": time_aweSOM,
+            }
+        )
+        print("---------------------------------------------------", flush=True)
 
     print("Done, cleaning up", flush=True)
     shutil.rmtree(folder)
     print(f"Deleted all files inside {folder}", flush=True)
+    print("---------------------------------------------------", flush=True)
 
     print("Results:")
-    print("Using N =", number_of_points, "and R =", number_of_realizations)
-    print(f"aweSOM time: {time_aweSOM}")
-    # print(f"Ensemble learning time: {time_ensemble}")
-    # print(f"Ratio: {time_ensemble / time_aweSOM}")
+    print(results)
