@@ -1,9 +1,9 @@
 # aweSOM - Accelerated Self-organizing Map (SOM) and Statistically Combined Ensemble (SCE)
 
 This package combines a JIT-accelerated and parallelized implementation of SOM, integrating parts of [POPSOM](https://github.com/njali2001/popsom) and a GPU-accelerated implementation of SCE using [ensemble learning](https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning). 
-It is optimized for large datasets, up to $\sim 10^7$ points. 
+It is optimized for large datasets, up to $\sim 10^8$ points. 
 
-aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations (link to paper).
+aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations ([Ha et al., 2024](https://arxiv.org/abs/2410.01878)).
 However, it can also be used for a variety of clustering and classification tasks.
 
 Authors: 
@@ -24,33 +24,38 @@ cd aweSOM
 pip install .
 ```
 
-2. Install JAX with CUDA support separately
+2. Install JAX with CUDA support separately:
 
 ```bash
 pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
+If your system does not support CUDA, you can skip this step. SCE will automatically fall back to the CPU. However, the 
+CPU-only version can be significantly slower for large datasets (see the [performance tests](https://awesom.readthedocs.io/en/latest/testing.html#performance-tests)).
+
 ## 2. Testing
 
-We use `pytest` for the test module. Dependency has already been included in the `requirements.txt` file, and should be installed automatically with aweSOM
+We use `pytest` for the test module. Dependency has already been included in the `requirements.txt` file, and should be installed automatically with aweSOM.
 
-To run tests for all modules:
+To run tests for all modules in the root directory of aweSOM:
 
 ```bash
-pytest
+python -m pytest
 ```
 
 You can also run specific test modules by specifying the path to the test file:
 
 ```bash
-pytest tests/[module]_test.py
+python -m pytest tests/[module]_test.py
 ```
 
 Or run a specific test function within a module:
 
 ```bash
-pytest tests/[module]_test.py::test_[function]
+python -m pytest tests/[module]_test.py::test_[function]
 ```
+
+If there is no GPU, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially. This is expected behavior, and SCE computation should still fall back to the CPU.
 
 ## 3. Basic Usage - SOM
 
@@ -228,8 +233,7 @@ for xdim in parameters["xdim"]:
                 print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
                 map = Lattice(xdim, ydim, alpha_0, train, )
                 map.train_lattice(iris_data_transformed, feature_names, labels)
-                # map.umat = map.compute_umat()
-                projection_2d = map.map_data_to_lattice()
+                # projection_2d = map.map_data_to_lattice()
                 final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
                 som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
                 save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
@@ -237,12 +241,16 @@ for xdim in parameters["xdim"]:
 
 This saves 36 realizations to the current working directory.
 
-In the terminal:
+In the terminal (skip this step if you use the pre-generated files):
 
 ```bash
-cd [path_to_working_dir]
+cd [path_to_aweSOM]/aweSOM/examples/iris/
 mkdir som_results
 mv labels* som_results/
+```
+
+Then,
+```bash
 cd som_results/
 python3 [path_to_aweSOM]/aweSOM/src/aweSOM/sce.py --subfolder SCE --dims 150
 ```
