@@ -57,6 +57,9 @@ Additionally, high-level controls include: ``--nodes`` to specify the number of 
 for isolated scaling tests; ``--procedure [training, mapping, both]`` to specify which part of the algorithm to benchmark; 
 and ``--popsom`` or ``--awesom`` to specify one of the two algorithms to benchmark separately.
 
+If you are running a long-duration test that requires dedicated node(s), you can refer to ``examples/slurm_scripts/submit_popsom_bench.cpu``
+for an example SLURM script to run this benchmark.
+
 For a personal computer, we recommend using a smaller number of points (:math:`N \sim 10^4`) and features (:math:`F < 5`)
 for the test to complete in a reasonable amount of time. More extensive tests can be run on a high-performance computing
 cluster. For example, one modern compute node with 40+ cores can perform this benchmark up to :math:`10^6` points and
@@ -82,6 +85,9 @@ Additionally, high-level controls include: ``--C`` to specify the number of clus
 
 NOTE: If the test did not complete successfully, there will be a directory named ``som_out`` in the current working directory.
 This should be cleaned up manually.
+
+If you are running a long-duration test that requires dedicated node(s), you can refer to ``examples/slurm_scripts/submit_sce_bench.cpu``
+and ``examples/slurm_scripts/submit_sce_bench.gpu`` for example SLURM scripts to run this benchmark.
 
 In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of
 aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4`). The GPU 
