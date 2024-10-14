@@ -8,7 +8,7 @@ authors:
   - name: Trung Ha
     orcid: 0000-0001-6600-2517
     corresponding: true
-    affiliation: "1, 2, 3" # (Multiple affiliations must be quoted)
+    affiliation: "1, 2, 3"
   - name: Joonas Nättilä
     orcid: 0000-0002-3226-4575
     affiliation: "4, 5, 1"
