@@ -33,6 +33,11 @@ pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-re
 If your system does not support CUDA, you can skip this step. SCE will automatically fall back to the CPU. However, the 
 CPU-only version can be significantly slower for large datasets (see the [performance tests](https://awesom.readthedocs.io/en/latest/testing.html#performance-tests)).
 
+**Experimental** 
+
+Apple Silicon users can also use JAX with Metal support; follow the instructions in the 
+[JAX documentation](https://developer.apple.com/metal/jax/) to install the Metal backend.
+
 ## 2. Testing
 
 We use `pytest` for the test module. Dependency has already been included in the `requirements.txt` file, and should be installed automatically with aweSOM.

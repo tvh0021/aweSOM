@@ -70,7 +70,7 @@ Furthermore, for the steps where parallelization could be leveraged (such as whe
 
 The left hand side of \autoref{fig:sce_scaling} shows a graph of the performance between `aweSOM` and the legacy `POPSOM` implementation over a range of $N$ and $F$, performed on one Intel Icelake compute node with 64 CPU cores and 1 TB memory. 
 While `POPSOM` initially performs slightly faster than `aweSOM` for $N \lesssim 10^4$, this changes when $N$ exceeds $5 \times 10^5$, after that `aweSOM` consistently outperforms `POPSOM` by approximately a factor of $10$.
-Critically, `POPSOM` fails to complete its clusters mapping for $N \gtrsim 10^6, F > 4$ because the memory buffer (1 TB) of the test node was exceeded.
+Critically, `POPSOM` fails to complete its clusters mapping for $N \gtrsim 10^6, F > 4$ because the memory buffer of the test node was exceeded.
 
 ## The statistically combined ensemble method
 
