@@ -9,13 +9,13 @@ import glob
 import argparse
 import numpy as np
 
-# Use JAX if GPU/the jax package is installed, otherwise use NumPy
-# import jax
+# Use JAX if GPU and the jax package is installed, otherwise use NumPy
+# added support for experimental JAX backend with METAL on Apple silicon
 try:
     import jax
 
     default_device = jax.default_backend()
-    if default_device == "gpu":
+    if default_device == "gpu" or default_device == "METAL":
         USE_JAX = True
     else:
         USE_JAX = False

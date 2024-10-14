@@ -18,6 +18,11 @@ Installation
 If your system does not support CUDA, you can skip this step. SCE will automatically fall back to the CPU. However, the 
 CPU-only version can be significantly slower for large datasets (see the `performance tests <testing.html#performance-tests>`_).
 
+**Experimental** 
+
+Apple Silicon users can also use JAX with Metal support; follow the instructions in the 
+`JAX documentation <https://developer.apple.com/metal/jax/>`_ to install the Metal backend.
+
 3. Install Sphinx and other required packages for building the documentation (optional):
 
     .. code-block:: bash
