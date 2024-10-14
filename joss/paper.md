@@ -41,12 +41,12 @@ bibliography: paper.bib
 
 # Summary
 
-We introduce `aweSOM`, an open-source Python package for machine learning (ML) clustering and classification, using a Self-organizing Maps [SOM, @kohonen1990] algorithm that incorporates CPU/GPU acceleration to accommodate large ($N > 10^6$, where $N$ is the number of data points), multidimensional datasets. `aweSOM` consists of two main modules, one that handles the initialization and training of the SOM, and one that stacks the results of multiple SOM realizations to obtain statistically significant clusters.
+We introduce `aweSOM`, an open-source Python package for machine learning (ML) clustering and classification, using a Self-organizing Maps [SOM, @kohonen1990] algorithm that incorporates CPU/GPU acceleration to accommodate large ($N > 10^6$, where $N$ is the number of data points), multidimensional datasets. `aweSOM` consists of two main modules, one that handles the initialization and training of the SOM, and another that stacks the results of multiple SOM realizations to obtain more statistically robust clusters.
 
-Existing Python-based SOM implementations (e.g., `POPSOM`, @yuan2018; `MiniSom`, @minisom; `sklearn-som`) primarily serve as proof-of-concept demonstrations, especially optimized for smaller datasets, but lack scalability for large, multidimensional data.
-`aweSOM` provides a solution for this gap in capability, with good performance scaling up to $\sim 10^8$ individual points, together with multiple features per point. We compare the performance of `aweSOM` with the legacy implementations it is based on, and find a $10 - 100 \times$ speed up, as well as significantly improved memory efficiency, due to several built-in optimizations.
+Existing Python-based SOM implementations (e.g., `POPSOM`, @yuan2018; `MiniSom`, @minisom; `sklearn-som`) primarily serve as proof-of-concept demonstrations, optimized for smaller datasets, but lacking scalability for large, multidimensional data.
+`aweSOM` provides a solution for this gap in capability, with good performance scaling up to $\sim 10^8$ individual points, and capable of utilizing multiple features per point. We compare the code performance against the legacy implementations it is based on, and find a $10 - 100 \times$ speed up, as well as significantly improved memory efficiency, due to several built-in optimizations.
 
-As a companion to this paper, @ha2024 demonstrates the capabilities of `aweSOM` in discovering the physics of plasma turbulence. Detailed instructions on how to install, test, and replicate the results of the paper are available in the online [documentation](https://awesom.readthedocs.io/en/latest/). Also included in the documentation is an example of applying `aweSOM` to the Iris dataset [@iris53].
+As a companion to this paper, @ha2024 demonstrates the capabilities of `aweSOM` in analyzing the physics of plasma turbulence. Detailed instructions on how to install, test, and replicate the results of the paper are available in the online [documentation](https://awesom.readthedocs.io/en/latest/). Also included in the documentation is an example of applying `aweSOM` to the Iris dataset [@iris53].
 
 # Statement of need
 
