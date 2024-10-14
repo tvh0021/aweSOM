@@ -24,7 +24,7 @@ How can I contribute?
 You can contribute by making a fork of the aweSOM repository, making changes, and submitting a pull request.
 
 What if I have a question that is not answered here?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 If you have a question that is not answered here, you can contact the authors directly.
 Please reach out to Trung Ha at `tvha@umass.edu <mailto:tvha@umass.edu>`_.
 
@@ -32,7 +32,7 @@ Technical Questions
 -------------------
 
 How can I make aweSOM return more/less clusters?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 There are three main ways to control the number of clusters returned by aweSOM.
 
 1. Increase the number of nodes in the SOM lattice. The more nodes in the lattice, the more local minimas tend to appear. The default lattice size is 10x10.
