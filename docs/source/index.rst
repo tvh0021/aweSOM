@@ -35,6 +35,8 @@ and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
 Current version: 1.0.0
 
+[![status](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1/status.svg)](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1)
+
 
 .. toctree::
    :maxdepth: 2
