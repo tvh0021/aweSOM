@@ -11,10 +11,10 @@ authors:
     affiliation: "1, 2, 3"
   - name: Joonas Nättilä
     orcid: 0000-0002-3226-4575
-    affiliation: "4, 5, 1"
+    affiliation: "4, 5, 2"
   - name: Jordy Davelaar
     orcid: 0000-0002-2685-2434
-    affiliation: "6, 7, 1, 5"
+    affiliation: "6, 7, 2, 5"
 affiliations:
  - name: Department of Astronomy, University of Massachusetts-Amherst, Amherst, MA 01003, USA
    index: 1
