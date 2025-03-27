@@ -78,6 +78,23 @@ def manual_scaling(data: np.ndarray, bulk_range: float = 1.0) -> np.ndarray:
     return (data - np.mean(data, axis=0)) / two_sigma * bulk_range
 
 
+def inv_manual_scaling(
+    normed_data: np.ndarray, ori_data: np.ndarray, bulk_range: float = 1.0
+) -> np.ndarray:
+    """Given a value that has been scaled using manual_scaling, return the original value.
+
+    Args:
+        normed_data (np.ndarray): 2d array of data (M x f)
+        ori_data (np.ndarray): 2d array of original data (N x f)
+        bulk_range (float, optional): The extent to which 95% of the data resides in. Defaults to 1..
+
+    Returns:
+        np.ndarray: unscaled data
+    """
+    two_sigma = 2.0 * np.std(ori_data, axis=0)
+    return two_sigma * bulk_range * normed_data + np.mean(ori_data, axis=0)
+
+
 def save_som_object(
     som: "Lattice",
     xdim: int,
