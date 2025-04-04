@@ -1,0 +1,47 @@
+cff-version: "1.2.0"
+authors:
+- family-names: Ha
+  given-names: Trung
+  orcid: "https://orcid.org/0000-0001-6600-2517"
+- family-names: Nättilä
+  given-names: Joonas
+  orcid: "https://orcid.org/0000-0002-3226-4575"
+- family-names: Davelaar
+  given-names: Jordy
+  orcid: "https://orcid.org/0000-0002-2685-2434"
+contact:
+- family-names: Ha
+  given-names: Trung
+  orcid: "https://orcid.org/0000-0001-6600-2517"
+doi: 10.5281/zenodo.15098625
+message: If you use this software, please cite our article in the
+  Journal of Open Source Software.
+preferred-citation:
+  authors:
+  - family-names: Ha
+    given-names: Trung
+    orcid: "https://orcid.org/0000-0001-6600-2517"
+  - family-names: Nättilä
+    given-names: Joonas
+    orcid: "https://orcid.org/0000-0002-3226-4575"
+  - family-names: Davelaar
+    given-names: Jordy
+    orcid: "https://orcid.org/0000-0002-2685-2434"
+  date-published: 2025-04-04
+  doi: 10.21105/joss.07613
+  issn: 2475-9066
+  issue: 108
+  journal: Journal of Open Source Software
+  publisher:
+    name: Open Journals
+  start: 7613
+  title: "aweSOM: a CPU/GPU-accelerated Self-organizing Map and
+    Statistically Combined Ensemble Framework for Machine-learning
+    Clustering Analysis"
+  type: article
+  url: "https://joss.theoj.org/papers/10.21105/joss.07613"
+  volume: 10
+title: "`aweSOM`: a CPU/GPU-accelerated Self-organizing Map and
+  Statistically Combined Ensemble Framework for Machine-learning
+  Clustering Analysis"
+
