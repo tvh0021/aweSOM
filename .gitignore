@@ -15,3 +15,11 @@ examples/plasma-turbulence/features_2j1b1e0r_5000_jasym.h5
 *.err
 
 tests/performance/som_out/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# OS / editor files
+.DS_Store
+*.swp
