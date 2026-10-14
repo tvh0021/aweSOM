@@ -5,7 +5,7 @@
 #SBATCH -t 01:00:00
 #SBATCH --nodes 1
 #SBATCH --ntasks-per-node=40
-#SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
+#SBATCH --mail-type=ALL --mail-user=thccrg@rit.edu
 #SBATCH -p genx
 
 # activate threading
