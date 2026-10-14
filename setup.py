@@ -8,7 +8,7 @@ setup(
     name="aweSOM",
     version="1.1.0",
     author="Trung Ha",
-    author_email="tvha@umass.edu",
+    author_email="thccrg@rit.edu",
     description="Accelerated Self-Organizing Maps and Statistically Combined Ensemble method for plasma intermittency detection",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",

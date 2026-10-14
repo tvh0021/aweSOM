@@ -9,7 +9,7 @@
 #SBATCH --mem=40G
 #SBATCH --constraint=a100-80gb  # if you want a particular type of GPU
 #SBATCH --time=0-4
-#SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
+#SBATCH --mail-type=ALL --mail-user=thccrg@rit.edu
 
 # activate threading
 # export OMP_NUM_THREADS=1

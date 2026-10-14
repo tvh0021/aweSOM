@@ -5,7 +5,7 @@
 #SBATCH -t 3:00:00
 #SBATCH --nodes 1
 #SBATCH --ntasks-per-node 64
-#SBATCH --mail-type=ALL --mail-user=tvha@umass.edu
+#SBATCH --mail-type=ALL --mail-user=thccrg@rit.edu
 #SBATCH -p cca
 #SBATCH -C icelake
 
