@@ -343,4 +343,4 @@ Anyone is welcome to contribute! Please fork the repository and create pull requ
 
 ## 8. Contact
 
-Additional inquiries/questions about aweSOM should be directed to my email: [tvha@umass.edu](mailto:tvha@umass.edu)
+Additional inquiries/questions about aweSOM should be directed to my email: [thccrg@rit.edu](mailto:thccrg@rit.edu)

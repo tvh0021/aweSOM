@@ -26,7 +26,7 @@ You can contribute by making a fork of the aweSOM repository, making changes, an
 What if I have a question that is not answered here?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 If you have a question that is not answered here, you can contact the authors directly.
-Please reach out to Trung Ha at `tvha@umass.edu <mailto:tvha@umass.edu>`_.
+Please reach out to Trung Ha at `thccrg@rit.edu <mailto:thccrg@rit.edu>`_.
 
 Technical Questions
 -------------------
