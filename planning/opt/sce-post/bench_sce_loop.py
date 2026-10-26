@@ -60,6 +60,13 @@ def digest(out):
     return h
 
 
+# find_number_of_clusters (distinct ids per file), interleaved
+tfb, tfc = [], []
+for r in range(REPS):
+    t = time.perf_counter(); nb_ = base.find_number_of_clusters(files); tfb.append(time.perf_counter() - t)
+    t = time.perf_counter(); nc_ = cand.find_number_of_clusters(files); tfc.append(time.perf_counter() - t)
+nfind_same = bool(np.array_equal(nb_, nc_))
+
 # warm-up (numba JIT / cache) on a two-run subset
 with contextlib.redirect_stdout(io.StringIO()):
     os.mkdir("warm"); open("warm/multimap_mappings.txt", "w").close()
@@ -77,4 +84,6 @@ print(json.dumps({"claim": "C1", "maps": len(files), "cells": int(np.prod(dims))
                   "threads": int(__import__("numba").get_num_threads()), "reps": REPS,
                   "baseline_s": [round(x, 3) for x in tb], "candidate_s": [round(x, 3) for x in tc],
                   "baseline_median_s": round(mb, 3), "candidate_median_s": round(mc, 3), "ratio": round(mb / mc, 2),
-                  "output_files": n_out, "bitwise_identical": identical}))
+                  "output_files": n_out, "bitwise_identical": identical,
+                  "find_number_of_clusters_baseline_s": round(float(np.median(tfb)), 3),
+                  "find_number_of_clusters_candidate_s": round(float(np.median(tfc)), 3), "find_number_of_clusters_same": nfind_same}))

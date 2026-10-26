@@ -186,6 +186,39 @@ try:
                     row[x * n_b + y] += 1
         return partial.sum(axis=0)
 
+    @_numba.njit(parallel=True, cache=True)
+    def _all_pair_tables(stack, nids, pair_i, pair_j, offsets, out):
+        """Contingency tables of every listed run pair, one pair per thread.
+
+        Four interleaved sub-histograms per pair break the dependency chain of
+        repeated increments to the same bin (labels come in long runs of one id).
+        """
+        n = stack.shape[1]
+        n4 = n - n % 4
+        for q in _numba.prange(pair_i.shape[0]):
+            i = pair_i[q]
+            j = pair_j[q]
+            n_a = nids[i]
+            n_b = nids[j]
+            m = n_a * n_b
+            la = stack[i]
+            lb = stack[j]
+            loc = np.zeros(4 * m, dtype=np.int64)
+            for k in range(0, n4, 4):
+                for u in range(4):
+                    x = np.int64(la[k + u])
+                    y = np.int64(lb[k + u])
+                    if x >= 0 and x < n_a and y >= 0 and y < n_b:
+                        loc[u * m + x * n_b + y] += 1
+            for k in range(n4, n):
+                x = np.int64(la[k])
+                y = np.int64(lb[k])
+                if x >= 0 and x < n_a and y >= 0 and y < n_b:
+                    loc[x * n_b + y] += 1
+            o = offsets[q]
+            for c in range(m):
+                out[o + c] = loc[c] + loc[m + c] + loc[2 * m + c] + loc[3 * m + c]
+
     HAVE_NUMBA = True
 except ImportError:  # pragma: no cover - numba is a hard dependency
     HAVE_NUMBA = False
@@ -277,15 +310,29 @@ def loop_over_all_clusters(
     # table(j, i) == table(i, j).T exactly. A table is dropped once both runs used it.
     cache_tables = 8 * sum(nids) ** 2 <= _TABLE_CACHE_BYTES
     cached = {}
+    if cache_tables and HAVE_NUMBA and len(runs) > 1:
+        # all tables at once, run pairs in parallel (same integer counts as contingency_table)
+        stack = np.empty((len(runs), n_cells), dtype=np.result_type(*[lab.dtype for lab in labels]))
+        for r in range(len(runs)):
+            stack[r] = labels[r]
+            labels[r] = stack[r]
+        pair_i, pair_j = np.triu_indices(len(runs), 1)
+        nid_arr = np.asarray(nids, dtype=np.int64)
+        table_sizes = nid_arr[pair_i] * nid_arr[pair_j]
+        offsets = np.concatenate([[0], np.cumsum(table_sizes)[:-1]]).astype(np.int64)
+        flat = np.zeros(int(table_sizes.sum()), dtype=np.int64)
+        _all_pair_tables(stack, nid_arr, pair_i.astype(np.int64), pair_j.astype(np.int64), offsets, flat)
+        for i, j, o, m in zip(pair_i, pair_j, offsets, table_sizes):
+            cached[(int(i), int(j))] = flat[o : o + m].reshape(nids[i], nids[j])
 
     def overlap(i, j):
         if not cache_tables:
             return contingency_table(labels[i], nids[i], labels[j], nids[j])
         if j < i:
             return cached.pop((j, i)).T
-        table = contingency_table(labels[i], nids[i], labels[j], nids[j])
-        cached[(i, j)] = table
-        return table
+        if (i, j) not in cached:
+            cached[(i, j)] = contingency_table(labels[i], nids[i], labels[j], nids[j])
+        return cached[(i, j)]
 
     for i, run in enumerate(runs):
         print("-----------------------")
@@ -333,9 +380,13 @@ def find_number_of_clusters(cluster_files: list[str]) -> array_lib.ndarray:
 
     number_of_clusters = np.empty(len(cluster_files), dtype=int)
     for run in range(len(cluster_files)):
-        clusters = load_som_npy(cluster_files[run])
-        ids = array_lib.unique(clusters)
-        number_of_clusters[run] = len(ids)
+        clusters = np.load(cluster_files[run], mmap_mode="r")
+        if np.issubdtype(clusters.dtype, np.integer) and clusters.size:
+            lo, hi = int(clusters.min()), int(clusters.max())
+            if lo >= 0 and hi < 1 << 24:  # count distinct ids without a sort
+                number_of_clusters[run] = np.count_nonzero(np.bincount(clusters.reshape(-1), minlength=1))
+                continue
+        number_of_clusters[run] = len(np.unique(clusters))
 
     return number_of_clusters
 
