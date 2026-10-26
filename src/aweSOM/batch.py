@@ -92,6 +92,13 @@ except ImportError as exc:  # pragma: no cover - exercised only without jax
         "aweSOM.batch requires jax; pip install 'aweSOM[gpu]' or jax"
     ) from exc
 
+if not hasattr(jax, "enable_x64") or not hasattr(jax, "shard_map"):
+    raise ImportError(
+        f"aweSOM.batch needs a recent jax with jax.enable_x64 and jax.shard_map (tested with 0.12); found jax {jax.__version__}. "
+        "The Apple Metal plugin (jax-metal 0.1.1, jax 0.4.34) is too old and has no float64, "
+        "so the batch trainer cannot run on Metal; use the CPU or a CUDA/ROCm build."
+    )
+
 __all__ = [
     "radius_schedule",
     "neighbourhood_matrix",
