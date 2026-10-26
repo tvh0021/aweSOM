@@ -3,6 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import shutil
 import numpy as np
+import numba
 from scipy.signal import savgol_filter
 
 
@@ -223,6 +224,66 @@ def combine_separated_clusters(
     return all_signals_map
 
 
+def combine_separated_clusters_from_labels(
+    map_list: list, cluster_ranges: list[list[int]], dims: list[int], labels_path: str
+) -> np.ndarray:
+    """Same result as ``combine_separated_clusters``, built from the label files.
+
+    Each SCE mask file is ``np.where(labels == cid, Gsum, 0.0)``, so the combined
+    map of a cluster range is the float32 sum, in ``map_list`` order, of
+    ``float32(Gsum)`` over the instances whose label matches the cell. Adding the
+    zeros of non-matching masks is exact, so the result is bitwise identical to
+    summing the mask files, without writing or reading them (mask files take 8
+    bytes per cell per SCE cluster).
+
+    Args:
+        map_list (list): ``[Gsum, cid, run_name]`` entries from ``get_gsum_values``.
+        cluster_ranges (list[list[int]]): start and end indices of each combined cluster.
+        dims (list[int]): dimensions of the label maps.
+        labels_path (str): folder holding ``<run_name>.npy`` label files.
+
+    Returns:
+        np.ndarray: float32 array of shape ``[len(cluster_ranges)] + dims``.
+    """
+    dims = [int(d) for d in dims]
+    n_cells = int(np.prod(dims))
+    run_index = {}
+    for _, _, run_name in map_list:
+        run_index.setdefault(run_name, len(run_index))
+    raw = [np.load(os.path.join(labels_path, name + ".npy"), mmap_mode="r").reshape(-1) for name in run_index]
+    lo = min(int(r.min()) for r in raw) if raw else 0
+    hi = max(int(r.max()) for r in raw) if raw else 0
+    # compact copy of all runs; every value equals the file's (non-integer files keep their dtype)
+    dtype = np.result_type(*[r.dtype for r in raw]) if raw else np.int64
+    if np.issubdtype(dtype, np.integer):
+        dtype = np.int16 if -(2**15) <= lo and hi < 2**15 else np.int64
+    labels = np.empty((len(run_index), n_cells), dtype=dtype)
+    for r, lab in enumerate(raw):
+        labels[r] = lab
+    all_signals_map = np.empty([len(cluster_ranges)] + dims, dtype=np.float32)
+    for cluster, (start_pointer, end_pointer) in enumerate(cluster_ranges):
+        inst = map_list[start_pointer:end_pointer]
+        runs = np.array([run_index[name] for _, _, name in inst], dtype=np.int64)
+        cids = np.array([int(cid) for _, cid, _ in inst], dtype=np.int64)
+        gsums = np.array([np.float32(np.float64(g)) for g, _, _ in inst], dtype=np.float32)
+        all_signals_map[cluster] = _sum_matching(labels, runs, cids, gsums).reshape(dims)
+    return all_signals_map
+
+
+@numba.njit(parallel=True, cache=True)
+def _sum_matching(labels, runs, cids, gsums):
+    """out[c] = float32 sum, in instance order, of gsums[k] over k with labels[runs[k], c] == cids[k]."""
+    n = labels.shape[1]
+    out = np.zeros(n, dtype=np.float32)
+    for c in numba.prange(n):
+        acc = np.float32(0.0)
+        for k in range(runs.shape[0]):
+            if labels[runs[k], c] == cids[k]:
+                acc += gsums[k]
+        out[c] = acc
+    return out
+
+
 def make_file_name(n: int, ext: str) -> str:
     """Make a filename based on the number and the extension given.
 
@@ -289,6 +350,13 @@ def parse_args():
         action="store_true",
         help="Save the combined map of all clusters",
     )
+    parser.add_argument(
+        "--labels_path",
+        type=str,
+        dest="labels_path",
+        default=None,
+        help="Folder with the SCE input label files; build the combined map from them instead of the mask files",
+    )
     return parser.parse_args()
 
 
@@ -346,9 +414,14 @@ if __name__ == "__main__":
 
     # save the separated SCE clusters
     if args.save_combined_map:
-        combined_sce_clusters = combine_separated_clusters(
-            map_list, cluster_ranges, args.dims, args.file_path
-        )
+        if args.labels_path is not None:
+            combined_sce_clusters = combine_separated_clusters_from_labels(
+                map_list, cluster_ranges, args.dims, args.labels_path
+            )
+        else:
+            combined_sce_clusters = combine_separated_clusters(
+                map_list, cluster_ranges, args.dims, args.file_path
+            )
         # save the new binary map
         np.save(
             args.file_path + f"/sce_clusters_{threshold}.npy", combined_sce_clusters

@@ -147,3 +147,32 @@ def test_load_labels_maps_out_of_range_ids_to_minus_one(tmp_path):
     path = tmp_path / "labels.big.npy"
     np.save(path, np.array([0, 2**32, -(2**32), 1, 1.5]))
     assert sce._load_labels(str(path)).tolist() == [0, -1, -1, 1, -1]
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.int32, np.uint8, np.float64])
+def test_combine_from_labels_matches_mask_files_bitwise(tmp_path, monkeypatch, dtype):
+    """write_masks=False + combine_separated_clusters_from_labels == mask files + combine_separated_clusters."""
+    from aweSOM import make_sce_clusters as msc
+
+    monkeypatch.chdir(tmp_path)
+    rng = np.random.default_rng(1)
+    dims = [9, 10, 11]
+    files = []
+    for k, f in enumerate(_write_runs(str(tmp_path), rng, dims, [(5, dtype, None), (6, dtype, 3), (4, dtype, None), (7, dtype, None)])):
+        os.rename(f, f"labels.run-{k}.npy")  # get_gsum_values needs a '-' in run names
+        files.append(f"labels.run-{k}.npy")
+    nids = sce.find_number_of_clusters(files)
+    for sub, masks in (("with", True), ("without", False)):
+        os.mkdir(sub)
+        open(sub + "/multimap_mappings.txt", "w").close()
+        with contextlib.redirect_stdout(io.StringIO()):
+            sce.loop_over_all_clusters(files, nids, np.array(dims), sub, write_masks=masks)
+    assert open("with/multimap_mappings.txt").read() == open("without/multimap_mappings.txt").read()
+    assert not [p for p in os.listdir("without") if p.startswith("mask-")]
+    _, map_list = msc.get_gsum_values("without/multimap_mappings.txt")
+    ranges = [[0, 5], [5, 12], [12, len(map_list)]]
+    with contextlib.redirect_stdout(io.StringIO()):
+        ref = msc.combine_separated_clusters(map_list, ranges, dims, "with")
+    got = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, ".")
+    assert got.dtype == ref.dtype and got.shape == ref.shape
+    assert got.tobytes() == ref.tobytes()
