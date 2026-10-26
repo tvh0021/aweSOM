@@ -320,3 +320,66 @@ def merge_double_sheets(
 #     print(clumped_array_3d)
 #     print("\nClump Labels 3D:")
 #     print(clump_labels_3d)
+
+
+def merge_double_sheets_fast(double_sheet_dict: dict, positive_sheet_dict: dict, negative_sheet_dict: dict):
+    """Array version of ``merge_double_sheets`` with the same result and the same in-place deletions.
+
+    The original walks each double sheet's cells in order and, for every cell, takes the first
+    positive clump (dict order) holding one of its 10 neighbors, then (once any positive neighbor
+    was seen for this sheet) the first such negative clump. Clumps of one dict are disjoint, so
+    "first in dict order" is the smallest dict ordinal among the cell's neighbors; that is a
+    gather on an ordinal volume instead of a ``tuple in list`` search per neighbor and clump.
+    Merged entries are sets, unmerged ones the original position objects, as in the original.
+    Requires every clump of a dict to be disjoint from the other clumps of that dict.
+    """
+    deltas = np.array(generate_neighbors(10), dtype=np.int64)
+    all_pos = [np.asarray(v, dtype=np.int64).reshape(-1, 3) for d in (double_sheet_dict, positive_sheet_dict, negative_sheet_dict) for v in d.values()]
+    shape = tuple(int(x) + 3 for x in np.max([p.max(axis=0) for p in all_pos if p.size], axis=0))  # pad by one: no wrap, as in the original
+
+    def ordinal_volume(d):
+        keys = list(d.keys())
+        vol = np.full(shape, -1, dtype=np.int64)
+        for k, key in enumerate(keys):
+            p = np.asarray(d[key], dtype=np.int64).reshape(-1, 3) + 1
+            if (vol[tuple(p.T)] >= 0).any():
+                raise ValueError("clumps of one dict overlap")
+            vol[tuple(p.T)] = k
+        return keys, vol
+
+    pos_keys, pos_vol = ordinal_volume(positive_sheet_dict)
+    neg_keys, neg_vol = ordinal_volume(negative_sheet_dict)
+    big = np.iinfo(np.int64).max
+    merged_double_sheets = dict()
+    for double_key, double_positions in double_sheet_dict.items():
+        p = np.asarray(double_positions, dtype=np.int64).reshape(-1, 3) + 1
+        nb = p[:, None, :] + deltas[None, :, :]  # cells x 10 x 3
+        idx = tuple(nb[..., a] for a in range(3))
+        pos_ord = pos_vol[idx]
+        first_pos = np.where(pos_ord >= 0, pos_ord, big).min(axis=1)
+        has_pos_cell = first_pos < big
+        merged = False
+        if has_pos_cell.any():
+            start = int(np.argmax(has_pos_cell))  # sticky flag: negatives are checked from here on
+            neg_ord = neg_vol[tuple(a[start:] for a in idx)]
+            first_neg = np.where(neg_ord >= 0, neg_ord, big).min(axis=1)
+            if (first_neg < big).any():
+                merged = True
+                visited_pos = np.unique(first_pos[has_pos_cell])
+                visited_neg = np.unique(first_neg[first_neg < big])
+                merged_clump = set()
+                for k in visited_pos:
+                    merged_clump.update(positive_sheet_dict[pos_keys[k]])
+                for k in visited_neg:
+                    merged_clump.update(negative_sheet_dict[neg_keys[k]])
+                merged_clump.update(double_positions)
+                merged_double_sheets[double_key] = merged_clump
+                for k in visited_pos:
+                    pp = np.asarray(positive_sheet_dict.pop(pos_keys[k]), dtype=np.int64).reshape(-1, 3) + 1
+                    pos_vol[tuple(pp.T)] = -1
+                for k in visited_neg:
+                    pp = np.asarray(negative_sheet_dict.pop(neg_keys[k]), dtype=np.int64).reshape(-1, 3) + 1
+                    neg_vol[tuple(pp.T)] = -1
+        if not merged:
+            merged_double_sheets[double_key] = double_positions
+    return merged_double_sheets
