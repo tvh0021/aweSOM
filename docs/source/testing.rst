@@ -93,7 +93,7 @@ and ``examples/slurm_scripts/submit_sce_bench.gpu`` for example SLURM scripts to
 
 NOTE: the numbers below were measured with the original mask-by-mask ensemble loop. Since the loop was rewritten to
 use contingency tables (one ``np.bincount`` per pair of realizations) the CPU path is much faster than either: on
-28 realizations of :math:`128^3` cells it takes about 6 s where the mask-by-mask loop took 411 s on the CPU and
+28 realizations of :math:`128^3` cells it takes about 10 s where the mask-by-mask loop took 411 s on the CPU and
 230 s on an Apple M-series GPU through jax-metal. The GPU is no longer required for the ensemble step.
 
 In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of

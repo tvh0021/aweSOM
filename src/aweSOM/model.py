@@ -407,6 +407,8 @@ class SOMModel:
             data = data.reshape(1, -1)
         if data.ndim != 2 or data.shape[1] != self.n_features:
             raise ValueError(f"data must have shape (N, {self.n_features})")
+        if chunk < 1:
+            raise ValueError("chunk must be positive")
         n_points = data.shape[0]
         labels = np.empty(n_points, dtype=np.int32)
         dist = np.empty(n_points, dtype=np.float64) if return_distance else None

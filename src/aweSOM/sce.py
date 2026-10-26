@@ -6,7 +6,7 @@
 ##
 ## loop_over_all_clusters works on per-run contingency tables (cluster-pair cell counts
 ## from np.bincount), so the cost is O(runs^2 * cells) instead of O(clusters^2 * cells)
-## and the ensemble loop runs on the CPU in seconds (28 maps x 128^3 cells: 6.5 s against
+## and the ensemble loop runs on the CPU in seconds (28 maps x 128^3 cells: 10 s against
 ## 411 s CPU / 230 s Metal for the original mask-by-mask loop). Outputs are bitwise
 ## identical to the mask-by-mask loop on the NumPy backend. compute_SQ / create_mask are
 ## kept (JAX-accelerated when a GPU or Metal backend is present) for direct use.
@@ -153,6 +153,7 @@ def _load_labels(path: str) -> np.ndarray:
     labels = np.asarray(raw).reshape(-1)
     as_int = labels.astype(np.int64)
     bad = as_int != labels
+    bad |= (as_int < -1) | (as_int >= np.iinfo(np.int32).max)  # would wrap when narrowed
     if bad.any():
         as_int = as_int.copy()
         as_int[bad] = -1
@@ -228,15 +229,12 @@ def loop_over_all_clusters(
         if lab.shape[0] != n_cells:
             raise ValueError(f"{run} has {lab.shape[0]} cells, expected {n_cells} from dims {dimensions}")
 
-    # sizes[i][cid] = cells of cluster cid in run i; tables[(i, j)] = contingency of run i vs run j (i < j)
+    # sizes[i][cid] = cells of cluster cid in run i. Contingency tables are built on
+    # demand (each run pair twice) so only one nids[i] x nids[j] table is live at a time.
     sizes = [np.bincount(lab[(lab >= 0) & (lab < n)].astype(np.int64), minlength=n) for lab, n in zip(labels, nids)]
-    tables = {}
-    for i in range(len(runs)):
-        for j in range(i + 1, len(runs)):
-            tables[(i, j)] = contingency_table(labels[i], nids[i], labels[j], nids[j])
 
     def overlap(i, j):
-        return tables[(i, j)] if i < j else tables[(j, i)].T
+        return contingency_table(labels[i], nids[i], labels[j], nids[j])
 
     for i, run in enumerate(runs):
         print("-----------------------")
@@ -245,16 +243,21 @@ def loop_over_all_clusters(
             f.write("{}\n".format(run.removesuffix(".npy")))
         print("nids : ", nids[i])
 
-        for cid in range(nids[i]):
-            total_SQ_scalar = 0.0
-            for j in range(len(runs)):
-                if j == i:  # don't compare to itself
-                    continue
-                n_i_row = overlap(i, j)[cid]
+        # totals[cid] accumulates SQ over the other runs in ascending run order and, within a
+        # run, ascending cluster order: the same sequence of additions as the mask-by-mask loop.
+        totals = [0.0] * nids[i]
+        for j in range(len(runs)):
+            if j == i:  # don't compare to itself
+                continue
+            table = overlap(i, j)
+            for cid in range(nids[i]):
                 n_a = int(sizes[i][cid])
+                n_i_row = table[cid]
                 for cidC in range(nids[j]):
-                    total_SQ_scalar += pair_quality_from_counts(n_a, int(sizes[j][cidC]), int(n_i_row[cidC]))
+                    totals[cid] += pair_quality_from_counts(n_a, int(sizes[j][cidC]), int(n_i_row[cidC]))
 
+        for cid in range(nids[i]):
+            total_SQ_scalar = totals[cid]
             # every cell of this cluster accumulated exactly the same SQ values in the same order
             total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).reshape(dimensions)
             np.save(subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid), total_mask)

@@ -21,7 +21,9 @@ algorithms share stationary points but follow different trajectories. Use
 
 Distances in the training pass use the expansion ||w||^2 - 2 x.w (||x||^2 is
 dropped because it does not change the argmin) in the compute dtype (float32 by
-default). In float32 this flips a BMU for roughly 1e-5 of the samples relative
+default). The expansion cancels catastrophically when the data sit far from the
+origin (features of magnitude ~1e8 and spacing ~1 lose the BMU even in
+float64), so pass scaled features, as ``Lattice`` and every aweSOM example do. In float32 this flips a BMU for roughly 1e-5 of the samples relative
 to exact float64 arithmetic; :func:`quantization_error` and
 :func:`topographic_error` use exact float64 direct arithmetic. The per-node
 sums, counts, update and master weights are always float64, which makes the

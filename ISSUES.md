@@ -27,7 +27,7 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 
 - **Where:** `src/aweSOM/sce.py` (`loop_over_all_clusters`)
 - **What:** every cluster of every run was compared with every cluster of every other run on full-volume masks; 28 maps of 128³ cells took 411 s on the CPU and 230 s on an Apple GPU (jax-metal).
-- **Fix:** the quality index only depends on |A|, |B| and |A∩B|, so one `np.bincount` contingency table per run pair gives all pairs at once; the mask file is the run's cluster mask times the scalar Gsum. 6.5 s on the same input, bitwise-identical `multimap_mappings.txt` and mask files (plasma example and `tests/sce_loop_test.py`). The stored `examples/iris/som_results/SCE` differs from both the old and the new loop by at most 2e-15 relative (it was produced by an earlier code version), so it is not a regression.
+- **Fix:** the quality index only depends on |A|, |B| and |A∩B|, so one `np.bincount` contingency table per run pair gives all pairs at once; the mask file is the run's cluster mask times the scalar Gsum. 10 s on the same input (one contingency table live at a time), bitwise-identical `multimap_mappings.txt` and mask files (plasma example and `tests/sce_loop_test.py`). The stored `examples/iris/som_results/SCE` differs from both the old and the new loop by at most 2e-15 relative (it was produced by an earlier code version), so it is not a regression.
 
 ### B. `tests/run_som_test.py` writes into the current directory
 

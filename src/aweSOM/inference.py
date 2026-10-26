@@ -10,7 +10,9 @@ Exactness contract:
     (``acc = 0; acc += d * d`` with ``d = w[i, f] - x[f]``). Nodes are scanned
     in ascending index order and a node replaces the current best only if its
     distance is strictly smaller, so ties go to the lowest index, as with
-    ``np.argmin``. For float64 input the labels equal ``Lattice.best_match``
+    ``np.argmin``. A node whose distance is NaN (non-finite weights or point)
+    is never selected, unlike ``np.argmin`` which returns the first NaN; a
+    point with no finite distance gets node 0 and distance inf. For float64 input the labels equal ``Lattice.best_match``
     bitwise. Float32 input is promoted to float64 element by element; the
     result is exact for the promoted values but may differ from a float64
     version of the original data where two nodes are nearly tied.
@@ -31,6 +33,8 @@ nodes, default tile of 14,169 rows, Apple M1 Max): numba 2.2e6 points/s; JAX
 0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s (0 label disagreements). On
 a CPU-only machine the numba path is the faster one.
 """
+
+from __future__ import annotations
 
 import contextlib
 import functools

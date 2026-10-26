@@ -140,3 +140,10 @@ def test_pair_quality_from_counts_matches_compute_sq():
             assert got == float(sq)
     assert sce.pair_quality_from_counts(0, 5, 0) == 0.0
     assert sce.pair_quality_from_counts(5, 5, 5) == 0.0  # identical masks: Q = 0
+
+
+def test_load_labels_maps_out_of_range_ids_to_minus_one(tmp_path):
+    # ids that would wrap when narrowed to int32 must not become valid cluster ids
+    path = tmp_path / "labels.big.npy"
+    np.save(path, np.array([0, 2**32, -(2**32), 1, 1.5]))
+    assert sce._load_labels(str(path)).tolist() == [0, -1, -1, 1, -1]
