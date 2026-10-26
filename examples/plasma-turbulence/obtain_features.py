@@ -88,10 +88,12 @@ def get_normalization(var : str, conf : Configuration):
         norm = qe * n0
     if var == "dens":
         norm = n0
-    if var == "jz":
+    if var in ["jx", "jy", "jz"]:
         norm = qe * n0 * conf.cfl**2
     if var in ["bx", "by", "bz"]:
         norm = conf.binit
+    if var in ["ex", "ey", "ez"]:
+        norm = (me_per_qe * conf.cfl**2) / deltax / lenscale
     if var == "je":
         norm_E = (me_per_qe * conf.cfl**2) / deltax / lenscale
         norm_J = qe * n0 * conf.cfl**2

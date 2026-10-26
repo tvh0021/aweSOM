@@ -251,7 +251,7 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    from .som import Lattice
+    from aweSOM.som import Lattice
 
     args = parse_args()
 
@@ -270,7 +270,7 @@ if __name__ == "__main__":
     train = args.train
     batch = args.batch
     pretrained = args.pretrained
-    neurons_path = args.neurons_path
+    lattice_path = args.lattice_path
     threshold = args.threshold
 
     name_of_dataset = file_name.split("_")[2].split(".h5")[

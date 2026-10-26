@@ -82,14 +82,17 @@ def compute_SQ(mask: array_lib.ndarray, maskC: array_lib.ndarray):
     # U_area = array_lib.sum(U) / (nx * ny * nz)
 
     # --------------------------------------------------
+    # an empty mask has no overlap with anything; return before dividing by
+    # the (possibly zero) union size
+    if array_lib.max(mask) == 0 or array_lib.max(maskC) == 0:
+        return 0.0, array_lib.zeros(mask.shape)
+
+    # --------------------------------------------------
     # Intersection signal strength of two masked arrays, S
     S = array_lib.sum(I) / array_lib.sum(U)
 
     # --------------------------------------------------
     # Union quality of two masked arrays, Q
-    if array_lib.max(mask) == 0 or array_lib.max(maskC) == 0:
-        return 0.0, array_lib.zeros(mask.shape)
-
     Q = array_lib.sum(U) / (array_lib.sum(mask) + array_lib.sum(maskC)) - array_lib.sum(
         I
     ) / (array_lib.sum(mask) + array_lib.sum(maskC))
@@ -137,7 +140,7 @@ def loop_over_all_clusters(
         print("Run : ", run, flush=True)
 
         with open(subfolder + "/multimap_mappings.txt", "a") as f:
-            f.write("{}\n".format(run.strip(".npy")))
+            f.write("{}\n".format(run.removesuffix(".npy")))
 
         # nx x ny x nz size maps
         # nz,ny,nx = array_lib.cbrt(clusters_1d.shape[0]).astype(int), array_lib.cbrt(clusters_1d.shape[0]).astype(int), array_lib.cbrt(clusters_1d.shape[0]).astype(int)
@@ -188,7 +191,7 @@ def loop_over_all_clusters(
             # save total mask to file
             # print("Saving total mask to file", flush=True)
             array_lib.save(
-                subfolder + "/mask-{}-id{}.npy".format(run.strip(".npy"), cid),
+                subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid),
                 total_mask,
             )
 

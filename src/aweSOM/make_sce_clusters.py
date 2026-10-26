@@ -215,7 +215,7 @@ def combine_separated_clusters(
                 print("Instance", i, flush=True)
             this_cluster_signal_map[i] = np.reshape(
                 np.load(file_path + f"/mask-{instance[2]}-id{instance[1]}.npy"),
-                newshape=dims,
+                dims,
             )
 
         all_signals_map[cluster] = np.sum(this_cluster_signal_map, axis=0)

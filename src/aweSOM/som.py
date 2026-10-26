@@ -120,17 +120,24 @@ class Lattice:
             self.this_batch_train
         )  # only train for this number of steps; useful for restarting training
 
+        # this ensures that the same random order is not repeated if the training is restarted
+        if self.epoch > 1:
+            self.seed += 1
+        # one seeded generator drives the initial lattice and the sample order,
+        # so a run is reproducible for a given (seed, data) pair
+        rng = np.random.default_rng(self.seed)
+
         if self.restart_lattice is not None:
-            lattice = self.restart_lattice
+            lattice = np.array(self.restart_lattice, dtype=np.float64, copy=True)
         else:
             if self.init == "uniform":
                 # vector with small init values for all nodes
                 # NOTE: each row represents a node, each column represents a feature.
-                lattice = np.random.uniform(0.0, 1.0, (number_nodes, number_features))
+                lattice = rng.uniform(0.0, 1.0, (number_nodes, number_features))
             else:
                 # sample a random subset of the data to initialize the lattice
-                ix = np.random.randint(0, number_input_vectors - 1, number_nodes)
-                lattice = self.data_array[ix, :]
+                ix = rng.integers(0, number_input_vectors, number_nodes)
+                lattice = self.data_array[ix, :].astype(np.float64, copy=True)
 
             self.lattice = lattice.copy()
             self.lattice_history.append(lattice)  # save the initial lattice
@@ -138,8 +145,8 @@ class Lattice:
 
         alpha = self.alpha  # starting learning rate
         if self.alpha_type == 1:
-            alpha_freq = (
-                self.train // 25
+            alpha_freq = max(
+                1, self.train // 25
             )  # how often to decay the learning rate; at 24 steps, alpha_f ~ 1e-3 alpha_0
         else:
             alpha_freq = 1
@@ -154,8 +161,8 @@ class Lattice:
         nsize_step = (
             this_batch_train // 4
         )  # for the third quarter of the training steps, shrink the neighborhood
-        nsize_freq = nsize_step // (
-            nsize_max - nsize_min
+        nsize_freq = max(
+            1, nsize_step // max(1, nsize_max - nsize_min)
         )  # how often to shrink the neighborhood
 
         # if self.epoch < 2 * nsize_step:
@@ -183,13 +190,7 @@ class Lattice:
         # x-y coordinate of ith node: m2Ds[i,] = c(xi, yi)
         m2Ds = self.coordinate(m, self.xdim)
 
-        # this ensures that the same random order is not repeated if the training is restarted
-        if self.epoch > 1:
-            self.seed += 1
-            np.random.seed(self.seed)
-
         # Added 06/17/2024: use random number generator, shuffle the data and take the first train samples
-        rng = np.random.default_rng()
         indices = np.arange(number_input_vectors)
         rng.shuffle(indices)
 
@@ -208,7 +209,7 @@ class Lattice:
 
         print("Begin training", flush=True)
         while True:
-            if epoch % int(self.train // 10) == 0:
+            if epoch % max(1, self.train // 10) == 0:
                 print("Evaluating epoch = ", epoch, flush=True)
 
             # if (epoch % loss_freq == 0) & (epoch != 0):
@@ -885,6 +886,10 @@ class Lattice:
                 total_cost = np.sum(umat_dist)
                 # total_cost /= num_sample
                 cost_between_centroids.append([a, b, total_cost])
+
+        if len(cost_between_centroids) == 0:
+            print("Number of unique centroids:  1", flush=True)
+            return centroids
 
         # cost_between_centroids.sort(key=lambda x: x[2])
         sorted_cost = sorted(
