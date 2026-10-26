@@ -199,6 +199,10 @@ html = f"""<!doctype html>
         <img src="{img('fig_slices.png')}" alt="Three 128 by 128 slices at z equals 64 showing coloured non-background cluster labels with red and blue contours of parallel current at plus and minus 1.5 sigma.">
         <figcaption>Figure 2. Non-background labels in the z = 64 slice of the 128<sup>3</sup> cube for the same three maps; colours are cluster indices (not matched across panels), red and blue contours mark j_par = ±1.5σ. All three pick out the elongated sheets; the batch map's large green cluster is its negative-e_par cluster (8.7 % of the volume), which has no counterpart in the fiducial partition.</figcaption>
       </figure>
+      <figure id="fig-paper-slice" class="wide">
+        <img src="{img('fig_paper_slice_z27.png')}" alt="Four panels of the xy-slice at z equals 90 c over omega p: standardized parallel current in red-blue, then the fiducial, online and batch cluster maps coloured with the paper's palette, with dashed circles at the single and double current sheet named in the paper.">
+        <figcaption>Figure 2b. The slice used in Figure 1 of the paper: z = 90 c/ω<sub>p</sub>, slice index 27 of the 128<sup>3</sup> cube (Δx = 10/3 c/ω<sub>p</sub>, as in <code>plasma.ipynb</code>). Top left: standardized j_par with the paper's ±2 j<sub>rms</sub> contours (red negative, blue positive). Top right: fiducial clusters in the paper's Figure 1c colours (0 blue, 1 orange, 2 green, 3 red, 4 purple, 5 brown, 6 white). Bottom: the two retrains, each cluster recoloured to the fiducial cluster whose mean feature vector is nearest (mapping in the panel titles). Dashed circles mark the single sheet at (x, y) = (90, 400) and the double sheet at (350, 150) c/ω<sub>p</sub> named in Section 4.1. The online retrain labels the double sheet almost entirely as cluster 4 and finds no j_asym layers; the batch retrain recovers the layered 0/1/2 structure there but scatters more isolated cells. Two assignments are close calls: online c1 → 4 (distance 1.12 versus 1.32 to cluster 2) and batch c4 → 0 (1.07 versus 1.17 to cluster 2).</figcaption>
+      </figure>
       <figure id="fig-fractions" class="wide">
         <img src="{img('fig_fractions.png')}" alt="Three bar charts of per-cluster volume fraction on a log scale, coloured by the sign of mean parallel current, with the background bar in grey.">
         <figcaption>Figure 3. Volume fraction per cluster (log scale). Red: mean j_par above 0.3σ; blue: below −0.3σ; teal: |j_par| small but not background; grey: background.</figcaption>
@@ -254,7 +258,7 @@ html = f"""<!doctype html>
       <ul>
         <li><code>planning/runs/plasma-2026-10-26/train_plasma.py</code>: loads the pickle, trains online and batch, writes <code>{{tag}}_lattice/umat/clusters/labels/dist.npy</code>, <code>results.json</code>, <code>batch_info.json</code>.</li>
         <li><code>analyze_plasma.py</code>: re-clusters all three maps at 0.25, writes <code>summary_thr025.json</code>, <code>agreement_thr025.json</code> and the three figures above.</li>
-        <li><code>seed_sweep.py</code> → <code>seed_sweep.json</code>.</li>
+        <li><code>seed_sweep.py</code> → <code>seed_sweep.json</code>; <code>paper_slice.py</code> → <code>fig_paper_slice_z27.png</code> (the paper's z = 90 slice).</li>
         <li><code>sce_full_cpu/</code>, <code>sce_full_metal/</code>, <code>sce_time_cpu/</code>, <code>sce_time_metal/</code>: SCE outputs; <code>sce_timing.txt</code>: idle-machine wall times; <code>sce_*.log</code>.</li>
         <li><code>make_report.py</code>: builds this page from those files.</li>
       </ul>
