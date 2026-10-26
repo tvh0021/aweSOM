@@ -1611,6 +1611,147 @@ def _som_train_steps(
 ):
     """Online SOM steps k_start..k_stop-1, updating lattice in place.
 
+    Bitwise equal to _som_train_steps_aos (and so to the NumPy form
+    s = np.sum((lattice - x)**2, axis=1), c = np.argmin(s),
+    lattice -= (lattice - x) * Gamma(c, ...)), but faster:
+
+    - The lattice is held transposed, [F, nodes], so the distance pass runs
+      over contiguous nodes and vectorizes. Each node's sum is still formed in
+      NumPy's order (sequential from -0.0 for F < 8; NumPy's 8-accumulator
+      pairwise form for 8 <= F < 16).
+    - The Gaussian weight depends only on the integer Chebyshev distance
+      0..nsize, so it is evaluated nsize + 1 times per step (same expression,
+      same inputs) instead of once per node in the window.
+    """
+    n_nodes, n_features = lattice.shape
+    if n_features >= 16 or k_stop <= k_start:
+        _som_train_steps_aos(lattice, xk, xdim, alphas, nsizes, k_start, k_stop)
+        return
+    ydim = n_nodes // xdim
+    lt = np.ascontiguousarray(lattice.T)
+    s = np.empty(n_nodes)
+    q = np.empty((n_features, n_nodes))
+    nmax = 0
+    for k in range(k_start, k_stop):
+        nmax = max(nmax, nsizes[k])
+    table = np.empty(nmax + 1)
+    wrow = np.empty(xdim)
+    for k in range(k_start, k_stop):
+        # squared distance between the input vector and every node
+        if n_features < 8:
+            for i in range(n_nodes):
+                s[i] = -0.0
+            for f in range(n_features):
+                xf = xk[k, f]
+                row = lt[f]
+                for i in range(n_nodes):
+                    diff = row[i] - xf
+                    s[i] += diff * diff
+        else:
+            for f in range(n_features):
+                xf = xk[k, f]
+                row = lt[f]
+                qf = q[f]
+                for i in range(n_nodes):
+                    diff = row[i] - xf
+                    qf[i] = diff * diff
+            for i in range(n_nodes):
+                s[i] = ((q[0, i] + q[1, i]) + (q[2, i] + q[3, i])) + (
+                    (q[4, i] + q[5, i]) + (q[6, i] + q[7, i])
+                )
+            for f in range(8, n_features):
+                qf = q[f]
+                for i in range(n_nodes):
+                    s[i] += qf[i]
+
+        c = _first_argmin(s)
+
+        # update step over the (2 nsize + 1)^2 window around the BMU, clipped to the map
+        alpha = alphas[k]
+        nsize = nsizes[k]
+        any_zero = False
+        for d in range(nsize + 1):
+            table[d] = _neighborhood_weight(float(d), alpha, nsize)
+            if table[d] == 0.0:
+                any_zero = True
+        cx = c % xdim
+        cy = c // xdim
+        x0 = max(0, cx - nsize)
+        x1 = min(xdim, cx + nsize + 1)
+        for y in range(max(0, cy - nsize), min(ydim, cy + nsize + 1)):
+            dy = abs(y - cy)
+            base = y * xdim
+            for x in range(x0, x1):
+                wrow[x] = table[max(abs(x - cx), dy)]
+            for f in range(n_features):
+                xf = xk[k, f]
+                row = lt[f]
+                if any_zero:  # nodes with zero weight are skipped, as in the reference
+                    for x in range(x0, x1):
+                        g = wrow[x]
+                        if g != 0.0:
+                            diff = row[x + base] - xf
+                            row[x + base] -= diff * g
+                else:
+                    for x in range(x0, x1):
+                        diff = row[x + base] - xf
+                        row[x + base] -= diff * wrow[x]
+    lattice[:, :] = lt.T
+
+
+@njit()
+def _first_argmin(s: np.ndarray) -> int:
+    """np.argmin(s) for a 1-D float64 array: the first NaN if there is one, else the
+    first index of the minimum. Eight independent running minima, then a scan for the
+    first index holding the minimum, so the result equals the sequential loop."""
+    n = s.size
+    m0 = m1 = m2 = m3 = m4 = m5 = m6 = m7 = np.inf
+    nan = False
+    i = 0
+    while i + 8 <= n:
+        a0 = s[i]; a1 = s[i + 1]; a2 = s[i + 2]; a3 = s[i + 3]
+        a4 = s[i + 4]; a5 = s[i + 5]; a6 = s[i + 6]; a7 = s[i + 7]
+        m0 = a0 if a0 < m0 else m0
+        m1 = a1 if a1 < m1 else m1
+        m2 = a2 if a2 < m2 else m2
+        m3 = a3 if a3 < m3 else m3
+        m4 = a4 if a4 < m4 else m4
+        m5 = a5 if a5 < m5 else m5
+        m6 = a6 if a6 < m6 else m6
+        m7 = a7 if a7 < m7 else m7
+        nan |= (a0 != a0) | (a1 != a1) | (a2 != a2) | (a3 != a3) | (a4 != a4) | (a5 != a5) | (a6 != a6) | (a7 != a7)
+        i += 8
+    best = min(min(min(m0, m1), min(m2, m3)), min(min(m4, m5), min(m6, m7)))
+    while i < n:
+        a = s[i]
+        if a < best:
+            best = a
+        nan |= a != a
+        i += 1
+    if nan:
+        for j in range(n):
+            if np.isnan(s[j]):
+                return j
+    for j in range(n):
+        if s[j] == best:
+            return j
+    return 0
+
+
+@njit()
+def _som_train_steps_aos(
+    lattice: np.ndarray,
+    xk: np.ndarray,
+    xdim: int,
+    alphas: np.ndarray,
+    nsizes: np.ndarray,
+    k_start: int,
+    k_stop: int,
+):
+    """Online SOM steps k_start..k_stop-1 on the [nodes, F] layout, updating lattice in place.
+
+    Reference form of _som_train_steps, used for F >= 16.
+
     Each step uses the same floating-point operations, in the same order, as the
     NumPy form: s = np.sum((lattice - x)**2, axis=1), c = np.argmin(s),
     lattice -= (lattice - x) * Gamma(c, ...). Only nodes within the neighborhood
