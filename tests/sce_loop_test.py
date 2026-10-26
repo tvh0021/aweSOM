@@ -176,3 +176,14 @@ def test_combine_from_labels_matches_mask_files_bitwise(tmp_path, monkeypatch, d
     got = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, ".")
     assert got.dtype == ref.dtype and got.shape == ref.shape
     assert got.tobytes() == ref.tobytes()
+
+
+@pytest.mark.parametrize("cache_bytes", [0, 1 << 28])
+def test_loop_paths_match_reference(tmp_path, monkeypatch, cache_bytes):
+    """Both the per-pair path (tables too big to keep) and the all-pairs batched path are bitwise exact."""
+    monkeypatch.setattr(sce, "_TABLE_CACHE_BYTES", cache_bytes)
+    monkeypatch.chdir(tmp_path)
+    rng = np.random.default_rng(3)
+    dims = (11, 13, 5)
+    files = _write_runs(str(tmp_path), rng, dims, [(4, np.uint8, None), (6, np.int32, 1), (5, np.int64, None), (3, np.int16, None)])
+    _assert_same(_run_both(tmp_path, files, dims))

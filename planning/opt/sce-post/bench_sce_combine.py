@@ -31,6 +31,9 @@ dims = [n, n, n]
 
 def ranges_for(mapping):
     gsum, map_list = msc.get_gsum_values(mapping)
+    if len(gsum) // 10 <= 4:  # too few clusters for the CLI's Savitzky-Golay window
+        edges = np.linspace(0, len(gsum), 8).astype(int)
+        return map_list, [[int(a), int(b)] for a, b in zip(edges[:-1], edges[1:])]
     sm = savgol_filter(gsum, len(gsum) // 10, 4, deriv=0)
     d = savgol_filter(sm, len(gsum) // 10, 4, deriv=1) / sm
     with contextlib.redirect_stdout(io.StringIO()):
