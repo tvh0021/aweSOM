@@ -36,6 +36,41 @@ static double median(std::vector<double> v) {
   return v[v.size() / 2];
 }
 
+// GPU divergence proxy: in SIMT a warp of 32 neighbouring cells executes the union of
+// the blocks its threads visit. Returns {mean blocks per point, mean union per warp}.
+template <int FF>
+static void warp_union(const awesom_fast::BlockTable& t, const double* X, std::size_t n, double& per_pt, double& per_warp) {
+  long long vis = 0, uni = 0, warps = 0;
+  std::vector<char> mark(t.nb);
+  for (std::size_t w0 = 0; w0 + 32 <= n; w0 += 32) {
+    std::fill(mark.begin(), mark.end(), 0);
+    for (std::size_t p = w0; p < w0 + 32; ++p) {
+      const double* x = X + p * FF;
+      int bmin = 0;
+      double lbmin = std::numeric_limits<double>::infinity();
+      for (int b = 0; b < t.nb; ++b) {
+        double l = t.block_lb<FF>(b, x);
+        if (l < lbmin) { lbmin = l; bmin = b; }
+      }
+      double best = std::numeric_limits<double>::infinity();
+      int bidx = INT_MAX;
+      t.eval_block<FF>(bmin, x, best, bidx);
+      mark[bmin] = 1;
+      ++vis;
+      for (int b = 0; b < t.nb; ++b) {
+        if (b == bmin || t.block_lb<FF>(b, x) > best) continue;
+        t.eval_block<FF>(b, x, best, bidx);
+        mark[b] = 1;
+        ++vis;
+      }
+    }
+    for (char c : mark) uni += c;
+    ++warps;
+  }
+  per_pt = static_cast<double>(vis) / (32.0 * warps);
+  per_warp = static_cast<double>(uni) / warps;
+}
+
 int main(int argc, char** argv) {
   if (argc < 10) {
     std::fprintf(stderr, "usage: W X ref_idx ref_d2 F N_single reps threads N_par\n");
@@ -63,9 +98,9 @@ int main(int argc, char** argv) {
   awesom_fast::SoATable soa(W.data(), m.nodes, F);
   awesom_fast::BlockTable srt(W.data(), m.nodes, F);
 
-  // kernels: 0 ref, 1 soa, 2 block bound, 3 block bound + warm (previous point's BMU)
-  const char* names[] = {"ref_aos_scalar", "soa_simd", "block_bound", "block_bound_warm"};
-  const int K = 4;
+  // kernels: 0 ref, 1 soa, 2 block bound, 3 block bound without bound array (GPU form), 4 two-level (previous point's BMU)
+  const char* names[] = {"ref_aos_scalar", "soa_simd", "block_bound", "block_bound_recompute", "block_bound_2level"};
+  const int K = 5;
   auto run = [&](int k, std::size_t n, int* idx, double* d2, bool parallel) {
     const long long nn = static_cast<long long>(n);
     if (k == 0) {
@@ -77,19 +112,12 @@ int main(int argc, char** argv) {
     } else if (k == 2) {
 #pragma omp parallel for schedule(static) if (parallel)
       for (long long p = 0; p < nn; ++p) idx[p] = srt.best_match(&X[p * F], d2[p], -1);
+    } else if (k == 3) {
+#pragma omp parallel for schedule(static) if (parallel)
+      for (long long p = 0; p < nn; ++p) idx[p] = srt.best_match_recompute(&X[p * F], d2[p]);
     } else {
-      // warm start: each thread walks a contiguous range, guess = previous row's node
-#pragma omp parallel if (parallel)
-      {
-        int nt = 1, t = 0;
-#ifdef _OPENMP
-        nt = omp_get_num_threads();
-        t = omp_get_thread_num();
-#endif
-        long long lo = nn * t / nt, hi = nn * (t + 1) / nt;
-        int guess = -1;
-        for (long long p = lo; p < hi; ++p) guess = idx[p] = srt.best_match(&X[p * F], d2[p], guess);
-      }
+#pragma omp parallel for schedule(static) if (parallel)
+      for (long long p = 0; p < nn; ++p) idx[p] = srt.best_match2(&X[p * F], d2[p]);
     }
   };
 
@@ -124,6 +152,10 @@ int main(int argc, char** argv) {
   // pruning statistics of the sorted kernel (nodes evaluated per point)
   double visited_cold = srt.mean_visited(X.data(), Ns, false);
   double visited_warm = srt.mean_visited(X.data(), Ns, true);
+  double wp = 0, ww = 0;
+  if (F == 4) warp_union<4>(srt, X.data(), Ns, wp, ww);
+  if (F == 6) warp_union<6>(srt, X.data(), Ns, wp, ww);
+  if (F == 10) warp_union<10>(srt, X.data(), Ns, wp, ww);
 
   std::printf("{\"N\": %zu, \"N_single\": %zu, \"N_parallel\": %zu, \"F\": %d, \"nodes\": %d, \"threads\": %d, \"reps\": %d",
               N, Ns, Np, F, m.nodes, threads, reps);
@@ -133,7 +165,7 @@ int main(int argc, char** argv) {
                 names[k], Ns / median(t1[k]), Np / median(tp[k]), median(t1[0]) / median(t1[k]),
                 median(tp[0]) / median(tp[k]), mism_idx[k], mism_d2[k]);
   }
-  std::printf(", \"n_blocks\": %d, \"mean_blocks_visited_cold\": %.1f, \"mean_blocks_visited_warm\": %.1f}\n",
-              srt.nb, visited_cold, visited_warm);
+  std::printf(", \"n_blocks\": %d, \"mean_blocks_visited_cold\": %.1f, \"mean_blocks_visited_warm\": %.1f, \"warp32_blocks_per_point\": %.2f, \"warp32_union_blocks\": %.2f}\n",
+              srt.nb, visited_cold, visited_warm, wp, ww);
   return 0;
 }

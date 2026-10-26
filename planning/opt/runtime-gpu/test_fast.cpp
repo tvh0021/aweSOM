@@ -12,7 +12,7 @@
 
 int main() {
   std::mt19937_64 rng(20261026);
-  long long checked = 0, ties = 0, bad_soa = 0, bad_block = 0, bad_block_warm = 0;
+  long long checked = 0, ties = 0, bad_soa = 0, bad_block = 0, bad_block_warm = 0, bad_rec = 0, bad_2l = 0;
   const double inf = std::numeric_limits<double>::infinity(), nan = std::numeric_limits<double>::quiet_NaN();
   for (int trial = 0; trial < 60; ++trial) {
     int F = 2 + trial % 9;  // 2..10
@@ -44,6 +44,12 @@ int main() {
       int i_blk = blk.best_match(x.data(), d_blk);
       int i_wrm = blk.best_match(x.data(), d_wrm, guess);
       guess = i_wrm;
+      double d_rec;
+      int i_rec = blk.best_match_recompute(x.data(), d_rec);
+      double d_2l;
+      int i_2l = blk.best_match2(x.data(), d_2l);
+      bad_2l += i_2l != i_ref || std::memcmp(&d_2l, &d_ref, 8) != 0;
+      bad_rec += i_rec != i_ref || std::memcmp(&d_rec, &d_ref, 8) != 0;
       // count points whose minimum is attained by more than one node
       int nmin = 0;
       for (int i = 0; i < nodes; ++i) {
@@ -62,7 +68,7 @@ int main() {
     }
   }
   std::printf("{\"points\": %lld, \"points_with_exact_ties\": %lld, \"mismatch_soa\": %lld, "
-              "\"mismatch_block\": %lld, \"mismatch_block_warm\": %lld}\n",
-              checked, ties, bad_soa, bad_block, bad_block_warm);
-  return (bad_soa || bad_block || bad_block_warm) ? 1 : 0;
+              "\"mismatch_block\": %lld, \"mismatch_block_warm\": %lld, \"mismatch_block_recompute\": %lld, \"mismatch_block_2level\": %lld}\n",
+              checked, ties, bad_soa, bad_block, bad_block_warm, bad_rec, bad_2l);
+  return (bad_soa || bad_block || bad_block_warm || bad_rec || bad_2l) ? 1 : 0;
 }

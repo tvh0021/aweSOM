@@ -226,6 +226,11 @@ struct BlockTable {
   std::vector<int> ib;      // b * B + j -> original index (INT_MAX for padding)
   std::vector<double> lo, hi;  // b * F + f
   std::vector<double> loT, hiT;  // f * nb + b (for the vectorised bound)
+  // two-level variant: super-blocks of S consecutive leaves (the bisection emits
+  // leaves depth first, so consecutive leaves are close in weight space)
+  static constexpr int S = 8;
+  int ns = 0;
+  std::vector<double> slo, shi;  // s * F + f
   std::vector<double> w0;
   bool finite_weights = true;
 
@@ -254,6 +259,14 @@ struct BlockTable {
         }
       }
     }
+    ns = (nb + S - 1) / S;
+    slo.assign(static_cast<std::size_t>(ns) * F, std::numeric_limits<double>::infinity());
+    shi.assign(static_cast<std::size_t>(ns) * F, -std::numeric_limits<double>::infinity());
+    for (int b = 0; b < nb; ++b)
+      for (int f = 0; f < F; ++f) {
+        slo[(b / S) * F + f] = std::min(slo[(b / S) * F + f], lo[b * F + f]);
+        shi[(b / S) * F + f] = std::max(shi[(b / S) * F + f], hi[b * F + f]);
+      }
     loT.resize(lo.size());
     hiT.resize(hi.size());
     for (int b = 0; b < nb; ++b)
@@ -383,6 +396,134 @@ struct BlockTable {
     if (bidx == INT_MAX || !(best < std::numeric_limits<double>::infinity())) bidx = 0;
     dist2 = best;
     return bidx;
+  }
+
+  // GPU-style variant: no per-point bound array (registers only). Pass 1 finds the
+  // block with the smallest bound, pass 2 recomputes each bound and visits the block
+  // if bound <= best. Same exactness argument as search().
+  template <int FF>
+  inline double block_lb(int b, const double* x) const {
+    double acc = 0.0;
+    for (int f = 0; f < FF; ++f) {
+      double a = lo[b * FF + f] - x[f], c = x[f] - hi[b * FF + f];
+      a = a > 0.0 ? a : 0.0;
+      c = c > 0.0 ? c : 0.0;
+      double t = a + c;
+      acc += t * t;
+    }
+    return acc;
+  }
+
+  template <int FF>
+  int search_recompute(const double* x, double& dist2) const {
+    int bmin = 0;
+    double lbmin = std::numeric_limits<double>::infinity();
+    for (int b = 0; b < nb; ++b) {
+      double l = block_lb<FF>(b, x);
+      if (l < lbmin) {
+        lbmin = l;
+        bmin = b;
+      }
+    }
+    double best = std::numeric_limits<double>::infinity();
+    int bidx = INT_MAX;
+    eval_block<FF>(bmin, x, best, bidx);
+    for (int b = 0; b < nb; ++b) {
+      if (b == bmin || block_lb<FF>(b, x) > best) continue;
+      eval_block<FF>(b, x, best, bidx);
+    }
+    if (bidx == INT_MAX || !(best < std::numeric_limits<double>::infinity())) bidx = 0;
+    dist2 = best;
+    return bidx;
+  }
+
+  int best_match_recompute(const double* x, double& dist2) const {
+    bool fin = finite_weights;
+    for (int f = 0; f < F; ++f) fin = fin && std::isfinite(x[f]);
+    if (!fin) return full_scan(x, dist2);
+    switch (F) {
+      case 2: return search_recompute<2>(x, dist2);
+      case 3: return search_recompute<3>(x, dist2);
+      case 4: return search_recompute<4>(x, dist2);
+      case 5: return search_recompute<5>(x, dist2);
+      case 6: return search_recompute<6>(x, dist2);
+      case 7: return search_recompute<7>(x, dist2);
+      case 8: return search_recompute<8>(x, dist2);
+      case 9: return search_recompute<9>(x, dist2);
+      case 10: return search_recompute<10>(x, dist2);
+      default: return full_scan(x, dist2);
+    }
+  }
+
+  template <int FF>
+  static inline double box_lb(const double* l, const double* h, const double* x) {
+    double acc = 0.0;
+    for (int f = 0; f < FF; ++f) {
+      double a = l[f] - x[f], c = x[f] - h[f];
+      a = a > 0.0 ? a : 0.0;
+      c = c > 0.0 ? c : 0.0;
+      double t = a + c;
+      acc += t * t;
+    }
+    return acc;
+  }
+
+  // Two-level search: super-block bound, then block bound, then nodes. The super box
+  // contains its blocks' boxes, so its bound is <= theirs <= every node's acc.
+  template <int FF>
+  int search2(const double* x, double& dist2) const {
+    constexpr int kMaxSuper = 512;
+    double slb[kMaxSuper];
+    int smin = 0;
+    double smv = std::numeric_limits<double>::infinity();
+    for (int q = 0; q < ns; ++q) {
+      slb[q] = box_lb<FF>(&slo[q * FF], &shi[q * FF], x);
+      if (slb[q] < smv) {
+        smv = slb[q];
+        smin = q;
+      }
+    }
+    double best = std::numeric_limits<double>::infinity();
+    int bidx = INT_MAX;
+    {  // seed with the best-bounded block of the best-bounded super-block
+      int b0 = smin * S, b1 = std::min(nb, b0 + S), bm = b0;
+      double lm = std::numeric_limits<double>::infinity();
+      for (int b = b0; b < b1; ++b) {
+        double l = box_lb<FF>(&lo[b * FF], &hi[b * FF], x);
+        if (l < lm) {
+          lm = l;
+          bm = b;
+        }
+      }
+      eval_block<FF>(bm, x, best, bidx);
+    }
+    for (int q = 0; q < ns; ++q) {
+      if (slb[q] > best) continue;
+      int b0 = q * S, b1 = std::min(nb, b0 + S);
+      for (int b = b0; b < b1; ++b)
+        if (!(box_lb<FF>(&lo[b * FF], &hi[b * FF], x) > best)) eval_block<FF>(b, x, best, bidx);
+    }
+    if (bidx == INT_MAX || !(best < std::numeric_limits<double>::infinity())) bidx = 0;
+    dist2 = best;
+    return bidx;
+  }
+
+  int best_match2(const double* x, double& dist2) const {
+    bool fin = finite_weights;
+    for (int f = 0; f < F; ++f) fin = fin && std::isfinite(x[f]);
+    if (!fin || ns > 512) return full_scan(x, dist2);
+    switch (F) {
+      case 2: return search2<2>(x, dist2);
+      case 3: return search2<3>(x, dist2);
+      case 4: return search2<4>(x, dist2);
+      case 5: return search2<5>(x, dist2);
+      case 6: return search2<6>(x, dist2);
+      case 7: return search2<7>(x, dist2);
+      case 8: return search2<8>(x, dist2);
+      case 9: return search2<9>(x, dist2);
+      case 10: return search2<10>(x, dist2);
+      default: return full_scan(x, dist2);
+    }
   }
 
   int best_match(const double* x, double& dist2, int guess = -1, long long* visited = nullptr) const {
