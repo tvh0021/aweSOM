@@ -1,0 +1,14 @@
+{
+ "online": {
+  "jaccard_nonbackground": 0.41370474914646016,
+  "recall": 0.5755502813965128,
+  "precision": 0.5953390436083349,
+  "nonbg_frac": 0.15014219284057617
+ },
+ "batch": {
+  "jaccard_nonbackground": 0.35920098729557903,
+  "recall": 0.5192095720869397,
+  "precision": 0.5382269907603385,
+  "nonbg_frac": 0.14981698989868164
+ }
+}

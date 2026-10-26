@@ -1,0 +1,3 @@
+cpu wall_s=410.8
+metal wall_s=230.5
+DONE
