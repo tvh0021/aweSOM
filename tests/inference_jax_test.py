@@ -159,6 +159,12 @@ def test_argument_errors():
         best_match_nodes_jax(w, np.zeros((5, 3)), chunk=0)
     with pytest.raises(ValueError):
         predict(w, np.zeros(4), np.zeros((5, 3)), backend="cupy")
+    with pytest.raises(ValueError):
+        best_match_nodes_jax(w, np.zeros((5, 3)), devices=[])
+    with pytest.raises(ValueError):  # zero features are rejected on both backends
+        best_match_nodes_jax(np.zeros((2, 0)), np.zeros((3, 0)))
+    with pytest.raises(ValueError):
+        best_match_nodes(np.zeros((2, 0)), np.zeros((3, 0)))
 
 
 def test_empty_input():

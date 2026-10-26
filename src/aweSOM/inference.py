@@ -93,6 +93,8 @@ def _check_inputs(weights: np.ndarray, data: np.ndarray) -> tuple[np.ndarray, np
         )
     if weights.shape[0] == 0:
         raise ValueError("weights must contain at least one node")
+    if weights.shape[1] == 0:
+        raise ValueError("weights must contain at least one feature")
     if data.dtype not in (np.float64, np.float32):
         data = data.astype(np.float64)
     return weights, data
@@ -242,8 +244,13 @@ def best_match_nodes_jax(
       CUDA, ROCm; enabled through a scoped ``enable_x64``, the global JAX
       config is not changed). Labels and distances then equal
       :func:`best_match_nodes` bitwise, including float32 input, which is
-      promoted to float64 on the host. If a device has no float64 (Apple
-      Metal), a ``RuntimeWarning`` is issued and the float32 path is used.
+      promoted to float64 on the host, with two qualifications: XLA flushes
+      subnormal values to zero, so a squared distance below about 2e-308 is
+      0 on the device (such a near-tie can pick a different node than the
+      numba scan), and the guarantee holds for default XLA flags only
+      (``--xla_cpu_enable_fast_math=true`` lets XLA reassociate the sum).
+      If a device has no float64 (Apple Metal), a ``RuntimeWarning`` is
+      issued and the float32 path is used.
     * ``precision="float32"``: weights and points are rounded to float32 and
       the same direct arithmetic runs in float32. The relative rounding error
       of a distance is about (F + 2) * 6e-8, so a point whose two nearest
@@ -279,6 +286,8 @@ def best_match_nodes_jax(
         raise ValueError("chunk must be positive")
     chunk = min(chunk, max(1, n_points))
     devices = list(jax.local_devices() if devices is None else devices)
+    if not devices:
+        raise ValueError("devices must contain at least one JAX device")
 
     scope = _jax_float64_scope(devices) if precision == "highest" else None
     if precision == "highest" and scope is None:
