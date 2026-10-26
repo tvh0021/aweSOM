@@ -4,6 +4,8 @@
 ## with modifications by Trung Ha (2024) for aweSOM
 
 import sys
+from collections import Counter
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -12,6 +14,9 @@ from sklearn.metrics.pairwise import euclidean_distances
 
 from numba import njit, prange
 from scipy.ndimage import map_coordinates
+
+from .inference import DEFAULT_CHUNK, best_match_nodes
+from .inference import predict as _predict_nodes
 
 seed = 42
 np.random.seed(seed)
@@ -72,6 +77,7 @@ class Lattice:
         number_of_steps: int = -1,
         save_lattice: bool = False,
         restart_lattice: np.ndarray = None,
+        history: bool = True,
     ):
         """Train the Model with numba JIT acceleration.
 
@@ -82,11 +88,13 @@ class Lattice:
                 number_of_steps (int): Number of steps taken this batch, used for keeping track of training restarts. Default is self.train.
                 save_lattice (bool, optional): A flag that determines whether the node weights are saved to a file at the end of training. Defaults to False.
                 restart_lattice (np.ndarray, optional): Vectors for the weights of the nodes from past realizations. Defaults to None.
+                history (bool, optional): Keep lattice and U-matrix snapshots every save_frequency steps in lattice_history and umat_history. Set to False for large runs; the final lattice and U-matrix are still computed. Defaults to True.
 
         """
 
         self.restart_lattice = restart_lattice
         self.save_lattice = save_lattice
+        self.history = history
 
         self.data_array = data
         self.features_names = features_names
@@ -140,8 +148,11 @@ class Lattice:
                 lattice = self.data_array[ix, :].astype(np.float64, copy=True)
 
             self.lattice = lattice.copy()
-            self.lattice_history.append(lattice)  # save the initial lattice
-            self.umat_history.append(self.compute_umat())  # save the initial U-matrix
+            if self.history:
+                self.lattice_history.append(lattice)  # save the initial lattice
+                self.umat_history.append(
+                    self.compute_umat()
+                )  # save the initial U-matrix
 
         alpha = self.alpha  # starting learning rate
         if self.alpha_type == 1:
@@ -171,24 +182,12 @@ class Lattice:
         # 	nsize = nsize_min
         # else:
         # 	nsize = nsize_max - self.epoch // nsize_freq
-        nsize = (
-            nsize_max  # start with the largest neighborhood size at each training batch
-        )
-
         epoch = self.epoch  # counts the number of epochs per nsize_freq
         stop_epoch = epoch + this_batch_train
         print("starting epoch is: ", epoch, flush=True)
         print("stopping epoch is: ", stop_epoch, flush=True)
 
         print("Saving lattice every ", self.save_frequency, " epochs", flush=True)
-
-        # constants for the Gamma function
-        m = np.reshape(
-            list(range(number_nodes)), (number_nodes, 1)
-        )  # a vector with all node 1D addresses
-
-        # x-y coordinate of ith node: m2Ds[i,] = c(xi, yi)
-        m2Ds = self.coordinate(m, self.xdim)
 
         # Added 06/17/2024: use random number generator, shuffle the data and take the first train samples
         indices = np.arange(number_input_vectors)
@@ -207,14 +206,30 @@ class Lattice:
         # self.loss_history = np.zeros((self.train, number_features))
         # self.average_loss = np.zeros((self.train//loss_freq, number_features))
 
-        print("Begin training", flush=True)
-        while True:
-            if epoch % max(1, self.train // 10) == 0:
-                print("Evaluating epoch = ", epoch, flush=True)
+        # the per-step learning rate and neighborhood size; index k is the value used at
+        # step k, index this_batch_train is the value after the last step
+        alphas, nsizes, shrink_events, decay_events = _som_schedule(
+            this_batch_train,
+            self.epoch,
+            float(alpha),
+            self.alpha_type,
+            alpha_freq,
+            nsize_max,
+            nsize_min,
+            nsize_step,
+            nsize_freq,
+        )
+        xk = np.ascontiguousarray(xk, dtype=np.float64)
+        progress_freq = max(1, self.train // 10)
 
-            # if (epoch % loss_freq == 0) & (epoch != 0):
-            # 	this_average_loss = np.mean(self.loss_history[epoch-loss_freq:epoch], axis=0) # average loss over the last [loss_freq] epochs
-            # 	self.average_loss[epoch//loss_freq-1,:] = this_average_loss
+        print("Begin training", flush=True)
+        # the kernel runs the steps between two points where Python has work to do:
+        # a progress message or (with history) a lattice snapshot
+        k = 0
+        while True:
+            epoch = self.epoch + k
+            if epoch % progress_freq == 0:
+                print("Evaluating epoch = ", epoch, flush=True)
 
             # if training step has gone over the step limit, terminate
             if epoch >= stop_epoch:
@@ -230,62 +245,49 @@ class Lattice:
                     )
                 break
 
-                # get one random input vector
-            xk_m = xk[epoch - self.epoch, :]
+            k_stop = min(
+                this_batch_train, k + progress_freq - epoch % progress_freq
+            )  # stop before the next progress message
+            if self.history:  # stop after the next snapshot step
+                k_snapshot = k + (-epoch) % self.save_frequency
+                k_stop = min(k_stop, k_snapshot + 1)
 
-            # calculate the relative distance between input vector and nodes, take the closest node as the BMU
-            # momentum = diff * momentum_decay_rate # momentum-based gradient descent
-            diff = lattice - xk_m
-            squ = diff**2
-            s = np.sum(squ, axis=1)
-            c = np.argmin(s)
+            _som_train_steps(lattice, xk, self.xdim, alphas, nsizes, k, k_stop)
 
-            # self.loss_history[epoch,:] = np.sqrt(s[c])
-
-            # update step
-            gamma_m = np.outer(
-                self.Gamma(c, m2Ds, alpha, nsize), np.ones(number_features)
-            )
-            # lattice -= (diff + momentum) * gamma_m
-            lattice -= diff * gamma_m
-
-            # shrink the neighborhood size every [nsize_freq] epochs
-            if (
-                (epoch - self.epoch) > 2 * nsize_step
-                and (epoch - self.epoch) % nsize_freq == 0
-                and nsize > nsize_min
-            ):
-                nsize = (
-                    nsize_max - ((epoch - self.epoch) - 2 * nsize_step) // nsize_freq
-                )
-                print(
-                    f"Shrinking neighborhood size to {nsize} at epoch {epoch}",
-                    flush=True,
-                )
-
-            # decay the learning rate every [alpha_freq] epochs
-            if epoch % alpha_freq == 0 and self.alpha_type == 1 and epoch != 0:
-                alpha *= 0.75
-                print(f"Decaying learning rate to {alpha} at epoch {epoch}", flush=True)
+            for j in range(k, k_stop):
+                if shrink_events[j]:
+                    print(
+                        f"Shrinking neighborhood size to {nsizes[j + 1]} at epoch {self.epoch + j}",
+                        flush=True,
+                    )
+                if decay_events[j]:
+                    print(
+                        f"Decaying learning rate to {float(alphas[j + 1])} at epoch {self.epoch + j}",
+                        flush=True,
+                    )
 
             # save lattice sparingly
-            if epoch % self.save_frequency == 0:
+            if self.history and (self.epoch + k_stop - 1) % self.save_frequency == 0:
                 self.lattice = lattice.copy()
-                # print("Saving lattice at epoch ", epoch, flush=True)
                 self.lattice_history.append(self.lattice)
 
                 # compute the umatrix and save it
                 umat = self.compute_umat()
-                # np.save(f"umat_{epoch}_{self.xdim}{self.ydim}_{self.alpha}_{self.train}.npy", umat)
                 self.umat_history.append(umat)
 
-            epoch += 1
+            k = k_stop
         print("Training complete", flush=True)
 
         # update the learning rate, lattice, and Umatrix after training
-        self.alpha = alpha
-        self.umat = self.compute_umat()
-        self.lattice = lattice  # lattice takes the shape of [X*Y, F]
+        if decay_events.any():
+            self.alpha = float(alphas[this_batch_train])
+        if self.history:
+            # as before: the U-matrix comes from self.lattice, i.e. the last snapshot
+            self.umat = self.compute_umat()
+            self.lattice = lattice  # lattice takes the shape of [X*Y, F]
+        else:
+            self.lattice = lattice  # lattice takes the shape of [X*Y, F]
+            self.umat = self.compute_umat()
 
     @staticmethod
     @njit()
@@ -435,10 +437,34 @@ class Lattice:
         return cluster_id
 
     @staticmethod
-    @njit(parallel=True)
     def best_match(lattice: np.ndarray, obs: np.ndarray, full=False) -> np.ndarray:
         """
         Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node.
+
+        The single-best search delegates to ``aweSOM.inference.best_match_nodes``
+        (chunked, allocation-free, float64 reference arithmetic). It returns the
+        same node indices as the original kernel, which is kept as
+        ``_best_match_legacy`` for ``full=True`` and for tests.
+
+        Args:
+                lattice (np.ndarray): weight values of the lattice
+                obs (np.ndarray): observations (input vectors)
+                full (bool, optional): indicate whether to return first and second best match. Defaults to False.
+
+        Returns:
+                np.ndarray: float array of shape (n, 1) with the 1d index of the best-matched node for each observation, or (n, 2) with the two best if ``full``.
+        """
+
+        if full:
+            return Lattice._best_match_legacy(lattice, obs, True)
+        idx, _ = best_match_nodes(lattice, obs)
+        return idx.astype(np.float64).reshape(-1, 1)
+
+    @staticmethod
+    @njit(parallel=True)
+    def _best_match_legacy(lattice: np.ndarray, obs: np.ndarray, full=False) -> np.ndarray:
+        """
+        Original per-point kernel (allocates per observation). Kept for ``full=True`` and as the reference in tests.
 
         Args:
                 lattice (np.ndarray): weight values of the lattice
@@ -473,6 +499,82 @@ class Lattice:
                 print("i = ", i)
 
         return best_match_node
+
+    def predict(
+        self,
+        data: np.ndarray,
+        merge_cost: float = None,
+        chunk: int = DEFAULT_CHUNK,
+        return_distance: bool = False,
+    ):
+        """Assign cluster ids to new data already in the lattice's scaled space.
+
+        Uses the trained ``lattice`` and ``lattice_assigned_clusters``; if the
+        latter does not exist yet, ``assign_cluster_to_lattice`` is called with
+        ``merge_cost`` (0.0 if None). Equivalent to ``map_data_to_lattice`` +
+        ``assign_cluster_to_data`` without the two full-size intermediates.
+
+        Args:
+                data (np.ndarray): [N, F] float64 or float32 points in the same space as the training data.
+                merge_cost (float, optional): Merge threshold used only if the lattice has no cluster assignment yet.
+                chunk (int, optional): Points per kernel call. Defaults to 2**20.
+                return_distance (bool, optional): Also return the Euclidean BMU distance. Defaults to False.
+
+        Returns:
+                np.ndarray: int32 [N] cluster labels, plus float64 [N] distances if ``return_distance``.
+        """
+        clusters = getattr(self, "lattice_assigned_clusters", None)
+        if clusters is None:
+            clusters = self.assign_cluster_to_lattice(
+                merge_cost=0.0 if merge_cost is None else merge_cost
+            )
+        # clusters is indexed [x, y]; node index = x + y * xdim (Fortran order)
+        node_cluster = np.asarray(clusters).ravel(order="F").astype(np.int32)
+        return _predict_nodes(
+            self.lattice, node_cluster, data, chunk=chunk, return_distance=return_distance
+        )
+
+    def train_lattice_batch(
+        self,
+        data: np.ndarray,
+        features_names: list[str],
+        labels: np.ndarray = None,
+        epochs: int = 40,
+        **kwargs,
+    ):
+        """Train the lattice with the JAX batch map (``aweSOM.batch.train_batch``).
+
+        Data-parallel over every visible JAX device (GPUs, or virtual CPU
+        devices). The result is statistically, not bitwise, equivalent to
+        ``train_lattice``. Fills ``lattice``, ``umat``, ``epoch`` (= epochs) and
+        ``batch_info``. Requires JAX; raises ImportError otherwise.
+
+        Args:
+                data (np.ndarray): [N, F] training data (process-local rows in a multi-process run).
+                features_names (list[str]): A list of feature names.
+                labels (np.ndarray, optional): Ground-truth labels. Defaults to None.
+                epochs (int, optional): Number of batch epochs. Defaults to 40.
+                **kwargs: Passed to ``train_batch`` (r_max, r_min, chunk, seed, init, mesh, devices, precision, dtype, verbose, callback).
+
+        Returns:
+                dict: the ``info`` dictionary returned by ``train_batch``.
+        """
+        from .batch import train_batch
+
+        if self.xdim < 4 or self.ydim < 4:
+            sys.exit("build: map is too small.")
+
+        self.data_array = data
+        self.features_names = features_names
+        self.labels = labels
+        kwargs.setdefault("seed", self.seed)
+        kwargs.setdefault("init", self.init)
+        weights, info = train_batch(data, self.xdim, self.ydim, epochs=epochs, **kwargs)
+        self.lattice = np.asarray(weights, dtype=np.float64)
+        self.epoch = epochs
+        self.batch_info = info
+        self.umat = self.compute_umat()
+        return info
 
     @staticmethod
     @njit(parallel=True)
@@ -858,90 +960,83 @@ class Lattice:
         """
 
         heat = self.umat
+        heat_squared = heat**2
         centroids = naive_centroids.copy()
-        unique_centroids = self.get_unique_centroids(
-            centroids
-        )  # the nodes_count dictionary is also created here, so don't remove this line
 
-        # for each pair of centroids, compute the weighted distance between them via interpolating the umat
-        # if the distance is less than the threshold, combine the centroids
+        # The pairwise cost depends only on the U-matrix and the two (ordered) endpoints,
+        # so it is computed once per ordered pair and reused in later rounds. Each round
+        # merges the cheapest pair, then re-ranks the surviving centroids against the new
+        # largest cost; this loop is the non-recursive form of the original recursion.
+        cost_cache = {}
 
-        cost_between_centroids = []
+        while True:
+            # same centroid list, unique order and counts as get_unique_centroids, in
+            # linear rather than quadratic time; that method still sets self.nodes_count
+            # once the merging stops
+            centr_locs = [
+                (centroids["centroid_x"][ix, iy], centroids["centroid_y"][ix, iy])
+                for ix in range(self.xdim)
+                for iy in range(self.ydim)
+            ]
+            nodes_count = Counter(centr_locs)
+            unique_ids = list(set(centr_locs))
+            position_x = [x for x, y in unique_ids]
+            position_y = [y for x, y in unique_ids]
 
-        for i in range(len(unique_centroids["position_x"]) - 1):
-            for j in range(i + 1, len(unique_centroids["position_x"])):
-                a = [
-                    unique_centroids["position_x"][i],
-                    unique_centroids["position_y"][i],
-                ]
-                b = [
-                    unique_centroids["position_x"][j],
-                    unique_centroids["position_y"][j],
-                ]
-                num_sample = 5 * int(np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2))
-                x, y = np.linspace(a[0], b[0], num_sample), np.linspace(
-                    a[1], b[1], num_sample
-                )
-                umat_dist = map_coordinates(heat**2, np.vstack((x, y)))
-                total_cost = np.sum(umat_dist)
-                # total_cost /= num_sample
-                cost_between_centroids.append([a, b, total_cost])
+            # for each pair of centroids, compute the weighted distance between them via interpolating the umat
+            # if the distance is less than the threshold, combine the centroids
+            cost_between_centroids = []
 
-        if len(cost_between_centroids) == 0:
-            print("Number of unique centroids:  1", flush=True)
-            return centroids
+            for i in range(len(position_x) - 1):
+                for j in range(i + 1, len(position_x)):
+                    a = [position_x[i], position_y[i]]
+                    b = [position_x[j], position_y[j]]
+                    key = (a[0], a[1], b[0], b[1])
+                    total_cost = cost_cache.get(key)
+                    if total_cost is None:
+                        num_sample = 5 * int(
+                            np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+                        )
+                        x, y = np.linspace(a[0], b[0], num_sample), np.linspace(
+                            a[1], b[1], num_sample
+                        )
+                        umat_dist = map_coordinates(heat_squared, np.vstack((x, y)))
+                        total_cost = np.sum(umat_dist)
+                        cost_cache[key] = total_cost
+                    cost_between_centroids.append([a, b, total_cost])
 
-        # cost_between_centroids.sort(key=lambda x: x[2])
-        sorted_cost = sorted(
-            cost_between_centroids, key=lambda x: x[2]
-        )  # this ranks all pairwise cost in ascending order
-        # normalize the cost such that the largest cost at each step is always one
-        sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+            if len(cost_between_centroids) == 0:
+                self.get_unique_centroids(centroids)  # sets self.nodes_count
+                print("Number of unique centroids:  1", flush=True)
+                return centroids
 
-        # combine the centroids recursively until the threshold is reached
-        if sorted_cost[0][2] < threshold:
+            sorted_cost = sorted(
+                cost_between_centroids, key=lambda x: x[2]
+            )  # this ranks all pairwise cost in ascending order
+            # normalize the cost such that the largest cost at each step is always one
+            sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+
+            # stop once the cheapest remaining pair is above the threshold
+            if not sorted_cost[0][2] < threshold:
+                self.get_unique_centroids(centroids)  # sets self.nodes_count
+                print("Number of unique centroids: ", len(position_x), flush=True)
+                print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
+                return centroids
+
             centroid_a = tuple(sorted_cost[0][0])
             centroid_b = tuple(sorted_cost[0][1])
-            # heat_a = heat[centroid_a[0], centroid_a[1]]
-            # heat_b = heat[centroid_b[0], centroid_b[1]]
-            nodes_a = self.nodes_count[centroid_a]
-            nodes_b = self.nodes_count[centroid_b]
+            nodes_a = nodes_count[centroid_a]
+            nodes_b = nodes_count[centroid_b]
 
             print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
             print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
-            # print(f"Centroid A: {centroid_a}, Umatrix value: {heat_a}", flush=True)
-            # print(f"Centroid B: {centroid_b}, Umatrix value: {heat_b}", flush=True)
             print("Merging...", flush=True)
-
-            replace_a_with_b = False
 
             # this method takes the centroid with the larger number of nodes
             if nodes_a < nodes_b:
-                replace_a_with_b = True
-
-            # this method takes the centroid with the smaller U-matrix value
-            # if heat_a > heat_b:
-            #     replace_a_with_b = True
-
-            if replace_a_with_b:
                 centroids = self.replace_value(centroids, centroid_a, centroid_b)
             else:
                 centroids = self.replace_value(centroids, centroid_b, centroid_a)
-
-            # print("New centroids: \n", centroids, flush=True)
-            centroids = self.merge_similar_centroids(centroids, threshold)
-        else:
-            unique_centroids = self.get_unique_centroids(centroids)
-            # print("Centroids: \n", unique_centroids, flush=True)
-            print(
-                "Number of unique centroids: ",
-                len(unique_centroids["position_x"]),
-                flush=True,
-            )
-            print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
-            return centroids
-
-        return centroids
 
     def get_unique_centroids(self, centroids):
         """
@@ -1404,3 +1499,158 @@ class Lattice:
                     plt.text(ix + 1, iy + 1, l)
 
         plt.show()
+
+
+@njit()
+def _som_schedule(
+    n_steps: int,
+    start_epoch: int,
+    alpha: float,
+    alpha_type: int,
+    alpha_freq: int,
+    nsize_max: int,
+    nsize_min: int,
+    nsize_step: int,
+    nsize_freq: int,
+):
+    """Learning rate and neighborhood size for each step of one online training batch.
+
+    Returns:
+            tuple: alphas and nsizes (length n_steps + 1; entry k is used at step k, the
+            last entry is the state after training), and boolean arrays marking the steps
+            after which the neighborhood shrinks and the learning rate decays.
+    """
+    alphas = np.empty(n_steps + 1)
+    nsizes = np.empty(n_steps + 1, dtype=np.int64)
+    shrink_events = np.zeros(n_steps, dtype=np.bool_)
+    decay_events = np.zeros(n_steps, dtype=np.bool_)
+    nsize = nsize_max
+    for k in range(n_steps):
+        alphas[k] = alpha
+        nsizes[k] = nsize
+        epoch = start_epoch + k
+        # shrink the neighborhood size every [nsize_freq] epochs
+        if k > 2 * nsize_step and k % nsize_freq == 0 and nsize > nsize_min:
+            nsize = nsize_max - (k - 2 * nsize_step) // nsize_freq
+            shrink_events[k] = True
+        # decay the learning rate every [alpha_freq] epochs
+        if epoch % alpha_freq == 0 and alpha_type == 1 and epoch != 0:
+            alpha *= 0.75
+            decay_events[k] = True
+    alphas[n_steps] = alpha
+    nsizes[n_steps] = nsize
+    return alphas, nsizes, shrink_events, decay_events
+
+
+@njit()
+def _pairwise_sum(a: np.ndarray, start: int, n: int) -> float:
+    """Sum a[start:start + n] in the same order as NumPy's pairwise summation, so the
+    result is bitwise equal to np.sum over that slice."""
+    if n < 8:
+        res = -0.0
+        for i in range(start, start + n):
+            res += a[i]
+        return res
+    elif n <= 128:
+        r0 = a[start]
+        r1 = a[start + 1]
+        r2 = a[start + 2]
+        r3 = a[start + 3]
+        r4 = a[start + 4]
+        r5 = a[start + 5]
+        r6 = a[start + 6]
+        r7 = a[start + 7]
+        i = 8
+        while i < n - (n % 8):
+            r0 += a[start + i]
+            r1 += a[start + i + 1]
+            r2 += a[start + i + 2]
+            r3 += a[start + i + 3]
+            r4 += a[start + i + 4]
+            r5 += a[start + i + 5]
+            r6 += a[start + i + 6]
+            r7 += a[start + i + 7]
+            i += 8
+        res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+        while i < n:
+            res += a[start + i]
+            i += 1
+        return res
+    else:
+        n2 = n // 2
+        n2 -= n2 % 8
+        return _pairwise_sum(a, start, n2) + _pairwise_sum(a, start + n2, n - n2)
+
+
+@njit()
+def _neighborhood_weight(dist: float, alpha: float, nsize: int) -> float:
+    """Lattice.Gamma for one node at Chebyshev distance dist <= nsize from the BMU:
+    the same expression in the same order, so the value is bitwise equal."""
+    sigma = nsize / 3
+    return alpha * np.exp(-((dist) ** 2) / (2 * sigma**2))
+
+
+@njit()
+def _som_train_steps(
+    lattice: np.ndarray,
+    xk: np.ndarray,
+    xdim: int,
+    alphas: np.ndarray,
+    nsizes: np.ndarray,
+    k_start: int,
+    k_stop: int,
+):
+    """Online SOM steps k_start..k_stop-1, updating lattice in place.
+
+    Each step uses the same floating-point operations, in the same order, as the
+    NumPy form: s = np.sum((lattice - x)**2, axis=1), c = np.argmin(s),
+    lattice -= (lattice - x) * Gamma(c, ...). Only nodes within the neighborhood
+    (Chebyshev distance <= nsize, where Gamma is non-zero) are visited; the others
+    would have zero subtracted, which leaves them unchanged.
+    """
+    n_nodes, n_features = lattice.shape
+    ydim = n_nodes // xdim
+    s = np.empty(n_nodes)
+    squ = np.empty(n_features)
+    for k in range(k_start, k_stop):
+        # squared distance between the input vector and every node
+        for i in range(n_nodes):
+            if n_features < 8:
+                acc = -0.0
+                for f in range(n_features):
+                    diff = lattice[i, f] - xk[k, f]
+                    acc += diff * diff
+                s[i] = acc
+            else:
+                for f in range(n_features):
+                    diff = lattice[i, f] - xk[k, f]
+                    squ[f] = diff * diff
+                s[i] = _pairwise_sum(squ, 0, n_features)
+
+        # best matching unit: first minimum, or first NaN, like np.argmin
+        c = 0
+        best = s[0]
+        if not np.isnan(best):
+            for i in range(1, n_nodes):
+                if s[i] < best:
+                    best = s[i]
+                    c = i
+                elif np.isnan(s[i]):
+                    c = i
+                    break
+
+        # update step over the (2 nsize + 1)^2 window around the BMU, clipped to the map
+        alpha = alphas[k]
+        nsize = nsizes[k]
+        cx = c % xdim
+        cy = c // xdim
+        for y in range(max(0, cy - nsize), min(ydim, cy + nsize + 1)):
+            for x in range(max(0, cx - nsize), min(xdim, cx + nsize + 1)):
+                g = _neighborhood_weight(
+                    float(max(abs(x - cx), abs(y - cy))), alpha, nsize
+                )
+                if g != 0.0:
+                    i = x + y * xdim
+                    for f in range(n_features):
+                        diff = lattice[i, f] - xk[k, f]
+                        lattice[i, f] -= diff * g

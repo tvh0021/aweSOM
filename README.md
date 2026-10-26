@@ -120,6 +120,7 @@ To visualize the SOM with U-matrix, which is saved at the end of training at `ma
 naive_centroids_matrix = map.compute_centroids() # return the centroid associated with each node
 unique_centroids = map.get_unique_centroids(map.compute_centroids()) # return the indivual centroids
 
+plot_centroids = {}
 plot_centroids['position_x'] = [x+0.5 for x in unique_centroids['position_x']]
 plot_centroids['position_y'] = [y+0.5 for y in unique_centroids['position_y']]
 
@@ -167,7 +168,7 @@ axs[0].legend(scatter_ground.legend_elements()[0], iris.target_names, loc="upper
 scatter_som = axs[1].scatter(iris.data[:,1], iris.data[:,2], c=som_labels, cmap='viridis')
 axs[1].set_xlabel('Sepal Width')
 axs[1].set_ylabel('Petal Length')
-axs[1].legend(scatter.legend_elements()[0], np.unique(final_clusters), loc="upper right", title="aweSOM")
+axs[1].legend(scatter_som.legend_elements()[0], np.unique(final_clusters), loc="upper right", title="aweSOM")
 plt.show()
 ```
 

@@ -22,5 +22,6 @@ setup(
     ],
     python_requires=">=3.9",
     install_requires=required,
+    extras_require={"gpu": ["jax[cuda12]"]},
     include_package_data=True,
 )

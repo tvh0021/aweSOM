@@ -105,3 +105,33 @@ and a reference BMU classifier that the thorn can reproduce exactly.
 - QE = mean ||x - w_bmu||, TE = fraction with d_cheb(c1,c2) > 1 (8-neighbourhood, no wrap).
   Acceptance: 5 paired seeds, upper bound mean + 2.776 sd/sqrt(5) of QE ratio-1 <= 0.03 and of TE
   difference <= 0.01 (t_{0.975,4} = 2.7764).
+
+## F. aweSOM API and consumer index (Gemini 3.8 Flash sweep of aweSOM + sibling repos)
+
+- No import of `aweSOM` exists in any sibling repo (athenak, machine-learning-turbulent,
+  EinsteinToolkit-learning, runko, segmenting-turbulent-simulations-with-ensemble-learning, asterx,
+  athenapp_root). All consumers are in-repo: `run_som.py`, `examples/plasma-turbulence/run_plasma_som.py`,
+  the iris/plasma notebooks, `tests/`, `tests/performance/popsom_bench.py`, `planning/benchmarks/`.
+- Attributes read on unpickled `Lattice` objects (plasma.ipynb:196-264, 952-976; iris.ipynb:396-398):
+  `lattice`, `features_names`, `umat`, `xdim`, `ydim`, `alpha_0`, `train`, `lattice_history`,
+  `save_frequency`, and methods `rowix`, `compute_umat`, `compute_centroids`, `merge_similar_centroids`,
+  `get_unique_centroids`, `assign_cluster_to_lattice`. => `lattice_history` must stay populated by
+  default (`history=True`), `save_frequency` must keep its meaning.
+- `Lattice.best_match` call sites: `som.py:348` (map_data_to_lattice), `tests/som_test.py:134`,
+  `planning/benchmarks/bench_inference.py:93`, `test-output/test.ipynb:1410`. Signature
+  `(lattice, obs, full=False)` returning `(N,1)` must be kept.
+- Scaler persistence: none. `save_som_object` pickles only the `Lattice`; `manual_scaling` stats are
+  recomputed per snapshot (`run_som.py:310-317`, `run_plasma_som.py:113`). `inv_manual_scaling` has no callers.
+- On-disk artifacts: `som_object.{dataset}-{xdim}-{ydim}-{alpha}-{train}-{batch}{initial}.pkl`,
+  `labels.{...}.npy` (read by `sce.load_som_npy`, plasma.ipynb:619, combine_clumps.py),
+  `lattice_{epoch}_{xdim}{ydim}_{alpha}_{train}.npy`, `SCE/multimap_mappings.txt`, `SCE/mask-{run}-id{cid}.npy`.
+  None of these change in this session.
+- Pre-existing test hygiene issues (not fixed, out of scope): `tests/run_som_test.py` writes
+  `som_object.test-*.pkl` and `labels.test-*.npy` into cwd; `som_test.py` uses unseeded `randint`
+  for node picks (data is now seeded).
+- Plasma feature set written by `obtain_features.py:530-536`: `features` (N,F) + `names`; features
+  rho, b_mag, j_mag, e_mag, b_perp, b_dot_j, b_dot_e, e_dot_j, j_par, j_par_abs, j_perp, e_par, e_perp,
+  `*_ciso` box-filtered variants, `j_asym`/`j_sym` oriented 19x19 kernels. Only `rho`, `b_mag`, `j_mag`,
+  `j_par`, `j_perp` and `b_perp` are computable per cell in a thorn without convolutions.
+- Recorded benchmarks (tests/performance/*_res.txt): online training N=12.8M, F=6: 8238 s;
+  SCE GPU N=12.8M R=20: 158 s vs 8439 s CPU baseline.
