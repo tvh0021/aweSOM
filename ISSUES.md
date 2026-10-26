@@ -4,7 +4,17 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 
 ## Open
 
-(none)
+### A. Final `umat` can lag the final lattice by up to `save_frequency - 1` steps (pre-existing)
+
+- **Where:** `src/aweSOM/som.py` (`fast_som`, end of training)
+- **What:** with `history=True` (the default, and the only behaviour before this branch) `self.umat` is computed from the last snapshot before `self.lattice` is set to the final lattice. With `history=False` there are no snapshots, so the U-matrix comes from the final lattice. The two settings can therefore give slightly different `umat` and merges.
+- **Status:** deliberately kept for bitwise compatibility with the old loop. Suggested fix: compute `umat` from the final lattice in both branches (changes results of every existing notebook by a few steps' worth of drift).
+
+### B. `tests/run_som_test.py` writes into the current directory (pre-existing)
+
+- **Where:** `tests/run_som_test.py:68-85`
+- **What:** `som_object.test-*.pkl` and `labels.test-*.npy` are written to cwd and removed afterwards; a failing test leaves them behind.
+- **Fix:** use the `tmp_path` fixture.
 
 ## Fixed on `research/grmhd-scale` (2026-10-26)
 

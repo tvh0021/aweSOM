@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>aweSOM at GRMHD scale: bug fixes, frozen model artifact, exact inference, parallel batch training</title>
+  <style>
+    :root {
+      --paper: #f6f4ee; --surface: #fffdfa; --ink: #1f2a35; --muted: #5d6974; --line: #cbd4da;
+      --accent: #245f91; --teal: #27766e; --evidence: #eaf2f8; --uncertainty: #fff4d6; --limitation: #f6e9e7; --measure: 72ch;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 1rem; line-height: 1.65; }
+    a { color: var(--accent); text-underline-offset: 0.16em; }
+    a:hover { text-decoration-thickness: 0.14em; }
+    :focus-visible { outline: 3px solid #d68d17; outline-offset: 3px; }
+    .skip-link { position: fixed; left: 1rem; top: -5rem; z-index: 10; padding: .65rem .9rem; background: var(--ink); color: white; }
+    .skip-link:focus { top: 1rem; }
+    header, main, footer { width: min(calc(100% - 2rem), 78rem); margin-inline: auto; }
+    header { padding: clamp(3rem, 9vw, 6rem) 0 2rem; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--teal); font-size: .78rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    h1, h2, h3 { line-height: 1.15; text-wrap: balance; }
+    h1 { max-width: 24ch; margin: .4rem 0 1rem; font-size: clamp(1.9rem, 5vw, 3.4rem); letter-spacing: -.03em; }
+    h2 { margin-top: 3rem; font-size: clamp(1.45rem, 3vw, 2rem); }
+    h3 { margin-top: 2rem; font-size: 1.15rem; }
+    .lede { max-width: 62ch; color: var(--muted); font-size: clamp(1.05rem, 2vw, 1.2rem); }
+    .meta { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-top: 1.5rem; color: var(--muted); font-size: .9rem; }
+    main { padding: 1rem 0 5rem; }
+    section, article { max-width: var(--measure); }
+    p, li { text-wrap: pretty; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem; max-width: none; margin: 2rem 0; }
+    .card { padding: 1.1rem 1.2rem; background: var(--surface); border: 1px solid var(--line); border-radius: .6rem; }
+    .card > :first-child { margin-top: 0; }
+    .callout { margin: 1.5rem 0; padding: 1rem 1.15rem; border-left: .32rem solid var(--accent); border-radius: .25rem; }
+    .evidence { background: var(--evidence); }
+    .uncertainty { background: var(--uncertainty); border-left-color: #a56b00; }
+    .limitation { background: var(--limitation); border-left-color: #9a5048; }
+    .equation { margin: 1.5rem 0; padding: 1rem; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: .4rem; text-align: center; }
+    .table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: .4rem; margin: 1rem 0; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); font-variant-numeric: tabular-nums; }
+    th, td { padding: .6rem .8rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #edf1f3; }
+    caption { color: var(--muted); font-size: .9rem; text-align: left; padding: .5rem .8rem; caption-side: bottom; }
+    code, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+    pre { overflow-x: auto; padding: 1rem; background: #18232c; color: #eef4f7; border-radius: .4rem; }
+    pre code { font-size: .85em; }
+    details { margin: 1rem 0; padding: .8rem 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: .4rem; }
+    summary { cursor: pointer; font-weight: 700; }
+    .ref { padding-left: 1.5rem; text-indent: -1.5rem; margin: .6rem 0; }
+    footer { padding: 1.5rem 0 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+    @media (max-width: 42rem) {
+      body { font-size: .98rem; }
+      header, main, footer { width: min(calc(100% - 1.25rem), 78rem); }
+      header { padding-top: 2.5rem; }
+      th, td { padding: .5rem; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header>
+    <div class="eyebrow">Research report, autonomous overnight session</div>
+    <h1>aweSOM at GRMHD scale: bug fixes, a frozen model artifact, exact inference, and parallel batch training</h1>
+    <p class="lede">Eight deterministic bugs are fixed, a trained self-organizing map can now be exported as a language-neutral table that a C++ code reproduces bit for bit, inference runs about 15 times faster, and a JAX batch trainer shards training data across every visible GPU. All work sits on the branch <code>research/grmhd-scale</code> in a separate checkout and nothing has been pushed.</p>
+    <div class="meta"><span>Prepared 2026-10-26</span><span>Checkout <code>/Users/tvh0021/git_repos/aweSOM-research</code></span><span>Commits <code>9722853</code>, <code>2988866</code>, <code>a8f10b9</code> and the report commit</span></div>
+  </header>
+
+  <main id="main">
+
+    <section aria-labelledby="summary-heading">
+      <h2 id="summary-heading">Summary</h2>
+      <p>The mandate was to optimize and fix bugs in aweSOM, to make training run on parallel GPUs, and to improve the SOM-to-data mapping so that a pretrained lattice can be handed to an AsterX run as a table and used to track features at runtime. The user-authored contract for that link, in the AsterX audit notes (<a href="#ref-ideas">Ha 2026, ideas.md section 4</a>), fixes the shape of the solution: training stays offline in Python, the artifact must be language-neutral and carry the feature specification, scaler, weights, node-to-cluster map, uncertainty thresholds and provenance, and the thorn (provisionally <code>AsterCurrentSheets</code>) does only feature evaluation and best-matching-unit inference.</p>
+      <div class="summary-grid">
+        <div class="card"><h3>Bugs</h3><p>8 fixed with regression tests, 2 pre-existing quirks recorded as open. See <a href="#bugs-heading">section 1</a>.</p></div>
+        <div class="card"><h3>Model artifact</h3><p><code>SOMModel</code> in HDF5 and plain text; header-only C++ classifier reproduces Python labels bitwise. See <a href="#artifact-heading">section 2</a>.</p></div>
+        <div class="card"><h3>Inference</h3><p>Chunked numba kernel, 1.8 million points per second on this laptop versus 0.12 million before, identical labels. See <a href="#measurements-heading">section 6</a>.</p></div>
+        <div class="card"><h3>Parallel training</h3><p>JAX batch map over a device mesh; passes the pre-registered quantization and topographic error acceptance against the online trainer. See <a href="#batch-heading">section 3</a>.</p></div>
+      </div>
+      <aside class="callout uncertainty" aria-label="Uncertainty"><strong>Uncertainty.</strong> No GPU was available in this session. The multi-device path was exercised on four virtual CPU devices and on two CPU processes; GPU throughput, the SLURM script and multi-node runs are untested. Every design decision was taken without the user present and is listed in <a href="#assumptions-heading">section 7</a>.</aside>
+    </section>
+
+    <section aria-labelledby="bugs-heading">
+      <h2 id="bugs-heading">1. Bugs found and fixed</h2>
+      <p>Each entry below was reproduced with a failing input before the fix and is covered by a test in <code>tests/regression_test.py</code> or the relevant new test file. The full list with locations is in <code>ISSUES.md</code>.</p>
+      <div class="table-wrap">
+        <table id="tab-bugs">
+          <thead><tr><th scope="col">#</th><th scope="col">Where</th><th scope="col">Failure</th><th scope="col">Fix</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><code>run_som.py</code> CLI</td><td><code>args.neurons_path</code> undefined; relative import in <code>__main__</code></td><td>Read <code>lattice_path</code>; absolute import</td></tr>
+            <tr><td>2</td><td>plasma example <code>get_normalization</code></td><td>Only <code>jz</code> normalized; <code>jx</code>, <code>jy</code>, <code>ex</code>, <code>ey</code>, <code>ez</code> kept factor 1</td><td>Vector-wide branches; see assumption A4</td></tr>
+            <tr><td>3</td><td><code>make_sce_clusters.py:216</code></td><td>NumPy 2 removed <code>newshape=</code>; one test failed</td><td>Positional shape</td></tr>
+            <tr><td>4</td><td><code>Lattice.fast_som</code></td><td>Unseeded generator and global stream: identical calls gave different lattices despite <code>seed = 42</code></td><td>One <code>default_rng(self.seed)</code> drives init and shuffle; restart lattice copied</td></tr>
+            <tr><td>5</td><td><code>Lattice.fast_som</code></td><td><code>ZeroDivisionError</code> for <code>train &lt; 25</code> (and <code>&lt; 10</code>)</td><td>Periods clamped to at least 1</td></tr>
+            <tr><td>6</td><td><code>merge_similar_centroids</code></td><td><code>IndexError</code> with a single centroid</td><td>Early return</td></tr>
+            <tr><td>7</td><td><code>sce.py</code> run names</td><td><code>str.strip(".npy")</code> removed letters, not the suffix</td><td><code>removesuffix</code></td></tr>
+            <tr><td>8</td><td><code>sce.compute_SQ</code></td><td>Division by zero before the empty-mask guard</td><td>Guard moved first</td></tr>
+          </tbody>
+          <caption>Table 1. Deterministic bugs fixed on the branch. Bugs 1 and 2 came from the existing issue tracker; 3 to 8 were found by reading <code>som.py</code> and <code>sce.py</code> and confirmed by running the inputs.</caption>
+        </table>
+      </div>
+      <p>Two further quirks were found and left alone because changing them alters results of existing notebooks: the final U-matrix is computed from the last history snapshot rather than the final lattice (up to <code>save_frequency - 1</code> steps stale), and <code>tests/run_som_test.py</code> writes into the working directory. Both are recorded under "Open" in <code>ISSUES.md</code>.</p>
+      <aside class="callout limitation" aria-label="Behaviour change"><strong>Behaviour change.</strong> Fix 4 makes every seeded run reproducible. Runs before this branch were not reproducible, so no result could have depended on the old sequence, but lattices trained after the fix will differ from any lattice trained before it.</aside>
+    </section>
+
+    <section aria-labelledby="artifact-heading">
+      <h2 id="artifact-heading">2. Frozen model artifact and exact inference</h2>
+      <h3>What is stored</h3>
+      <p><code>aweSOM.model.SOMModel</code> (<code>src/aweSOM/model.py</code>) freezes a trained lattice with everything a runtime consumer needs and nothing it does not: lattice shape and weights, the fitted <code>Scaler</code>, the node-to-cluster table, per-node and global distance thresholds, the feature names, and provenance (format version, aweSOM version, git commit, creation time, seed, training length, merge threshold, dataset string). <code>save()</code> writes HDF5; <code>save_text()</code> writes a self-describing text table with <code># key value</code> header lines followed by one row per node, so a code without HDF5 can parse it with the standard library. <code>SOMModel.load</code> reads either.</p>
+      <p>The scaler is stored in one form regardless of how it was fitted:</p>
+      <div class="equation" id="eq-scaler">
+        <math display="block"><semantics><mrow><msup><mi>x</mi><mo>′</mo></msup><mo>=</mo><mfrac><mrow><mi>x</mi><mo>−</mo><mi>offset</mi></mrow><mi>scale</mi></mfrac></mrow><annotation encoding="application/x-tex">x' = \frac{x - \mathrm{offset}}{\mathrm{scale}}</annotation></semantics></math>
+      </div>
+      <p>For the "manual" kind, offset is the per-feature mean and scale is twice the standard deviation divided by <code>bulk_range</code>, matching <code>run_som.manual_scaling</code>. The two are bitwise equal when <code>bulk_range</code> is a power of two (1.0 is the only value the package uses) and agree to one rounding otherwise, because the division and multiplication round differently. A "minmax" kind and an identity kind exist too.</p>
+      <h3>Uncertainty thresholds</h3>
+      <p>Following the audit contract, each model carries <code>node_dist_q99</code> (the 99th percentile of the Euclidean BMU distance of the training points that mapped to that node) and <code>reject_distance</code> (the 99.9th percentile over all training points). A runtime cell whose distance exceeds either can be flagged as unlike the training sample; the C++ header exposes this as <code>is_unfamiliar</code>. The percentiles are a design choice (assumption A6), not a calibrated detector.</p>
+      <h3>Exactness contract</h3>
+      <p>The GPT Sol numerical check (<a href="#ref-ledger">source ledger section E</a>) compared four BMU arithmetic variants on a 2368 by 6 random lattice and one million points against float64 direct differences: float32 direct gave 0 disagreements, float64 expansion 0, float32 expansion 11 (rate 1.1 × 10<sup>−5</sup>). The reference path is therefore defined as float64 direct differences, sequential feature sum, strict less-than scan in ascending node index, which is what NumPy <code>argmin</code> returns on ties:</p>
+      <div class="equation" id="eq-bmu">
+        <math display="block"><semantics><mrow><mi>c</mi><mo>(</mo><mi>x</mi><mo>)</mo><mo>=</mo><munder><mi>argmin</mi><mi>i</mi></munder><munderover><mo>∑</mo><mrow><mi>f</mi><mo>=</mo><mn>1</mn></mrow><mi>F</mi></munderover><msup><mrow><mo>(</mo><msub><mi>w</mi><mrow><mi>i</mi><mi>f</mi></mrow></msub><mo>−</mo><msub><mi>x</mi><mi>f</mi></msub><mo>)</mo></mrow><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">c(x) = \operatorname*{argmin}_i \sum_{f=1}^{F} (w_{if} - x_f)^2</annotation></semantics></math>
+      </div>
+      <p>Three implementations follow it and are tested against each other: <code>aweSOM.inference.best_match_nodes</code> (numba, parallel over points, chunked, no per-point allocation), the original <code>Lattice.best_match</code> kernel (kept as <code>_best_match_legacy</code>), and <code>cpp/awesom_classify.hpp</code>. On the committed fixture (10 by 8 lattice, 4 features, 1000 points, <code>tests/fixtures/</code>) the C++ program's labels and distances equal the Python output exactly, and the test compiles and runs it with the system compiler when one is available (<code>tests/cpp_test.py</code>). <code>Lattice.best_match</code> now delegates to the new kernel and keeps its <code>(N, 1)</code> float output; <code>Lattice.predict</code> returns int32 labels, optionally with distances, without the two full-size intermediates of the old map-then-assign sequence.</p>
+      <aside class="callout evidence" aria-label="Evidence"><strong>Evidence.</strong> On 2 million random points the new kernel and the legacy kernel returned identical labels (measured in this session, see <a href="#tab-measure">Table 4</a>). Float32 input is accepted and documented as approximate: genuine ties may flip.</aside>
+    </section>
+
+    <section aria-labelledby="batch-heading">
+      <h2 id="batch-heading">3. Parallel batch training in JAX</h2>
+      <p>The online trainer updates the lattice one sample at a time, so it cannot be split across devices without changing the algorithm. The batch map (<a href="#ref-kohonen">Kohonen 2001</a>; <a href="#ref-fort">Fort, Letremy and Cottrell 2002</a>) replaces the per-sample update with one fixed-point step per epoch:</p>
+      <div class="equation" id="eq-batch">
+        <math display="block"><semantics><mrow><msub><mi>w</mi><mi>i</mi></msub><mo>=</mo><mfrac><mrow><munder><mo>∑</mo><mi>j</mi></munder><mi>h</mi><mo>(</mo><msub><mi>c</mi><mi>j</mi></msub><mo>,</mo><mi>i</mi><mo>)</mo><msub><mi>x</mi><mi>j</mi></msub></mrow><mrow><munder><mo>∑</mo><mi>j</mi></munder><mi>h</mi><mo>(</mo><msub><mi>c</mi><mi>j</mi></msub><mo>,</mo><mi>i</mi><mo>)</mo></mrow></mfrac></mrow><annotation encoding="application/x-tex">w_i = \frac{\sum_j h(c_j, i)\, x_j}{\sum_j h(c_j, i)}</annotation></semantics></math>
+      </div>
+      <p>where <i>c<sub>j</sub></i> is the BMU of sample <i>j</i> under the weights at the start of the epoch and <i>h</i> is the Gaussian neighbourhood of <code>Lattice.Gamma</code> on Chebyshev lattice distance with the learning rate set to 1 (it cancels). The sums are factorised through per-node partial sums <i>S</i> and hit counts <i>n</i> (<code>jax.ops.segment_sum</code> on each device), combined with <code>lax.psum</code> over a one-dimensional <code>jax.shard_map</code> mesh, and then <i>W</i> = <i>H</i><sup>T</sup><i>S</i> / <i>H</i><sup>T</sup><i>n</i> with <i>H</i>[<i>c</i>, <i>i</i>] = <i>h</i>(<i>c</i>, <i>i</i>). Nodes with zero denominator keep their weight, which matches the online rule when all increments vanish (Sol, ledger E). <code>pmap</code> was not used because JAX 0.12 lists it as maintenance-only (<a href="#ref-jax-changelog">JAX changelog</a>; <a href="#ref-jax-shardmap">shard_map guide</a>).</p>
+      <h3>Schedule and precision</h3>
+      <p>Default 40 epochs: radius <i>r</i><sub>max</sub> = max(xdim, ydim) + 1 for the first half, linear to <i>r</i><sub>min</sub> = 8 over the third quarter, <i>r</i><sub>min</sub> for the last quarter, the same proportions as the online schedule. Sol flagged this budget as uncertain until measured at 20, 40 and 80 epochs; that sweep was not run. Distances use float32 with <code>Precision.HIGHEST</code> (no TF32); per-node sums, counts and the master weights are float64 inside a scoped <code>enable_x64</code>. The agent found that float32 sums made 1-device and 4-device results differ by 1.4 × 10<sup>−4</sup> after ten epochs because near-tied BMUs amplify last-bit summation-order differences; with float64 sums 1, 2 and 4 devices gave bitwise-identical weights.</p>
+      <h3>Acceptance against the online trainer</h3>
+      <p>The acceptance criterion was fixed before implementation (self-grill Q11, Sol bounds): over five paired seeds on a synthetic three-cluster set, the upper confidence bound (mean + 2.7764 · sd / √5) of the quantization error ratio minus one must be at most 0.03 and of the topographic error difference at most 0.01. Quantization error is the mean distance to the BMU; topographic error is the fraction of samples whose two best nodes are not 8-neighbours.</p>
+      <div class="table-wrap">
+        <table id="tab-acceptance">
+          <thead><tr><th scope="col">Seed</th><th scope="col">QE<sub>batch</sub> / QE<sub>online</sub> − 1</th><th scope="col">TE<sub>batch</sub> − TE<sub>online</sub></th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>−0.1106</td><td>−0.0002</td></tr>
+            <tr><td>2</td><td>−0.1046</td><td>−0.0030</td></tr>
+            <tr><td>3</td><td>−0.1138</td><td>+0.0007</td></tr>
+            <tr><td>4</td><td>−0.1107</td><td>−0.0006</td></tr>
+            <tr><td>5</td><td>−0.1056</td><td>−0.0011</td></tr>
+            <tr><th scope="row">Upper bound</th><td>−0.104 (limit 0.03)</td><td>+0.0008 (limit 0.01)</td></tr>
+          </tbody>
+          <caption>Table 2. Batch trainer (40 epochs) against the online trainer (20 000 steps), 20 by 12 lattice, synthetic three-cluster data, reported by the implementing agent and reproduced by <code>tests/batch_test.py::test_acceptance_against_online_trainer</code> (run with <code>AWESOM_SLOW=1</code>, 16 passed in this session). Batch quantization error is about 11% lower; topographic error is equal within noise.</caption>
+        </table>
+      </div>
+      <h3>Usage</h3>
+      <pre><code>from aweSOM import Lattice
+som = Lattice(64, 37, 0.1, train=0)
+info = som.train_lattice_batch(data, feature_names, epochs=40)   # all visible devices
+labels = som.predict(new_snapshot, merge_cost=0.2)
+
+# multi-GPU, one process per GPU (examples/slurm_scripts/submit_batch_gpu.slurm):
+import jax; jax.distributed.initialize()        # SLURM auto-detected
+weights, info = train_batch(local_rows, xdim, ydim)   # data = process-local rows</code></pre>
+      <p><code>import aweSOM</code> does not import JAX; <code>aweSOM.batch</code> raises a clear <code>ImportError</code> without it, and <code>pip install aweSOM[gpu]</code> pulls <code>jax[cuda12]</code>. Multi-host initialisation is the caller's job, as recommended in the JAX multi-process documentation (<a href="#ref-jax-multi">JAX multi-process guide</a>).</p>
+      <aside class="callout limitation" aria-label="Limitation"><strong>Limitation.</strong> The four virtual CPU devices share the same cores, so the CPU benchmark (0.55 to 0.66 million points per second per epoch at 2 million points, 64 by 37 lattice) tests sharding correctness, not speed. GPU scaling is unmeasured. Determinism on GPU requires <code>XLA_FLAGS=--xla_gpu_exclude_nondeterministic_ops=true</code> because scatter-add uses atomics (<a href="#ref-xla-det">OpenXLA determinism note</a>). Apple Metal is not supported: jax-metal last shipped for JAX 0.4.34.</aside>
+    </section>
+
+    <section aria-labelledby="online-heading">
+      <h2 id="online-heading">4. Online trainer and centroid merge, same results faster</h2>
+      <p><code>train_lattice</code> gains <code>history=True</code>; with the default, lattice and U-matrix snapshots every <code>save_frequency</code> steps are kept exactly as before, because the plasma and iris notebooks read <code>lattice_history</code> from unpickled objects (ledger F). The per-step BMU search and neighbourhood update were moved into one numba kernel that touches only nodes inside the radius, with the Gaussian written inline in the same operation order as <code>Gamma</code>. The schedule (alpha decay, radius shrink) is precomputed up front. The result is bitwise identical to the previous loop on seeded runs across sampling and alpha types (<code>tests/fast_som_test.py</code>, 32 tests, including a check that the summation order matches NumPy's pairwise sum for 8 or more features).</p>
+      <p><code>merge_similar_centroids</code> was recursive and recomputed every pairwise line cost on each round. Sol showed that a single greedy pass with a frozen normaliser is not equivalent (counter-example in ledger E), so the replacement is a loop that reproduces the recursion exactly: recompute representatives and counts, read costs from an ordered-pair cache, stable-sort, normalise by the current maximum, stop when the smallest normalised cost reaches the threshold, otherwise merge the smaller-count centroid into the larger. On 20 random maps at three thresholds the new loop gives the same centroids, counts and cluster assignment as the old recursive code; on a 60 by 40 lattice with 274 centroids and 268 merges it succeeds under a recursion limit that makes the old code fail.</p>
+    </section>
+
+    <section aria-labelledby="thorn-heading">
+      <h2 id="thorn-heading">5. AsterCurrentSheets thorn design</h2>
+      <p>The thorn itself belongs in the AsterX repository, which was read-only for this session. The design document <code>docs/source/astercurrentsheets.md</code> fixes the contract from verified AsterX conventions gathered by the index sweep (ledger A, every claim with file and line): cell-centred <code>{ccc}</code> grid functions tagged <code>checkpoint="no"</code>, <code>grid.loop_int_device&lt;1,1,1&gt;</code> kernels, scheduling <code>AT analysis AFTER AsterAnalysis_MHD</code>, a one-time table load <code>AT CCTK_WRAGH</code> following the EOSX pattern (<code>CCTK_STRING</code> parameter, rank-0 read, <code>MPI_Bcast</code>, <code>The_Managed_Arena</code> allocation, <code>amrex::Gpu::copy</code>), and output through <code>CarpetX::out_silo_vars</code>.</p>
+      <p>One fact shapes the feature set: AsterX has no current density or curl-B grid function; the only curl in the code is <i>B</i> = curl <i>A</i> onto staggered faces. The thorn must therefore compute a curl-B proxy from cell-centred <code>HydroBaseX::Bvec</code> with central differences (one ghost layer). The doc proposes six per-cell features (<code>jmag</code>, <code>jpar</code>, <code>jperp</code>, <code>bmag</code>, <code>rho</code>, <code>beta_inv</code>), notes that the smoothed and oriented-kernel features of the published PIC pipeline cannot be evaluated per cell, requires the thorn to abort on a feature-name mismatch with the table, and lists the validation steps the audit demands: offline/runtime label equivalence and measured overhead before any extension.</p>
+    </section>
+
+    <section aria-labelledby="measurements-heading">
+      <h2 id="measurements-heading">6. Measurements</h2>
+      <p>All numbers below were taken on the development laptop (Apple M1 Max, 10 cores, 64 GB; NumPy 2.5.4, numba 0.68.0, JAX 0.12.0.1 CPU, h5py 3.16.0, Python 3.12). Rows marked "this session" were measured directly after integration; the others are the implementing agents' numbers, consistent with the direct ones.</p>
+      <div class="table-wrap">
+        <table id="tab-measure">
+          <thead><tr><th scope="col">Quantity</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Source</th></tr></thead>
+          <tbody>
+            <tr><td>BMU inference, 2 M points, 2368 nodes, F = 6, float64, 10 threads</td><td>0.124 M points/s (16.1 s)</td><td>1.82 M points/s (1.10 s), identical labels</td><td>this session</td></tr>
+            <tr><td>Online training, 64 by 37 lattice, 200 k by 4, 100 000 steps, <code>history=True</code></td><td>165.6 µs/step</td><td>64.2 µs/step, bitwise-identical lattice</td><td>before: agent C; after: this session</td></tr>
+            <tr><td>Same, <code>history=False</code></td><td>not available</td><td>14.1 µs/step (1.41 s)</td><td>this session</td></tr>
+            <tr><td>Merge, 60 by 40 random U-matrix, 274 centroids</td><td>RecursionError under a lowered limit; about 55 s with old per-round costs</td><td>about 16 s, same merges</td><td>agent C</td></tr>
+            <tr><td>C++ reference, single thread, 200 k points</td><td>–</td><td>0.142 M points/s, bitwise-equal labels and distances</td><td>agent A</td></tr>
+            <tr><td>Batch trainer, 2 M by 6, 64 by 37, float32, CPU</td><td>–</td><td>3.0 to 3.7 s per epoch (0.55 to 0.66 M points/s)</td><td>agent B</td></tr>
+            <tr><td>Test suite</td><td>27 pass, 1 fail</td><td>139 pass, 2 skipped slow (16 pass with <code>AWESOM_SLOW=1</code>), 36.8 s</td><td>this session</td></tr>
+          </tbody>
+          <caption>Table 4. Timings exclude numba and XLA compilation. The 2368-node lattice and F = 6 match the fiducial plasma run (<code>som_object.fiducial-5000-64-37-...</code>). With <code>history=True</code> most of the remaining online-training time is the 201 U-matrix snapshots at about 24 ms each.</caption>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="assumptions-heading">
+      <h2 id="assumptions-heading">7. Decisions taken without the user</h2>
+      <p>Each was recorded in the self-grill notes before implementation (<code>planning/notes/2026-10-26-self-grill.md</code>, Q1 to Q15). The user can overturn any of them; the affected code is small and isolated.</p>
+      <ol>
+        <li id="a1"><strong>A1, parallel training means the batch map.</strong> Running many online realizations one per device needs no new code (the SCE scripts already use multiprocessing). The new feature is a different estimator; equivalence is statistical, not bitwise.</li>
+        <li id="a2"><strong>A2, batch schedule and acceptance thresholds.</strong> 40 epochs with the online radius proportions; 3% quantization error and 0.01 topographic error bounds over five seeds. These were chosen to be strict but passable, not derived from the physics.</li>
+        <li id="a3"><strong>A3, artifact format.</strong> HDF5 primary with a plain-text twin; one scaler formula; node index <i>x</i> + <i>y</i> · xdim unchanged. The text format forbids commas and whitespace in feature names.</li>
+        <li id="a4"><strong>A4, electric-field normalization in the plasma example.</strong> Components <code>ex</code>, <code>ey</code>, <code>ez</code> now get the factor used for E in the <code>je</code> branch <em>without</em> the extra <code>/1e3</code> that branch applies. If the <code>/1e3</code> is intentional for E as well, the published <code>e_mag</code>, <code>e_par</code> and <code>e_dot_j</code> features must be recomputed. This is the one fix most likely to need the user's judgement.</li>
+        <li id="a5"><strong>A5, reproducibility fix changes future lattices.</strong> See the behaviour-change note in section 1.</li>
+        <li id="a6"><strong>A6, uncertainty thresholds.</strong> 99th percentile per node and 99.9th percentile global of the training BMU distance. Any other quantile is a one-line change in <code>distance_quantiles</code>.</li>
+        <li id="a7"><strong>A7, thorn name and scope.</strong> <code>AsterCurrentSheets</code>, feature list, cadence parameter and grid-function names are proposals following the audit note; no thorn code was written.</li>
+        <li id="a8"><strong>A8, stale final U-matrix kept.</strong> With history on, <code>umat</code> still comes from the last snapshot, for bitwise compatibility; with history off it comes from the final lattice. Logged as open issue A.</li>
+        <li id="a9"><strong>A9, float64 sums in the batch trainer</strong> rather than the all-float32 path in the spec, to make results independent of device count.</li>
+        <li id="a10"><strong>A10, C++ HDF5 loader deferred.</strong> The header reads the text table only; convert with <code>SOMModel.load(...).save_text(...)</code>.</li>
+      </ol>
+    </section>
+
+    <section aria-labelledby="scope-heading">
+      <h2 id="scope-heading">8. Not done, and why</h2>
+      <ul>
+        <li>No AsterX thorn source: the asterx repository was outside the editable checkout.</li>
+        <li>No KD-tree or early-exit BMU search: at 2368 nodes and 6 features the brute-force kernel is memory-bound once allocation is removed.</li>
+        <li>No connected components, temporal tracking or AMR de-duplication: the audit note places these in a later year.</li>
+        <li>No SCE algorithm changes beyond the two bug fixes.</li>
+        <li>No 20/40/80 epoch sweep for the batch budget and no GPU measurements.</li>
+        <li>Nothing pushed, no pull request, no README rewrite beyond fixing two undefined names in snippets.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="review-heading">
+      <h2 id="review-heading">9. How to review</h2>
+      <pre><code>cd /Users/tvh0021/git_repos/aweSOM-research
+git log --oneline dev..research/grmhd-scale
+git diff dev..research/grmhd-scale --stat
+.venv/bin/python -m pytest -q                 # 139 passed, 2 skipped
+AWESOM_SLOW=1 .venv/bin/python -m pytest -q tests/batch_test.py
+# C++ reference against the fixture
+cmake -S cpp -B /tmp/awesom-cpp &amp;&amp; cmake --build /tmp/awesom-cpp &amp;&amp; ctest --test-dir /tmp/awesom-cpp</code></pre>
+      <p>Supporting documents in the checkout: <code>planning/specs/2026-10-26-grmhd-scale.md</code> (the implementation spec), <code>planning/notes/2026-10-26-self-grill.md</code> (decision record), <code>planning/notes/2026-10-26-source-ledger.md</code> (every fact with its source), <code>docs/source/astercurrentsheets.md</code>, <code>cpp/README.md</code>, <code>ISSUES.md</code>.</p>
+      <details>
+        <summary>Method and provenance of the session</summary>
+        <p>Facts were gathered by three delegated agents and verified locally: a Gemini 3.8 Flash index of AsterX conventions and of aweSOM's API and consumers; an Opus research pass on JAX 0.12 multi-device APIs, checked by running on four virtual CPU devices; a GPT Sol check of the batch-map derivation, BMU numerics and merge equivalence, with scripts run against this checkout's environment. Implementation was split across three Opus coding agents on disjoint files (artifact and inference; batch trainer; online kernel and merge), then integrated, tested and committed here. Decisions were made by self-interview against the spec format and the AsterX audit note. Usage limits were checked before each spawn.</p>
+      </details>
+    </section>
+
+    <section aria-labelledby="references-heading">
+      <h2 id="references-heading">References</h2>
+      <p class="ref" id="ref-ideas">Ha, T. (2026). <em>ideas.md</em>, section "aweSOM measurement framework" (lines 623–740), AsterX audit notes. Local file: <code>/Users/tvh0021/git_repos/asterx/audit/ideas.md</code>. User-authored contract for the aweSOM–AsterX link.</p>
+      <p class="ref" id="ref-kohonen">Kohonen, T. (2001). <em>Self-Organizing Maps</em>, 3rd ed., Springer. Batch map, section 3.6. Summary at <a href="https://www.cis.hut.fi/somtoolbox/theory/somalgorithm.shtml">cis.hut.fi/somtoolbox/theory/somalgorithm.shtml</a>.</p>
+      <p class="ref" id="ref-fort">Fort, J.-C., Letremy, P., Cottrell, M. (2002). Advantages and drawbacks of the Batch Kohonen algorithm. <em>ESANN 2002</em>, 223–230. <a href="https://www.esann.org/sites/default/files/proceedings/legacy/es2002-71.pdf">esann.org/sites/default/files/proceedings/legacy/es2002-71.pdf</a>.</p>
+      <p class="ref" id="ref-jax-changelog">JAX developers (2026). JAX changelog, releases 0.8.0 and 0.10.0 (pmap maintenance mode, shard_map promotion). <a href="https://docs.jax.dev/en/latest/changelog.html">docs.jax.dev/en/latest/changelog.html</a>.</p>
+      <p class="ref" id="ref-jax-shardmap">JAX developers (2026). shard_map guide, including the scan carry and varying-manual-axes note. <a href="https://docs.jax.dev/en/latest/201/shard-map.html">docs.jax.dev/en/latest/201/shard-map.html</a>.</p>
+      <p class="ref" id="ref-jax-multi">JAX developers (2026). Using JAX in multi-host and multi-process environments. <a href="https://docs.jax.dev/en/latest/multi_process.html">docs.jax.dev/en/latest/multi_process.html</a>.</p>
+      <p class="ref" id="ref-xla-det">OpenXLA (2026). Determinism in XLA. <a href="https://openxla.org/xla/determinism">openxla.org/xla/determinism</a>.</p>
+      <p class="ref" id="ref-ledger">This session (2026-10-26). Source ledger sections A–F, including the GPT Sol numerical check (section E) and the Gemini index sweeps (A, F). Local file: <code>planning/notes/2026-10-26-source-ledger.md</code>.</p>
+      <p class="ref" id="ref-popsom">Yuan, L. (2018). POPSOM. <a href="https://github.com/njali2001/popsom">github.com/njali2001/popsom</a>. Origin of the online trainer and centroid code ported into aweSOM.</p>
+    </section>
+  </main>
+  <footer>Self-contained offline report. Saved at <code>planning/reports/2026-10-26-grmhd-scale-report.html</code> on branch <code>research/grmhd-scale</code>. Not published.</footer>
+</body>
+</html>
