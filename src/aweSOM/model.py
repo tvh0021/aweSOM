@@ -385,7 +385,11 @@ class SOMModel:
         )
 
     def predict(
-        self, data: np.ndarray, chunk: int = DEFAULT_CHUNK, return_distance: bool = False
+        self,
+        data: np.ndarray,
+        chunk: int = DEFAULT_CHUNK,
+        return_distance: bool = False,
+        backend: str = "numba",
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Classify raw (unscaled) data.
 
@@ -397,6 +401,9 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
+            backend (str, optional): ``"numba"``, ``"kdtree"`` or ``"jax"``; see
+                :func:`aweSOM.inference.predict`. The JAX path picks its own device
+                tile size inside each chunk. Defaults to ``"numba"``.
 
         Returns:
             np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and float64
@@ -416,7 +423,12 @@ class SOMModel:
             stop = min(start + chunk, n_points)
             scaled = self.scaler.transform(data[start:stop])
             out = _predict(
-                self.weights, self.node_cluster, scaled, chunk=chunk, return_distance=return_distance
+                self.weights,
+                self.node_cluster,
+                scaled,
+                chunk=None if backend == "jax" else chunk,
+                return_distance=return_distance,
+                backend=backend,
             )
             if return_distance:
                 labels[start:stop], dist[start:stop] = out

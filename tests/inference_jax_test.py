@@ -172,3 +172,25 @@ def test_empty_input():
         warnings.simplefilter("ignore", RuntimeWarning)
         idx, d2 = best_match_nodes_jax(np.zeros((4, 3)), np.zeros((0, 3)))
     assert idx.shape == (0,) and d2.shape == (0,)
+
+
+@needs_x64
+def test_sommodel_predict_backend_jax():
+    from aweSOM.model import Scaler, SOMModel
+
+    rng = np.random.default_rng(3)
+    raw = rng.normal(loc=[1.0, -20.0, 300.0], scale=[0.1, 5.0, 40.0], size=(500, 3))
+    model = SOMModel(
+        xdim=4,
+        ydim=3,
+        weights=rng.normal(size=(12, 3)),
+        node_cluster=np.arange(12) % 4,
+        feature_names=["a", "b", "c"],
+        scaler=Scaler.fit(raw, kind="manual"),
+        node_dist_q99=np.full(12, np.inf),
+        reject_distance=1.0,
+    )
+    lab_numba, d_numba = model.predict(raw, return_distance=True)
+    lab_jax, d_jax = model.predict(raw, return_distance=True, backend="jax", chunk=128)
+    assert np.array_equal(lab_numba, lab_jax)
+    assert np.array_equal(d_numba, d_jax)

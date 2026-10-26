@@ -32,6 +32,14 @@ nodes, default tile of 14,169 rows, Apple M1 Max): numba 2.2e6 points/s; JAX
 0.12 CPU float64 5.1e5 points/s (bitwise-equal labels and distances); JAX
 0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s (0 label disagreements). On
 a CPU-only machine the numba path is the faster one.
+
+:func:`best_match_nodes_kdtree` queries a ``scipy.spatial.cKDTree`` of the
+nodes and then re-evaluates the chosen node's distance with the exact
+float64 scan, so distances follow the contract above; only exact ties can
+pick a different node. Same benchmark (random data in [0, 1), 2368 nodes,
+M1 Max, ``workers=-1``): 8.0e6 points/s at F = 4, 3.6e6 at F = 6 and
+7.8e5 at F = 10 against 2.3e6, 1.9e6 and 1.1e6 for numba, so it pays off
+for roughly F <= 8 and loses above.
 """
 
 from __future__ import annotations
@@ -44,7 +52,7 @@ import warnings
 import numpy as np
 from numba import njit, prange
 
-__all__ = ["best_match_nodes", "best_match_nodes_jax", "predict", "benchmark"]
+__all__ = ["best_match_nodes", "best_match_nodes_jax", "best_match_nodes_kdtree", "predict", "benchmark"]
 
 DEFAULT_CHUNK = 2**20
 JAX_TILE_ELEMENTS = 2**25
@@ -334,6 +342,65 @@ def _collect(item, nodes_idx: np.ndarray, dist2: np.ndarray) -> None:
     dist2[start:stop] = np.asarray(d2)[: stop - start]
 
 
+@njit(parallel=True, cache=True)
+def _dist2_kernel(
+    weights: np.ndarray, data: np.ndarray, idx: np.ndarray, out_dist2: np.ndarray
+) -> None:
+    """Exact squared distance of every point to its given node (same arithmetic as _bmu_kernel)."""
+    n_features = weights.shape[1]
+    for p in prange(data.shape[0]):
+        i = idx[p]
+        acc = 0.0
+        for f in range(n_features):
+            d = weights[i, f] - np.float64(data[p, f])
+            acc += d * d
+        out_dist2[p] = acc
+
+
+def best_match_nodes_kdtree(
+    weights: np.ndarray, data: np.ndarray, chunk: int = DEFAULT_CHUNK, workers: int = -1
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find the best-matching node of every point with a KD-tree over the nodes.
+
+    A ``scipy.spatial.cKDTree`` is built on the lattice weights and queried
+    ``chunk`` points at a time with ``workers`` threads. The squared distance
+    of each point to its node is then recomputed with the exact float64 scan of
+    :func:`best_match_nodes`, so the distances are bitwise equal to that
+    function. The labels are equal except for points exactly equidistant from
+    two nodes, where the tree may return the higher index. Faster than the
+    brute-force scan for a few features (about F <= 8 on 2368 nodes), slower
+    above.
+
+    Args:
+        weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
+        data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
+        chunk (int, optional): Points per query. Defaults to 2**20.
+        workers (int, optional): Threads for the query, -1 for all cores. Defaults to -1.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: int32 [N] node indices and float64 [N]
+            squared Euclidean distances to those nodes.
+    """
+    from scipy.spatial import cKDTree
+
+    weights, data = _check_inputs(weights, data)
+    if chunk < 1:
+        raise ValueError("chunk must be positive")
+    if not np.all(np.isfinite(weights)):
+        raise ValueError("weights must be finite for the kdtree backend")
+    tree = cKDTree(weights)
+    n_points = data.shape[0]
+    nodes_idx = np.empty(n_points, dtype=np.int32)
+    dist2 = np.empty(n_points, dtype=np.float64)
+    for start in range(0, n_points, chunk):
+        stop = min(start + chunk, n_points)
+        block = np.ascontiguousarray(data[start:stop])
+        _, idx = tree.query(block, k=1, workers=workers)
+        nodes_idx[start:stop] = idx
+        _dist2_kernel(weights, block, nodes_idx[start:stop], dist2[start:stop])
+    return nodes_idx, dist2
+
+
 def predict(
     weights: np.ndarray,
     node_cluster: np.ndarray,
@@ -345,6 +412,8 @@ def predict(
     """Assign each point the cluster id of its best-matching node.
 
     ``backend="numba"`` runs :func:`best_match_nodes` on the CPU.
+    ``backend="kdtree"`` runs :func:`best_match_nodes_kdtree` (CPU, fastest for
+    few features; ties may go to a higher node).
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -359,7 +428,8 @@ def predict(
             for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
-        backend (str, optional): ``"numba"`` or ``"jax"``. Defaults to ``"numba"``.
+        backend (str, optional): ``"numba"``, ``"kdtree"`` or ``"jax"``. Defaults
+            to ``"numba"``.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]
@@ -373,10 +443,14 @@ def predict(
         nodes_idx, dist2 = best_match_nodes(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
+    elif backend == "kdtree":
+        nodes_idx, dist2 = best_match_nodes_kdtree(
+            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)

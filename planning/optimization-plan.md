@@ -91,7 +91,7 @@ Where the current time goes:
 
 ### Phase 4: Faster search (if still needed)
 
-- [ ] Use a KD-tree or ball tree when the feature count is low.
+- [x] Use a KD-tree or ball tree when the feature count is low. Done 2026-10-26: `inference.best_match_nodes_kdtree` / `predict(backend="kdtree")` (scipy cKDTree, exact distance re-evaluated). Random data, 2368 nodes, M1 Max: 8.0e6 pts/s at F=4, 3.6e6 at F=6, 7.8e5 at F=10 against 2.3e6 / 1.9e6 / 1.1e6 for numba. Pays off for about F <= 8.
 - [ ] Start each point's search from its neighbouring cell's (or the previous snapshot's) best node. Search outward over the lattice and confirm the result is exact.
 - [ ] Downstream tracking: connected-component labelling with `scipy.ndimage.label` or `cc3d`, then match regions across snapshots. `origin/active-dev` has a pure-Python version in `combine_clumps.py` that will not scale.
 
@@ -107,3 +107,4 @@ Where the current time goes:
 | Date | Change |
 |---|---|
 | 2026-10-12 | Plan created, with baseline benchmarks and benchmark scripts in `planning/benchmarks/` |
+| 2026-10-26 | Phase 3: JAX device inference (`best_match_nodes_jax`, bitwise with numba in float64; jax-metal float32 2.9e6 pts/s). SCE ensemble loop rewritten on contingency tables (411 s -> 10 s on 28 maps x 128^3, bitwise identical). Phase 4: KD-tree backend. Two GPT-6.1 Sol reviews applied (see ISSUES.md). |
