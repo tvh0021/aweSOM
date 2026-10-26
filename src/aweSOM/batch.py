@@ -543,6 +543,79 @@ def topographic_error_fast(weights: np.ndarray, data: np.ndarray, xdim: int, ydi
     return int((cheb > 1).sum()) / first.size
 
 
+def train_batch_kdtree(
+    data: np.ndarray,
+    xdim: int,
+    ydim: int,
+    epochs: int = 40,
+    r_max: Optional[float] = None,
+    r_min: float = 8,
+    seed: int = 42,
+    init: str = "sampling",
+    initial_weights: Optional[np.ndarray] = None,
+    workers: int = -1,
+    verbose: bool = False,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Single-process CPU batch map with exact float64 BMUs from a KD-tree (prototype).
+
+    Same schedule, initialisation and update as :func:`train_batch`; the BMU of
+    every sample comes from ``scipy.spatial.cKDTree`` over the current weights
+    (float64, ``workers`` threads) instead of the float32 matmul expansion, and
+    the per-node sums use ``np.bincount``. Fast for few features (F <= ~8).
+    """
+    from scipy.spatial import cKDTree
+
+    x = np.ascontiguousarray(data, np.float64)
+    n_total, n_feat = x.shape
+    n_nodes = xdim * ydim
+    if initial_weights is None:
+        w = _initial_weights(x, np.array([n_total]), n_nodes, init, seed)
+    else:
+        w = np.array(initial_weights, np.float64)
+    if r_max is None:
+        r_max = max(xdim, ydim) + 1
+    radii = radius_schedule(epochs, r_max, min(r_min, r_max))
+    qe_after = np.zeros(epochs)
+    times = np.zeros(epochs)
+
+    def sums(w):
+        dist, bmu = cKDTree(w).query(x, k=1, workers=workers)
+        n = np.bincount(bmu, minlength=n_nodes).astype(np.float64)
+        s = np.empty((n_nodes, n_feat))
+        for f in range(n_feat):
+            s[:, f] = np.bincount(bmu, weights=x[:, f], minlength=n_nodes)
+        return s, n, float(dist.sum())
+
+    for e, r in enumerate(radii):
+        t0 = time.perf_counter()
+        h = _neighbourhood64(xdim, ydim, r)
+        s, n, qe_sum = sums(w)
+        num = h.T @ s
+        den = h.T @ n
+        has_hits = den > 0
+        w = np.where(has_hits[:, None], num / np.where(has_hits, den, 1.0)[:, None], w)
+        times[e] = time.perf_counter() - t0
+        if e > 0:
+            qe_after[e - 1] = qe_sum / n_total
+        else:
+            qe_initial = qe_sum / n_total
+        if verbose:
+            print(f"epoch {e + 1}/{epochs}  radius {r:.3f}  qe(entering) {qe_sum / n_total:.6g}  {times[e]:.3f} s", flush=True)
+    _, hits, qe_sum = sums(w)
+    qe_after[-1] = qe_sum / n_total
+    info = {
+        "radius": radii,
+        "qe": qe_after,
+        "qe_initial": qe_initial,
+        "hits": hits.round().astype(np.int64),
+        "epoch_time": times,
+        "n_devices": 1,
+        "chunk": n_total,
+        "n_samples": n_total,
+    }
+    return w, info
+
+
 def _row_block(n_nodes: int, n_feat: int, max_elements: int = 1 << 23) -> int:
     """Rows per block so a ``rows x nodes x features`` float64 temporary stays near 64 MB."""
     return max(1, max_elements // max(1, n_nodes * n_feat))
