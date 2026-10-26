@@ -230,7 +230,7 @@ def loop_over_all_clusters(
             raise ValueError(f"{run} has {lab.shape[0]} cells, expected {n_cells} from dims {dimensions}")
 
     # sizes[i][cid] = cells of cluster cid in run i. Contingency tables are built on
-    # demand (each run pair twice) so only one nids[i] x nids[j] table is live at a time.
+    # demand (each run pair twice) so at most one nids[i] x nids[j] table is live at a time.
     sizes = [np.bincount(lab[(lab >= 0) & (lab < n)].astype(np.int64), minlength=n) for lab, n in zip(labels, nids)]
 
     def overlap(i, j):
@@ -255,6 +255,7 @@ def loop_over_all_clusters(
                 n_i_row = table[cid]
                 for cidC in range(nids[j]):
                     totals[cid] += pair_quality_from_counts(n_a, int(sizes[j][cidC]), int(n_i_row[cidC]))
+            table = n_i_row = None  # drop the view and the table before the next pair's is built
 
         for cid in range(nids[i]):
             total_SQ_scalar = totals[cid]

@@ -365,11 +365,14 @@ def best_match_nodes_kdtree(
     A ``scipy.spatial.cKDTree`` is built on the lattice weights and queried
     ``chunk`` points at a time with ``workers`` threads. The squared distance
     of each point to its node is then recomputed with the exact float64 scan of
-    :func:`best_match_nodes`, so the distances are bitwise equal to that
-    function. The labels are equal except for points exactly equidistant from
-    two nodes, where the tree may return the higher index. Faster than the
-    brute-force scan for a few features (about F <= 8 on 2368 nodes), slower
-    above.
+    :func:`best_match_nodes`, so the distance of the chosen node is bitwise
+    equal to that function. The labels are equal except for ties and near-ties:
+    the tree compares distances computed with its own rounding, so two nodes
+    whose exact distances differ by about one float64 ulp, or are equal, can
+    be resolved the other way. Weights and points must be finite (the tree
+    rejects NaN); the brute-force scan is used for any point the tree cannot
+    place (squared distances overflowing float64). Faster than the brute-force
+    scan for a few features (about F <= 8 on 2368 nodes), slower above.
 
     Args:
         weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
@@ -396,6 +399,9 @@ def best_match_nodes_kdtree(
         stop = min(start + chunk, n_points)
         block = np.ascontiguousarray(data[start:stop])
         _, idx = tree.query(block, k=1, workers=workers)
+        missing = idx >= weights.shape[0]  # cKDTree's "no neighbour" sentinel
+        if missing.any():
+            idx[missing], _ = best_match_nodes(weights, block[missing])
         nodes_idx[start:stop] = idx
         _dist2_kernel(weights, block, nodes_idx[start:stop], dist2[start:stop])
     return nodes_idx, dist2

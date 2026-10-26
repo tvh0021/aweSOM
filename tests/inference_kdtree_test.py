@@ -37,3 +37,13 @@ def test_rejects_non_finite_weights_and_bad_chunk():
         best_match_nodes_kdtree(w, np.zeros((2, 2)))
     with pytest.raises(ValueError):
         best_match_nodes_kdtree(np.zeros((3, 2)), np.zeros((2, 2)), chunk=0)
+
+
+def test_overflowing_distances_fall_back_to_the_scan():
+    # squared distances overflow float64: the tree reports "no neighbour" (index == n_nodes)
+    weights = np.array([[1e200], [2e200]])
+    data = np.array([[0.0], [1.5e200]])
+    idx_ref, d2_ref = best_match_nodes(weights, data)
+    idx, d2 = best_match_nodes_kdtree(weights, data)
+    assert np.array_equal(idx, idx_ref)
+    assert np.array_equal(d2, d2_ref)
