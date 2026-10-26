@@ -16,6 +16,17 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 - **What:** `som_object.test-*.pkl` and `labels.test-*.npy` are written to cwd and removed afterwards; a failing test leaves them behind.
 - **Fix:** use the `tmp_path` fixture.
 
+### C. Plasma example's merge threshold and stored clusters do not match the paper (pre-existing, documentation)
+
+- **Where:** `examples/plasma-turbulence/run_plasma_som.py:95` (`merge_threshold = 0.2`), `examples/plasma-turbulence/som_object.fiducial-5000-64-37-0.1-2097152-1u.pkl` (`clusters` attribute).
+- **What:** Ha et al. (2024, Appendix A) merge at 0.25, which on the shipped fiducial lattice reproduces the paper's seven clusters and volume fractions exactly. The example script hard-codes 0.2 (nine clusters on the same lattice), and the `clusters` array stored in the pickle (fractions 6.5, 1.7, 1.1, 1.5, 69.8, 17.9, 1.5 %) matches none of 0.2, 0.25 or 0.3. Appendix B also states initial weights in [-1, 1] while `Lattice` draws them in [0, 1).
+- **Status:** reported in `planning/reports/2026-10-26-plasma-metal-results.html`, section 1; not changed because each fix alters published example output.
+
+### D. `tests/sce_test.py` under a Metal/GPU JAX (fixed on `research/grmhd-scale`, commit f11f9f2)
+
+- **What:** `test_jax_cpu_available` patched `jax.default_backend` without re-importing `aweSOM.sce`, so it only passed on CPU-only machines; `test_compute_SQ` required a Python `float` and a NumPy array, which JAX device arrays are not.
+- **Fix:** reload the module under the patch; compare by value and shape.
+
 ## Fixed on `research/grmhd-scale` (2026-10-26)
 
 ### 1. `run_som.py` CLI crashes on an undefined argument
