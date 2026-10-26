@@ -1,5 +1,6 @@
 ## Given segmentation labels, combine clumps of the same label that are connected
 
+import numba
 import numpy as np
 from tqdm import tqdm
 
@@ -107,6 +108,128 @@ def get_clumps(data_array: np.ndarray, connectivity: np.ndarray) -> list:
         raise ValueError("Input array must be 2D or 3D.")
 
     return clumps
+
+
+def _structure_from_deltas(connectivity, ndim):
+    """3^ndim boolean structuring element holding the centre and the given neighbor offsets."""
+    structure = np.zeros((3,) * ndim, dtype=bool)
+    structure[(1,) * ndim] = True
+    for delta in connectivity:
+        structure[tuple(1 + d for d in delta)] = True
+        structure[tuple(1 - d for d in delta)] = True
+    return structure
+
+
+def label_clumps(data_array: np.ndarray, connectivity, periodic: bool = False, use_cc3d: bool = True, renumber: bool = True):
+    """Vectorized ``get_clumps``: label connected regions of equal value.
+
+    Args:
+        data_array (np.ndarray): 2D or 3D array of (integer) labels.
+        connectivity: neighbor offsets as returned by ``generate_neighbors``.
+        periodic (bool): also connect cells across opposite faces.
+        use_cc3d (bool): use the ``cc3d`` package (multi-label, one pass) when it is
+            installed and supports the connectivity (3D 6/18/26, periodic only for 6).
+        renumber (bool): renumber clumps by first cell in C order (costs one sort);
+            without it ids are still a valid partition but in backend order.
+
+    Returns:
+        (np.ndarray, int): int32 clump id per cell and the number of clumps. Ids are
+            numbered in order of each clump's first cell in C order, which is the
+            order of the list returned by ``get_clumps`` (for ``periodic=False``).
+    """
+    data_array = np.asarray(data_array)
+    structure = _structure_from_deltas(connectivity, data_array.ndim)
+    out = _label_cc3d(data_array, structure, periodic) if use_cc3d else None
+    if out is not None:
+        offset = int(out.max()) + 1
+    else:
+        from scipy import ndimage
+
+        out = np.zeros(data_array.shape, dtype=np.int64)
+        offset = 0
+        for value in np.unique(data_array):
+            lab, n = ndimage.label(data_array == value, structure=structure)
+            out[lab > 0] = lab[lab > 0] + offset
+            offset += n
+        out -= 1
+        if periodic:
+            out, offset = _merge_periodic(data_array, out, offset, connectivity)
+    if not renumber:
+        return out, offset
+    # renumber by first occurrence in C order
+    ids, n = _first_seen_renumber(out.reshape(-1), offset)
+    return ids.reshape(data_array.shape), n
+
+
+@numba.njit(cache=True)
+def _first_seen_renumber(flat, n_labels):
+    """Relabel 0..n_labels-1 in order of first appearance (one sequential pass)."""
+    new_id = np.full(n_labels, -1, dtype=np.int32)
+    out = np.empty(flat.size, dtype=np.int32)
+    n = 0
+    for k in range(flat.size):
+        v = flat[k]
+        if new_id[v] < 0:
+            new_id[v] = n
+            n += 1
+        out[k] = new_id[v]
+    return out, n
+
+
+def _label_cc3d(data_array, structure, periodic):
+    """cc3d multi-label connected components, or None if cc3d cannot do this case."""
+    try:
+        import cc3d
+    except ImportError:
+        return None
+    if data_array.ndim != 3 or not np.issubdtype(data_array.dtype, np.integer):
+        return None
+    n_nb = int(structure.sum()) - 1
+    if n_nb not in (6, 18, 26) or (periodic and n_nb != 6):
+        return None
+    full = np.zeros((3, 3, 3), dtype=bool)
+    full[1, 1, 1] = True
+    reference = {6: (np.abs(np.indices((3, 3, 3)) - 1).sum(axis=0) <= 1),
+                 18: (np.abs(np.indices((3, 3, 3)) - 1).sum(axis=0) <= 2),
+                 26: np.ones((3, 3, 3), dtype=bool)}[n_nb]
+    if not np.array_equal(structure, reference):  # e.g. the custom 10-neighbour set
+        return None
+    lo = int(data_array.min())
+    shifted = (data_array.astype(np.int64) - lo + 1).astype(np.uint32)  # cc3d treats 0 as background
+    lab = cc3d.connected_components(shifted, connectivity=n_nb, periodic_boundary=periodic, out_dtype=np.uint32)
+    return lab.astype(np.int64) - 1
+
+
+def _merge_periodic(data_array, labels, n_labels, connectivity):
+    """Join clumps that touch across the periodic boundary (union over wrapped neighbor pairs)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    src, dst = [], []
+    shape = data_array.shape
+    for delta in connectivity:
+        # only cells whose neighbor wraps around: a slab of width 1 on each axis with delta != 0
+        for axis, d in enumerate(delta):
+            if d == 0:
+                continue
+            sl = [slice(None)] * data_array.ndim
+            sl[axis] = slice(shape[axis] - 1, shape[axis]) if d > 0 else slice(0, 1)
+            sl = tuple(sl)
+            v = data_array[sl]
+            nb_index = []
+            for ax, dd in enumerate(delta):
+                idx = np.arange(shape[ax])[sl[ax]]
+                nb_index.append((idx + dd) % shape[ax])
+            grid = np.ix_(*nb_index)
+            v_nb = data_array[grid]
+            same = v == v_nb
+            src.append(labels[sl][same])
+            dst.append(labels[grid][same])
+    src = np.concatenate(src) if src else np.empty(0, np.int64)
+    dst = np.concatenate(dst) if dst else np.empty(0, np.int64)
+    graph = coo_matrix((np.ones(src.size, dtype=np.int8), (src, dst)), shape=(n_labels, n_labels))
+    n, comp = connected_components(graph, directed=False)
+    return comp[labels], n
 
 
 def merge_double_sheets(
