@@ -19,16 +19,31 @@ Measured throughput (``benchmark()``, N = 2,000,000, F = 6, 2368 nodes,
 float64, Apple M1 Max with 10 threads, numba 0.68): ``best_match_nodes``
 1.61e6 points/s, ``Lattice.best_match`` 1.00e5 points/s, identical labels.
 See ``cpp/README.md`` for the C++ figure.
+
+:func:`best_match_nodes_jax` is the same search on a JAX device (CPU, CUDA,
+ROCm or Apple Metal), imported lazily so ``aweSOM`` does not need JAX. With
+float64 available it follows the contract above and its labels and distances
+equal :func:`best_match_nodes` bitwise; without float64 (Apple Metal) it runs
+the same direct-difference arithmetic in float32. Measured with
+``planning/benchmarks/bench_inference_jax.py`` (N = 2,000,000, F = 4, 2368
+nodes, default tile of 14,169 rows, Apple M1 Max): numba 2.2e6 points/s; JAX
+0.12 CPU float64 5.1e5 points/s (bitwise-equal labels and distances); JAX
+0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s (0 label disagreements). On
+a CPU-only machine the numba path is the faster one.
 """
 
+import contextlib
+import functools
 import time
+import warnings
 
 import numpy as np
 from numba import njit, prange
 
-__all__ = ["best_match_nodes", "predict", "benchmark"]
+__all__ = ["best_match_nodes", "best_match_nodes_jax", "predict", "benchmark"]
 
 DEFAULT_CHUNK = 2**20
+JAX_TILE_ELEMENTS = 2**25
 
 
 @njit(parallel=True, cache=True)
@@ -110,31 +125,245 @@ def best_match_nodes(
     return nodes_idx, dist2
 
 
+def _jax_x64_scope():
+    """Return a context manager that enables float64 in JAX, or None if it cannot.
+
+    Uses the scoped ``jax.enable_x64`` (recent JAX) or
+    ``jax.experimental.enable_x64`` (JAX 0.4) so the global config is left as it
+    was. As a last resort the global flag is switched on and restored on exit.
+    """
+    import jax
+
+    if hasattr(jax, "enable_x64"):
+        return jax.enable_x64(True)
+    try:
+        from jax.experimental import enable_x64
+    except ImportError:
+        enable_x64 = None
+    if enable_x64 is not None:
+        return enable_x64(True)
+
+    @contextlib.contextmanager
+    def _global_flag():
+        old = bool(jax.config.read("jax_enable_x64"))
+        jax.config.update("jax_enable_x64", True)
+        try:
+            yield
+        finally:
+            jax.config.update("jax_enable_x64", old)
+
+    try:
+        jax.config.read("jax_enable_x64")
+    except Exception:
+        return None
+    return _global_flag()
+
+
+def _jax_float64_scope(devices):
+    """Return a fresh x64 scope if every device computes in float64 inside it, else None."""
+    import jax
+
+    if any(d.platform.upper() == "METAL" for d in devices):
+        return None  # jax-metal has no float64; probing it can abort the process
+    scope = _jax_x64_scope()
+    if scope is None:
+        return None
+    try:
+        with scope:
+            for d in devices:
+                probe = jax.device_put(np.ones(2, dtype=np.float64), d)
+                if (probe * probe).dtype != np.float64:
+                    return None
+    except Exception:
+        return None
+    return _jax_x64_scope()
+
+
+@functools.lru_cache(maxsize=None)
+def _jax_tile_fn():
+    """Build the jitted per-tile BMU search (compiled once per tile shape and dtype)."""
+    import jax
+    import jax.numpy as jnp
+
+    def tile(weights, block, zero):
+        n_features = weights.shape[1]
+        # Same arithmetic as _bmu_kernel: direct differences and a sequential sum
+        # over features, written out so XLA cannot reassociate it. XLA's CPU
+        # backend contracts ``acc + d * d`` into a fused multiply-add, which
+        # rounds once instead of twice. Adding a runtime zero to every product
+        # leaves the contraction only ``d * d + 0``, which rounds to d * d.
+        d = block[:, None, 0] - weights[None, :, 0]
+        acc = d * d + zero
+        for f in range(1, n_features):
+            d = block[:, None, f] - weights[None, :, f]
+            acc = acc + (d * d + zero)
+        # _bmu_kernel never accepts a NaN distance; inf has the same effect here
+        acc = jnp.where(jnp.isnan(acc), jnp.inf, acc)
+        # argmin returns the first minimum, so ties go to the lowest node. A
+        # single variadic (value, index) reduce would do both in one pass, but
+        # jax-metal cannot lower it.
+        best_idx = jnp.argmin(acc, axis=1).astype(jnp.int32)
+        best = jnp.min(acc, axis=1)
+        return best_idx, best
+
+    return jax.jit(tile)
+
+
+def best_match_nodes_jax(
+    weights: np.ndarray,
+    data: np.ndarray,
+    chunk: int | None = None,
+    precision: str = "highest",
+    devices: list | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find the best-matching node of every point with JAX, tile by tile.
+
+    The points are cut into tiles of ``chunk`` rows (the last tile is padded, so
+    one compiled shape serves the whole call). Each tile is copied to a device,
+    searched there, and its results are copied into preallocated NumPy outputs;
+    the device holds a ``chunk x nodes`` distance block at most, never one for
+    the whole dataset. Tiles are dispatched asynchronously and, when several
+    devices are given, round-robin over them (tile ``k`` on device
+    ``k % len(devices)``), so copies and compute of consecutive tiles overlap.
+
+    Arithmetic: squared distances are accumulated by direct differences,
+    ``((x - w) ** 2)`` summed over features in ascending order, never through
+    the ``||w||^2 - 2 x.w`` expansion. The node is chosen with ``jnp.argmin``,
+    which returns the first (lowest) index among equal minima, like
+    ``np.argmin``, so exact ties go to the lowest node as in
+    :func:`best_match_nodes`. NaN distances are treated as infinite, which is
+    what the strict ``<`` scan of the numba kernel does with them.
+
+    * ``precision="highest"``: float64 when every device supports it (CPU,
+      CUDA, ROCm; enabled through a scoped ``enable_x64``, the global JAX
+      config is not changed). Labels and distances then equal
+      :func:`best_match_nodes` bitwise, including float32 input, which is
+      promoted to float64 on the host. If a device has no float64 (Apple
+      Metal), a ``RuntimeWarning`` is issued and the float32 path is used.
+    * ``precision="float32"``: weights and points are rounded to float32 and
+      the same direct arithmetic runs in float32. The relative rounding error
+      of a distance is about (F + 2) * 6e-8, so a point whose two nearest
+      nodes are closer than that, or exactly tied after rounding, can get the
+      other node. On random data (2368 nodes, F = 4, 2e6 points) no label
+      changed, on CPU or Metal.
+
+    Args:
+        weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
+        data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
+        chunk (int | None, optional): Points per tile. Defaults to
+            ``2**25 // nodes`` (about 14,000 rows for 2368 nodes, so the
+            distance block of one tile is at most 256 MB in float64).
+        precision (str, optional): ``"highest"`` or ``"float32"``. Defaults to
+            ``"highest"``.
+        devices (list | None, optional): JAX devices to use. Defaults to
+            ``jax.local_devices()``.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: int32 [N] node indices and [N] squared
+            Euclidean distances, float64 on the float64 path and float32 on the
+            float32 path.
+    """
+    import jax
+
+    weights, data = _check_inputs(weights, data)
+    if precision not in ("highest", "float32"):
+        raise ValueError('precision must be "highest" or "float32"')
+    n_points, n_features = data.shape
+    if chunk is None:
+        chunk = max(1, JAX_TILE_ELEMENTS // weights.shape[0])
+    if chunk < 1:
+        raise ValueError("chunk must be positive")
+    chunk = min(chunk, max(1, n_points))
+    devices = list(jax.local_devices() if devices is None else devices)
+
+    scope = _jax_float64_scope(devices) if precision == "highest" else None
+    if precision == "highest" and scope is None:
+        warnings.warn(
+            "best_match_nodes_jax: float64 is not available on "
+            f"{devices[0].platform}; using float32 direct arithmetic",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    dtype = np.float64 if scope is not None else np.float32
+
+    nodes_idx = np.empty(n_points, dtype=np.int32)
+    dist2 = np.empty(n_points, dtype=dtype)
+    if n_points == 0:
+        return nodes_idx, dist2
+
+    tile_fn = _jax_tile_fn()
+    w_host = weights.astype(dtype)
+    pad = np.zeros((chunk, n_features), dtype=dtype)
+    with scope if scope is not None else contextlib.nullcontext():
+        w_dev = [jax.device_put(w_host, d) for d in devices]
+        zero_dev = [jax.device_put(np.zeros((), dtype=dtype), d) for d in devices]
+        pending = []  # (start, stop, idx, dist) still in flight
+        for k, start in enumerate(range(0, n_points, chunk)):
+            stop = min(start + chunk, n_points)
+            block = data[start:stop].astype(dtype)
+            if stop - start < chunk:
+                pad[: stop - start] = block
+                pad[stop - start :] = 0
+                block = pad
+            dev = k % len(devices)
+            out = tile_fn(w_dev[dev], jax.device_put(block, devices[dev]), zero_dev[dev])
+            pending.append((start, stop, *out))
+            if len(pending) > len(devices):
+                _collect(pending.pop(0), nodes_idx, dist2)
+        for item in pending:
+            _collect(item, nodes_idx, dist2)
+    return nodes_idx, dist2
+
+
+def _collect(item, nodes_idx: np.ndarray, dist2: np.ndarray) -> None:
+    start, stop, idx, d2 = item
+    nodes_idx[start:stop] = np.asarray(idx)[: stop - start]
+    dist2[start:stop] = np.asarray(d2)[: stop - start]
+
+
 def predict(
     weights: np.ndarray,
     node_cluster: np.ndarray,
     data: np.ndarray,
-    chunk: int = DEFAULT_CHUNK,
+    chunk: int | None = None,
     return_distance: bool = False,
+    backend: str = "numba",
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
+
+    ``backend="numba"`` runs :func:`best_match_nodes` on the CPU.
+    ``backend="jax"`` runs :func:`best_match_nodes_jax` with
+    ``precision="highest"`` on the default JAX devices: identical labels where
+    the devices support float64, float32 arithmetic (with a warning) where they
+    do not.
 
     Args:
         weights (np.ndarray): [nodes, F] lattice weights.
         node_cluster (np.ndarray): [nodes] cluster id of each node (-1 = unassigned).
         data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
-        chunk (int, optional): Number of points per kernel call. Defaults to 2**20.
+        chunk (int | None, optional): Number of points per kernel call (numba) or
+            per tile (jax). Defaults to None: 2**20 for numba, ``2**25 // nodes``
+            for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
+        backend (str, optional): ``"numba"`` or ``"jax"``. Defaults to ``"numba"``.
 
     Returns:
-        np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and float64 [N]
-            distances if ``return_distance`` is True.
+        np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]
+            distances if ``return_distance`` is True (float64, or float32 from
+            the jax backend without float64).
     """
     node_cluster = np.asarray(node_cluster, dtype=np.int32).ravel()
     if node_cluster.shape[0] != np.shape(weights)[0]:
         raise ValueError("node_cluster must have one entry per node")
-    nodes_idx, dist2 = best_match_nodes(weights, data, chunk=chunk)
+    if backend == "numba":
+        nodes_idx, dist2 = best_match_nodes(
+            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
+    elif backend == "jax":
+        nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
+    else:
+        raise ValueError('backend must be "numba" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)
