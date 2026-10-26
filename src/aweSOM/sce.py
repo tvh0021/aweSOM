@@ -165,9 +165,35 @@ def _load_labels(path: str) -> np.ndarray:
 
 
 _CONTINGENCY_CHUNK = 1 << 24
+_TABLE_CACHE_BYTES = 1 << 28  # reuse each run pair's table for both runs below this total
+
+try:
+    import numba as _numba
+
+    @_numba.njit(parallel=True, cache=True)
+    def _contingency_numba(labels_a, n_a, labels_b, n_b, n_parts):
+        n = labels_a.shape[0]
+        partial = np.zeros((n_parts, n_a * n_b), dtype=np.int64)
+        step = (n + n_parts - 1) // n_parts
+        for p in _numba.prange(n_parts):
+            start = p * step
+            stop = min(n, start + step)
+            row = partial[p]
+            for k in range(start, stop):
+                x = np.int64(labels_a[k])
+                y = np.int64(labels_b[k])
+                if x >= 0 and x < n_a and y >= 0 and y < n_b:
+                    row[x * n_b + y] += 1
+        return partial.sum(axis=0)
+
+    HAVE_NUMBA = True
+except ImportError:  # pragma: no cover - numba is a hard dependency
+    HAVE_NUMBA = False
 
 
-def contingency_table(labels_a: np.ndarray, n_a: int, labels_b: np.ndarray, n_b: int) -> np.ndarray:
+def contingency_table(
+    labels_a: np.ndarray, n_a: int, labels_b: np.ndarray, n_b: int, use_numba: bool = True
+) -> np.ndarray:
     """Count cells with label ``i`` in ``labels_a`` and ``j`` in ``labels_b``.
 
     Args:
@@ -180,6 +206,13 @@ def contingency_table(labels_a: np.ndarray, n_a: int, labels_b: np.ndarray, n_b:
         np.ndarray: ``[n_a, n_b]`` int64 counts. Labels outside the id range are
             ignored, exactly as ``create_mask`` never selects them.
     """
+    if HAVE_NUMBA and use_numba:
+        # one private table per part; keep their total under ~64 MB for large id counts
+        n_parts = min(_numba.get_num_threads() * 4, labels_a.shape[0] // 65536 + 1)
+        n_parts = max(1, min(n_parts, (1 << 26) // (8 * n_a * n_b + 1)))
+        return _contingency_numba(
+            np.ascontiguousarray(labels_a), int(n_a), np.ascontiguousarray(labels_b), int(n_b), n_parts
+        ).reshape(n_a, n_b)
     table = np.zeros(n_a * n_b, dtype=np.int64)
     for start in range(0, labels_a.shape[0], _CONTINGENCY_CHUNK):
         a = labels_a[start : start + _CONTINGENCY_CHUNK].astype(np.int64)
@@ -233,8 +266,20 @@ def loop_over_all_clusters(
     # demand (each run pair twice) so at most one nids[i] x nids[j] table is live at a time.
     sizes = [np.bincount(lab[(lab >= 0) & (lab < n)].astype(np.int64), minlength=n) for lab, n in zip(labels, nids)]
 
+    # Each unordered pair's table is built once and its transpose reused for the other run,
+    # as long as all tables together fit in _TABLE_CACHE_BYTES; counts are integers, so
+    # table(j, i) == table(i, j).T exactly. A table is dropped once both runs used it.
+    cache_tables = 8 * sum(nids) ** 2 <= _TABLE_CACHE_BYTES
+    cached = {}
+
     def overlap(i, j):
-        return contingency_table(labels[i], nids[i], labels[j], nids[j])
+        if not cache_tables:
+            return contingency_table(labels[i], nids[i], labels[j], nids[j])
+        if j < i:
+            return cached.pop((j, i)).T
+        table = contingency_table(labels[i], nids[i], labels[j], nids[j])
+        cached[(i, j)] = table
+        return table
 
     for i, run in enumerate(runs):
         print("-----------------------")
