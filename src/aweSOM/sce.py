@@ -230,6 +230,7 @@ def loop_over_all_clusters(
     number_of_clusters: array_lib.ndarray,
     dimensions: np.ndarray,
     subfolder: str = "SCE",
+    write_masks: bool = True,
 ) -> int:
     """
     Loops over all clusters in the given data, compute goodness-of-fit, then save Gsum values to file.
@@ -249,6 +250,11 @@ def loop_over_all_clusters(
         number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
         dimensions (np.ndarray): A 1d array representing the dimensions of the clusters (can be any dimension but nx*ny*nz has to be equal to number of data points).
         subfolder (str): The name of the subfolder to save the results to.
+        write_masks (bool): write one full-size float64 ``mask-<run>-id<cid>.npy`` per cluster
+            (the default). Each is the run's cluster mask times its Gsum, so
+            ``make_sce_clusters.combine_separated_clusters_from_labels`` can rebuild the
+            combined map from the label files and ``multimap_mappings.txt`` alone; pass
+            False to skip these writes (8 bytes per cell per cluster).
 
     Returns:
         Save Gsum value of each cluster C to a file.
@@ -305,8 +311,9 @@ def loop_over_all_clusters(
         for cid in range(nids[i]):
             total_SQ_scalar = totals[cid]
             # every cell of this cluster accumulated exactly the same SQ values in the same order
-            total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).reshape(dimensions)
-            np.save(subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid), total_mask)
+            if write_masks:
+                total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).reshape(dimensions)
+                np.save(subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid), total_mask)
             with open(subfolder + "/multimap_mappings.txt", "a") as f:
                 f.write("{} {}\n".format(cid, total_SQ_scalar))
 
@@ -352,6 +359,13 @@ def parse_args():
         help="Dimensions of the data",
     )
 
+    parser.add_argument(
+        "--no_masks",
+        dest="write_masks",
+        action="store_false",
+        help="Do not write the full-size mask-*.npy files; make_sce_clusters --labels_path rebuilds the combined map from the label files",
+    )
+
     return parser.parse_args()
 
 
@@ -394,4 +408,4 @@ if __name__ == "__main__":
     # --------------------------------------------------
     # loop over data files reading image by image and do pairwise comparisons
     # all wrapped inside the loop_over_all_clusters function, which uses JAX for fast computation
-    loop_over_all_clusters(cluster_files, nids_array, data_dims, subfolder)
+    loop_over_all_clusters(cluster_files, nids_array, data_dims, subfolder, write_masks=args.write_masks)
