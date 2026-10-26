@@ -52,9 +52,19 @@ import warnings
 import numpy as np
 from numba import njit, prange
 
-__all__ = ["best_match_nodes", "best_match_nodes_jax", "best_match_nodes_kdtree", "predict", "benchmark"]
+__all__ = [
+    "best_match_nodes",
+    "best_match_nodes_jax",
+    "best_match_nodes_kdtree",
+    "best_match_nodes_screen",
+    "predict",
+    "benchmark",
+]
 
 DEFAULT_CHUNK = 2**20
+SCREEN_TILE = 512
+KDTREE_LEAFSIZE = 64
+_U32 = 2.0**-24  # float32 unit roundoff
 JAX_TILE_ELEMENTS = 2**25
 
 
@@ -136,6 +146,147 @@ def best_match_nodes(
         stop = min(start + chunk, n_points)
         block = np.ascontiguousarray(data[start:stop])
         _bmu_kernel(weights, block, nodes_idx[start:stop], dist2[start:stop])
+    return nodes_idx, dist2
+
+
+@njit(parallel=True, cache=True)
+def _screen_kernel(
+    weights: np.ndarray,
+    w32: np.ndarray,
+    wmax: float,
+    data: np.ndarray,
+    out_idx: np.ndarray,
+    out_dist2: np.ndarray,
+    tile: int,
+) -> int:
+    """float32 screening scan certified against the float64 reference; see best_match_nodes_screen."""
+    n = data.shape[0]
+    n_nodes, F = weights.shape
+    g = (F + 2) * _U32 * 1.01
+    ntiles = (n + tile - 1) // tile
+    nfb = np.zeros(ntiles, dtype=np.int64)
+    for t in prange(ntiles):
+        start = t * tile
+        m = min(tile, n - start)
+        # feature-major float32 copy of the tile: the point loop below vectorises 4-wide
+        xT = np.zeros((F, tile), dtype=np.float32)
+        for p in range(m):
+            for f in range(F):
+                xT[f, p] = np.float32(data[start + p, f])
+        s1 = np.full(tile, np.float32(np.inf))  # smallest screen value
+        s2 = np.full(tile, np.float32(np.inf))  # smallest over every other node
+        j1 = np.zeros(tile, dtype=np.int32)
+        acc = np.empty(tile, dtype=np.float32)
+        for i in range(n_nodes):
+            w0 = w32[i, 0]
+            for p in range(tile):
+                d = w0 - xT[0, p]
+                acc[p] = d * d
+            for f in range(1, F):
+                wf = w32[i, f]
+                for p in range(tile):
+                    d = wf - xT[f, p]
+                    acc[p] = acc[p] + d * d
+            ii = np.int32(i)
+            for p in range(tile):
+                a = acc[p]
+                b1 = s1[p]
+                b2 = s2[p]
+                c = a < b1
+                c2 = a < b2
+                n2 = b1 if c else (a if c2 else b2)
+                # fmin, not a select on c: LLVM turns the select into per-lane
+                # branches and conditional stores here
+                s1[p] = np.fmin(a, b1)
+                j1[p] = ii if c else j1[p]
+                s2[p] = n2
+        for p in range(m):
+            q = start + p
+            xn2 = 0.0
+            for f in range(F):
+                v = np.float64(data[q, f])
+                xn2 += v * v
+            e = 2.0 * _U32 * (wmax + np.sqrt(xn2)) * 1.01 + 1e-18
+            lo2 = np.sqrt(np.float64(s2[p]) / (1.0 + g)) - e
+            hi1 = (np.sqrt(np.float64(s1[p]) / (1.0 - g)) + e) * (1.0 + 1e-12)
+            if lo2 > hi1:  # False for NaN/inf/overflow and near-ties
+                j = j1[p]
+                acc64 = 0.0
+                for f in range(F):
+                    d = weights[j, f] - np.float64(data[q, f])
+                    acc64 += d * d
+                out_idx[q] = j
+                out_dist2[q] = acc64
+            else:
+                best = np.inf
+                best_idx = 0
+                for i in range(n_nodes):
+                    acc64 = 0.0
+                    for f in range(F):
+                        d = weights[i, f] - np.float64(data[q, f])
+                        acc64 += d * d
+                    if acc64 < best:
+                        best = acc64
+                        best_idx = i
+                out_idx[q] = best_idx
+                out_dist2[q] = best
+                nfb[t] += 1
+    return nfb.sum()
+
+
+def best_match_nodes_screen(
+    weights: np.ndarray, data: np.ndarray, chunk: int = DEFAULT_CHUNK, return_fallbacks: bool = False
+):
+    """Find the best-matching node of every point; bitwise equal to :func:`best_match_nodes`.
+
+    Each point is first scanned against all nodes in float32 (vectorised over
+    a tile of points), keeping the smallest screen value ``s1`` (node ``j1``)
+    and the smallest value over every other node ``s2``. With u = 2**-24, the
+    float32 screen distance of every node is within ``e = 2u(max|w| + |x|)``
+    of the true Euclidean distance after input rounding, and the float32 sum
+    is within a relative ``(F + 2)u``. If the resulting lower bound for the
+    second node still exceeds the upper bound for ``j1`` by a relative 1e-12,
+    every other node is strictly farther than ``j1`` by far more than float64
+    rounding, so the reference scan picks ``j1`` too; its squared distance is
+    then recomputed with the reference float64 arithmetic. Every other point
+    (near-ties, exact ties, non-finite or overflowing values) gets the full
+    float64 reference scan. Labels and distances are therefore bitwise those
+    of :func:`best_match_nodes`, for float64 and float32 input. Non-finite or
+    huge (> 1e15) weights use :func:`best_match_nodes` directly.
+
+    Args:
+        weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
+        data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
+        chunk (int, optional): Points per kernel call. Defaults to 2**20.
+        return_fallbacks (bool, optional): Also return how many points needed
+            the full float64 scan. Defaults to False.
+
+    Returns:
+        tuple: int32 [N] node indices and float64 [N] squared distances (and
+            the fallback count if ``return_fallbacks``).
+    """
+    weights, data = _check_inputs(weights, data)
+    if chunk < 1:
+        raise ValueError("chunk must be positive")
+    n_points = data.shape[0]
+    if not np.all(np.isfinite(weights)) or np.max(np.abs(weights)) > 1e15:
+        out = best_match_nodes(weights, data, chunk=chunk)
+        return (*out, n_points) if return_fallbacks else out
+    w32 = weights.astype(np.float32)
+    wmax = float(np.sqrt((weights * weights).sum(axis=1)).max())
+    nodes_idx = np.empty(n_points, dtype=np.int32)
+    dist2 = np.empty(n_points, dtype=np.float64)
+    fallbacks = 0
+    for start in range(0, n_points, chunk):
+        stop = min(start + chunk, n_points)
+        block = np.ascontiguousarray(data[start:stop])
+        fallbacks += int(
+            _screen_kernel(
+                weights, w32, wmax, block, nodes_idx[start:stop], dist2[start:stop], SCREEN_TILE
+            )
+        )
+    if return_fallbacks:
+        return nodes_idx, dist2, fallbacks
     return nodes_idx, dist2
 
 
@@ -358,7 +509,11 @@ def _dist2_kernel(
 
 
 def best_match_nodes_kdtree(
-    weights: np.ndarray, data: np.ndarray, chunk: int = DEFAULT_CHUNK, workers: int = -1
+    weights: np.ndarray,
+    data: np.ndarray,
+    chunk: int = DEFAULT_CHUNK,
+    workers: int = -1,
+    leafsize: int = KDTREE_LEAFSIZE,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Find the best-matching node of every point with a KD-tree over the nodes.
 
@@ -379,6 +534,8 @@ def best_match_nodes_kdtree(
         data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
         chunk (int, optional): Points per query. Defaults to 2**20.
         workers (int, optional): Threads for the query, -1 for all cores. Defaults to -1.
+        leafsize (int, optional): ``cKDTree`` leaf size. Defaults to 64 (scipy's
+            16 is about 1.35x slower on 2368 nodes at F = 4 to 10).
 
     Returns:
         tuple[np.ndarray, np.ndarray]: int32 [N] node indices and float64 [N]
@@ -391,7 +548,7 @@ def best_match_nodes_kdtree(
         raise ValueError("chunk must be positive")
     if not np.all(np.isfinite(weights)):
         raise ValueError("weights must be finite for the kdtree backend")
-    tree = cKDTree(weights)
+    tree = cKDTree(weights, leafsize=leafsize)
     n_points = data.shape[0]
     nodes_idx = np.empty(n_points, dtype=np.int32)
     dist2 = np.empty(n_points, dtype=np.float64)
@@ -422,6 +579,8 @@ def predict(
     higher node; points must be finite).
     ``backend="numba"`` runs :func:`best_match_nodes` on the CPU, the exact
     reference scan that ``cpp/awesom_classify.hpp`` reproduces.
+    ``backend="screen"`` runs :func:`best_match_nodes_screen` (float32 screen
+    certified in float64; labels and distances bitwise equal to ``"numba"``).
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -455,10 +614,14 @@ def predict(
         nodes_idx, dist2 = best_match_nodes_kdtree(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
+    elif backend == "screen":
+        nodes_idx, dist2 = best_match_nodes_screen(
+            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree", "screen" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)
