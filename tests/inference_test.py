@@ -90,11 +90,11 @@ def test_predict_maps_nodes_to_clusters_and_distances():
     node_cluster = np.arange(12, dtype=np.int32) % 3 - 1
     data = rng.normal(size=(200, 2))
     idx, d2 = best_match_nodes(weights, data)
-    labels, dist = predict(weights, node_cluster, data, return_distance=True)
+    labels, dist = predict(weights, node_cluster, data, return_distance=True, backend="numba")
     assert labels.dtype == np.int32
     assert np.array_equal(labels, node_cluster[idx])
     assert np.array_equal(dist, np.sqrt(d2))
-    assert np.array_equal(predict(weights, node_cluster, data), labels)
+    assert np.array_equal(predict(weights, node_cluster, data, backend="numba"), labels)
 
 
 def test_shape_errors():

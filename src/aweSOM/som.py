@@ -506,6 +506,7 @@ class Lattice:
         merge_cost: float = None,
         chunk: int = DEFAULT_CHUNK,
         return_distance: bool = False,
+        backend: str = "kdtree",
     ):
         """Assign cluster ids to new data already in the lattice's scaled space.
 
@@ -519,6 +520,7 @@ class Lattice:
                 merge_cost (float, optional): Merge threshold used only if the lattice has no cluster assignment yet.
                 chunk (int, optional): Points per kernel call. Defaults to 2**20.
                 return_distance (bool, optional): Also return the Euclidean BMU distance. Defaults to False.
+                backend (str, optional): ``"kdtree"``, ``"numba"`` or ``"jax"``; see :func:`aweSOM.inference.predict`. Defaults to ``"kdtree"``.
 
         Returns:
                 np.ndarray: int32 [N] cluster labels, plus float64 [N] distances if ``return_distance``.
@@ -531,7 +533,12 @@ class Lattice:
         # clusters is indexed [x, y]; node index = x + y * xdim (Fortran order)
         node_cluster = np.asarray(clusters).ravel(order="F").astype(np.int32)
         return _predict_nodes(
-            self.lattice, node_cluster, data, chunk=chunk, return_distance=return_distance
+            self.lattice,
+            node_cluster,
+            data,
+            chunk=None if backend == "jax" else chunk,
+            return_distance=return_distance,
+            backend=backend,
         )
 
     def train_lattice_batch(

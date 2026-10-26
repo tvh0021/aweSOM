@@ -138,7 +138,7 @@ def test_two_cpu_devices_in_subprocess():
 def test_predict_backend_jax(lattice_data):
     weights, data = lattice_data
     node_cluster = np.arange(weights.shape[0], dtype=np.int32) % 5 - 1
-    ref_labels, ref_dist = predict(weights, node_cluster, data, return_distance=True)
+    ref_labels, ref_dist = predict(weights, node_cluster, data, return_distance=True, backend="numba")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         labels, dist = predict(weights, node_cluster, data, return_distance=True, backend="jax")
@@ -190,7 +190,7 @@ def test_sommodel_predict_backend_jax():
         node_dist_q99=np.full(12, np.inf),
         reject_distance=1.0,
     )
-    lab_numba, d_numba = model.predict(raw, return_distance=True)
+    lab_numba, d_numba = model.predict(raw, return_distance=True, backend="numba")
     lab_jax, d_jax = model.predict(raw, return_distance=True, backend="jax", chunk=128)
     assert np.array_equal(lab_numba, lab_jax)
     assert np.array_equal(d_numba, d_jax)

@@ -413,13 +413,15 @@ def predict(
     data: np.ndarray,
     chunk: int | None = None,
     return_distance: bool = False,
-    backend: str = "numba",
+    backend: str = "kdtree",
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
 
-    ``backend="numba"`` runs :func:`best_match_nodes` on the CPU.
-    ``backend="kdtree"`` runs :func:`best_match_nodes_kdtree` (CPU, fastest for
-    few features; ties may go to a higher node).
+    ``backend="kdtree"`` (the default) runs :func:`best_match_nodes_kdtree` (CPU,
+    fastest for few features, about F <= 8 on 2368 nodes; ties may go to a
+    higher node; points must be finite).
+    ``backend="numba"`` runs :func:`best_match_nodes` on the CPU, the exact
+    reference scan that ``cpp/awesom_classify.hpp`` reproduces.
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -434,8 +436,8 @@ def predict(
             for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
-        backend (str, optional): ``"numba"``, ``"kdtree"`` or ``"jax"``. Defaults
-            to ``"numba"``.
+        backend (str, optional): ``"kdtree"``, ``"numba"`` or ``"jax"``. Defaults
+            to ``"kdtree"``.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]

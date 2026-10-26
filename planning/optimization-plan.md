@@ -97,7 +97,7 @@ Where the current time goes:
 
 ## Open questions
 
-1. How many features and roughly what lattice size will the new project use? This decides between the KD-tree and brute force.
+1. How many features and roughly what lattice size will the new project use? This decides between the KD-tree and brute force. **Partly answered 2026-10-26:** never more than 10 features, rarely more than 6, so the KD-tree is the default backend. Lattice size is still open.
 2. What hardware: NVIDIA or AMD GPUs, and MPI? Which GRMHD code and AMR output format?
 3. What does "real-time" mean in practice: a target time per snapshot? Is running inference inside the simulation an option?
 4. Must labels match the current method exactly, or are small differences at cluster boundaries acceptable for speed?
@@ -108,3 +108,4 @@ Where the current time goes:
 |---|---|
 | 2026-10-12 | Plan created, with baseline benchmarks and benchmark scripts in `planning/benchmarks/` |
 | 2026-10-26 | Phase 3: JAX device inference (`best_match_nodes_jax`, bitwise with numba in float64; jax-metal float32 2.9e6 pts/s). SCE ensemble loop rewritten on contingency tables (411 s -> 10 s on 28 maps x 128^3, bitwise identical). Phase 4: KD-tree backend. Two GPT-6.1 Sol reviews applied (see ISSUES.md). |
+| 2026-10-26 | `predict` (`inference`, `SOMModel`, `Lattice`) defaults to `backend="kdtree"`; `"numba"` stays the exact reference that the C++ classifier matches. |

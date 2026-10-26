@@ -65,7 +65,7 @@ def test_cpp_matches_python_on_random_model(classifier, tmp_path):
     model.save_text(path)
     points = rng.normal(loc=np.arange(n_features), scale=np.geomspace(1e-2, 1e3, n_features),
                         size=(2000, n_features))
-    labels_py, dist_py = model.predict(points, return_distance=True)
+    labels_py, dist_py = model.predict(points, return_distance=True, backend="numba")
     labels_cpp, dist_cpp = _run(classifier, path, points)
     assert np.array_equal(labels_cpp, labels_py)
     np.testing.assert_allclose(dist_cpp, dist_py, rtol=1e-12, atol=0)
@@ -79,4 +79,4 @@ def test_cpp_matches_committed_fixture(classifier, tmp_path):
     assert np.array_equal(labels_cpp, np.load(FIXTURES / "iris_like_expected_labels.npy"))
     np.testing.assert_allclose(dist_cpp, np.load(FIXTURES / "iris_like_expected_dist.npy"),
                                rtol=1e-12, atol=0)
-    assert np.array_equal(labels_cpp, SOMModel.load(model_path).predict(points))
+    assert np.array_equal(labels_cpp, SOMModel.load(model_path).predict(points, backend="numba"))

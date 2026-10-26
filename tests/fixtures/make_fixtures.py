@@ -49,7 +49,7 @@ def main() -> None:
     model.save_text(HERE / "iris_like_model.txt")
     model.save(HERE / "iris_like_model.h5")
 
-    labels, dist = model.predict(test_raw, return_distance=True)
+    labels, dist = model.predict(test_raw, return_distance=True, backend="numba")
     np.save(HERE / "iris_like_points.npy", test_raw)
     np.save(HERE / "iris_like_expected_labels.npy", labels)
     np.save(HERE / "iris_like_expected_dist.npy", dist)
