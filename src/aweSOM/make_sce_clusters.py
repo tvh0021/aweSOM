@@ -256,7 +256,7 @@ def combine_separated_clusters_from_labels(
     # compact copy of all runs; every value equals the file's (non-integer files keep their dtype)
     dtype = np.result_type(*[r.dtype for r in raw]) if raw else np.int64
     if np.issubdtype(dtype, np.integer):
-        dtype = np.int16 if -(2**15) <= lo and hi < 2**15 else np.int64
+        dtype = np.uint8 if 0 <= lo and hi < 256 else np.int16 if -(2**15) <= lo and hi < 2**15 else np.int64
     labels = np.empty((len(run_index), n_cells), dtype=dtype)
     for r, lab in enumerate(raw):
         labels[r] = lab
