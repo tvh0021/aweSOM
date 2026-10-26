@@ -24,8 +24,10 @@ Or run a specific test function within a module:
 
     python -m pytest tests/[module]_test.py::test_[function]
 
-If there is no GPU, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially.
-This is expected behavior, and SCE computation should still fall back to the CPU.
+The SCE tests (``sce_test.py``, ``sce_loop_test.py``) run on any backend: with a CUDA or Metal JAX the
+``compute_SQ`` helper is tested on the device, otherwise with NumPy. The ensemble loop itself works on
+integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it against the original
+mask-by-mask loop (bitwise on NumPy, to float32 precision on a JAX device).
 
 Performance tests
 -----------------
@@ -88,6 +90,11 @@ This should be cleaned up manually.
 
 If you are running a long-duration test that requires dedicated node(s), you can refer to ``examples/slurm_scripts/submit_sce_bench.cpu``
 and ``examples/slurm_scripts/submit_sce_bench.gpu`` for example SLURM scripts to run this benchmark.
+
+NOTE: the numbers below were measured with the original mask-by-mask ensemble loop. Since the loop was rewritten to
+use contingency tables (one ``np.bincount`` per pair of realizations) the CPU path is much faster than either: on
+28 realizations of :math:`128^3` cells it takes about 6 s where the mask-by-mask loop took 411 s on the CPU and
+230 s on an Apple M-series GPU through jax-metal. The GPU is no longer required for the ensemble step.
 
 In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of
 aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4`). The GPU 

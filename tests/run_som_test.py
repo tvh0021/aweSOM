@@ -65,7 +65,8 @@ def test_manual_scaling(sample_data):
     assert scaled_data.shape == sample_data.shape
 
 
-def test_save_som_object():
+def test_save_som_object(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # the helpers write into the current directory
     som = MockLattice(10, 10, 0.5, 100)
     save_som_object(som, 10, 10, 0.5, 100, name_of_dataset="test")
     file_name = "som_object.test-10-10-0.5-100-1s.pkl"
@@ -75,7 +76,8 @@ def test_save_som_object():
     os.remove(file_name)
 
 
-def test_save_cluster_labels():
+def test_save_cluster_labels(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     labels = np.zeros((10, 10))
     save_cluster_labels(labels, 10, 10, 0.5, 100, name_of_dataset="test")
     file_name = "labels.test-10-10-0.5-100-1s.npy"

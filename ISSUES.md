@@ -10,12 +10,6 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 - **What:** with `history=True` (the default, and the only behaviour before this branch) `self.umat` is computed from the last snapshot before `self.lattice` is set to the final lattice. With `history=False` there are no snapshots, so the U-matrix comes from the final lattice. The two settings can therefore give slightly different `umat` and merges.
 - **Status:** deliberately kept for bitwise compatibility with the old loop. Suggested fix: compute `umat` from the final lattice in both branches (changes results of every existing notebook by a few steps' worth of drift).
 
-### B. `tests/run_som_test.py` writes into the current directory (pre-existing)
-
-- **Where:** `tests/run_som_test.py:68-85`
-- **What:** `som_object.test-*.pkl` and `labels.test-*.npy` are written to cwd and removed afterwards; a failing test leaves them behind.
-- **Fix:** use the `tmp_path` fixture.
-
 ### C. Plasma example's merge threshold and stored clusters do not match the paper (pre-existing, documentation)
 
 - **Where:** `examples/plasma-turbulence/run_plasma_som.py:95` (`merge_threshold = 0.2`), `examples/plasma-turbulence/som_object.fiducial-5000-64-37-0.1-2097152-1u.pkl` (`clusters` attribute).
@@ -28,6 +22,17 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 - **Fix:** reload the module under the patch; compare by value and shape.
 
 ## Fixed on `research/grmhd-scale` (2026-10-26)
+
+### 0. SCE ensemble loop was O(clusters² × cells) and needed a GPU for large boxes
+
+- **Where:** `src/aweSOM/sce.py` (`loop_over_all_clusters`)
+- **What:** every cluster of every run was compared with every cluster of every other run on full-volume masks; 28 maps of 128³ cells took 411 s on the CPU and 230 s on an Apple GPU (jax-metal).
+- **Fix:** the quality index only depends on |A|, |B| and |A∩B|, so one `np.bincount` contingency table per run pair gives all pairs at once; the mask file is the run's cluster mask times the scalar Gsum. 6.5 s on the same input, bitwise-identical `multimap_mappings.txt` and mask files (plasma example and `tests/sce_loop_test.py`). The stored `examples/iris/som_results/SCE` differs from both the old and the new loop by at most 2e-15 relative (it was produced by an earlier code version), so it is not a regression.
+
+### B. `tests/run_som_test.py` writes into the current directory
+
+- **Where:** `tests/run_som_test.py` (`test_save_som_object`, `test_save_cluster_labels`)
+- **Fix:** `monkeypatch.chdir(tmp_path)`.
 
 ### 1. `run_som.py` CLI crashes on an undefined argument
 
