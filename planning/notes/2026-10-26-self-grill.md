@@ -128,3 +128,95 @@ example instead.
 ## Round 2 (after index reports)
 
 (filled in below as facts arrive)
+
+Facts now in hand: AsterX index (ledger A), user-authored aweSOM<->AsterX
+contract in asterx/audit/ideas.md §4 (ledger B), JAX research (C), math
+check (E). Still pending: aweSOM API/consumer sweep.
+
+❓ **Q9 - The asterx audit names the thorn `AsterCurrentSheets` and demands
+a language-neutral artifact with feature spec, means/scales, weights,
+node->cluster map, uncertainty thresholds and provenance. Does that change
+Q3?**
+
+➡️ Yes, in two ways. (1) Add uncertainty thresholds: per node, the 99th
+percentile of the BMU distance seen in training (`node_dist_q99`), plus a
+global `reject_distance` (99.9th percentile over all training points); the
+runtime writes the BMU distance as a second grid function so a cell can be
+flagged "unlike anything in training". (2) Provenance fields: aweSOM
+version, git commit, training data description string, creation time, the
+exact scaler and the merge threshold. The thorn design doc uses the name
+`AsterCurrentSheets`.
+
+---
+
+❓ **Q10 - Exactness contract for inference (closes Q6 with the numbers)?**
+Sol: f32 direct form gave 0/1e6 disagreements vs f64 direct; f32 expansion
+form 11/1e6. Expansion is what makes the GPU matmul fast.
+
+➡️ Two paths, both documented. Reference path: float64, direct differences,
+sequential feature sum, strict '<' scan over ascending node index. This is
+what `Lattice.best_match` (numba) computes today and what `predict()` and
+the C++ reference implement; a test checks bitwise label equality between
+them on a saved fixture. Fast path (JAX, GPU): f32 expansion with
+`Precision.HIGHEST`; test requires >= 99.99% label agreement and reports
+the disagreement count. The thorn uses the direct form (per-cell loop over
+~2400 nodes x F, no matmul needed), so it sits on the reference path.
+
+---
+
+❓ **Q11 - Batch trainer schedule and acceptance (closes Q2)?**
+
+➡️ Defaults: 40 epochs, radius r_max for the first 50%, linear to r_min over
+the next 25%, r_min for the last 25%; degenerate nodes keep their weight;
+initial lattice = same sampling init as online (seeded). Acceptance test
+(marked slow): 5 paired seeds on a synthetic 3-cluster dataset, QE ratio
+upper bound <= 1.03 and TE difference upper bound <= 0.01 vs the online
+trainer. If the batch trainer fails this on the synthetic set, the feature
+ships as "experimental" with the measured numbers in the report rather than
+being tuned until it passes.
+
+---
+
+❓ **Q12 - Replace the recursive merge with the equivalent loop?** Sol gave
+a counter-example showing a frozen-normaliser greedy pass is NOT equivalent,
+and an equivalent cached loop.
+
+➡️ Yes, implement the equivalent loop with an ordered-pair cost cache. It
+removes the recursion-depth risk and the O(k^3) recomputation while
+producing identical merges. Test: on 20 random trained maps, the new merge
+must give identical `lattice_assigned_clusters` to the old recursive code
+(kept in the test as a reference copy).
+
+---
+
+❓ **Q13 - Where do the GPU/multi-device knobs live?**
+
+➡️ `aweSOM.batch` module: `train_batch(data, lattice_shape, ..., epochs,
+radius schedule, chunk, devices=None)`. It picks `jax.devices()` by
+default; a `mesh` argument allows a user-defined mesh; multi-host via
+`jax.distributed.initialize()` is the caller's job (documented SLURM
+example in `examples/slurm_scripts/`). JAX stays optional: importing
+`aweSOM` must not import JAX; `aweSOM.batch` raises a clear ImportError.
+
+---
+
+❓ **Q14 - Do we touch `fast_som` (online trainer) performance?** The plan's
+phase 2 wants the loop compiled. 30% of time is U-matrix snapshots.
+
+➡️ Minimal, behaviour-preserving: (a) make the U-matrix/lattice history
+snapshot frequency configurable (`history=True` default keeps today's
+behaviour for the tests that read `lattice_history`), (b) compile the
+per-step update (BMU + neighbourhood update) into one numba kernel that
+updates only nodes within the radius, with the same arithmetic. Validate
+by bitwise-equal lattice vs the current loop on a seeded run (same RNG
+stream, same operations in the same order: this is achievable because the
+update is `lattice -= diff * gamma` elementwise). If bitwise equality is
+not achieved, keep the old loop and report.
+
+---
+
+❓ **Q15 - Scope cut: what is explicitly NOT done this session?**
+
+➡️ No AsterX thorn code in the asterx repo (not my checkout). No KD-tree.
+No connected-component tracking. No change to SCE. No README rewrite
+beyond fixing the broken snippet names. No publishing, no push, no PR.
