@@ -555,8 +555,13 @@ def train_batch_kdtree(
     initial_weights: Optional[np.ndarray] = None,
     workers: int = -1,
     verbose: bool = False,
+    bmu: str = "numba",
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Single-process CPU batch map with exact float64 BMUs from a KD-tree (prototype).
+    """Single-process CPU batch map with exact float64 BMUs (prototype).
+
+    ``bmu="numba"`` uses the multithreaded brute-force scan of
+    ``inference.best_match_nodes``; ``bmu="kdtree"`` a cKDTree, which is slow
+    in the early epochs when the large radius collapses the lattice.
 
     Same schedule, initialisation and update as :func:`train_batch`; the BMU of
     every sample comes from ``scipy.spatial.cKDTree`` over the current weights
@@ -564,7 +569,9 @@ def train_batch_kdtree(
     the per-node sums use ``np.bincount``. Fast for few features (F <= ~8).
     """
     from scipy.spatial import cKDTree
+    from .inference import best_match_nodes
 
+    bmu_kind = bmu
     x = np.ascontiguousarray(data, np.float64)
     n_total, n_feat = x.shape
     n_nodes = xdim * ydim
@@ -579,7 +586,11 @@ def train_batch_kdtree(
     times = np.zeros(epochs)
 
     def sums(w):
-        dist, bmu = cKDTree(w).query(x, k=1, workers=workers)
+        if bmu_kind == "kdtree":
+            dist, bmu = cKDTree(w).query(x, k=1, workers=workers)
+        else:
+            bmu, d2 = best_match_nodes(w, x)
+            dist = np.sqrt(d2)
         n = np.bincount(bmu, minlength=n_nodes).astype(np.float64)
         s = np.empty((n_nodes, n_feat))
         for f in range(n_feat):

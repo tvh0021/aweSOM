@@ -1599,7 +1599,7 @@ def _neighborhood_weight(dist: float, alpha: float, nsize: int) -> float:
     return alpha * np.exp(-((dist) ** 2) / (2 * sigma**2))
 
 
-@njit()
+@njit(nogil=True)
 def _som_train_steps(
     lattice: np.ndarray,
     xk: np.ndarray,
@@ -1738,7 +1738,7 @@ def _first_argmin(s: np.ndarray) -> int:
     return 0
 
 
-@njit()
+@njit(nogil=True)
 def _som_train_steps_aos(
     lattice: np.ndarray,
     xk: np.ndarray,
