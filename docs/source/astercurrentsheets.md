@@ -150,8 +150,10 @@ failure flag is set, write `sheet_label = -1` and `sheet_confident = 0`.
 ## 5. Validation before use
 
 1. Offline/runtime equivalence: dump `sheet_label` and the feature vector for
-   one snapshot; feed the dumped features to `SOMModel.predict`; labels must be
-   identical (this is the same check `tests/cpp_test.py` performs).
+   one snapshot; feed the dumped features to `SOMModel.predict(...,
+   backend="numba")`; labels must be identical (this is the same check
+   `tests/cpp_test.py` performs). The default KD-tree backend can resolve exact
+   ties differently and rejects non-finite features, so it is not the reference.
 2. Overhead: time the analysis step with and without the thorn at the chosen
    cadence (the per-cell cost is nodes x F multiply-adds, about 2400 x 6 for
    the fiducial lattice; on a GPU this is negligible next to the RHS).

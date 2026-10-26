@@ -1,7 +1,8 @@
 // awesom_classify.hpp -- header-only reference classifier for aweSOM models.
 //
 // Reads the plain-text model written by aweSOM.model.SOMModel.save_text and
-// reproduces aweSOM.inference.predict bitwise for float64 input:
+// reproduces aweSOM.inference.predict(..., backend="numba") bitwise for
+// float64 input:
 //   scaled[f] = (x[f] - offset[f]) / scale[f]
 //   for each node i in ascending order:
 //     acc = 0; for f in 0..F-1: { d = w[i,f] - scaled[f]; acc += d*d; }

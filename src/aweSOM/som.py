@@ -513,7 +513,9 @@ class Lattice:
         Uses the trained ``lattice`` and ``lattice_assigned_clusters``; if the
         latter does not exist yet, ``assign_cluster_to_lattice`` is called with
         ``merge_cost`` (0.0 if None). Equivalent to ``map_data_to_lattice`` +
-        ``assign_cluster_to_data`` without the two full-size intermediates.
+        ``assign_cluster_to_data`` without the two full-size intermediates
+        (exactly with ``backend="numba"``; the default KD-tree can resolve
+        exact ties differently).
 
         Args:
                 data (np.ndarray): [N, F] float64 or float32 points in the same space as the training data.

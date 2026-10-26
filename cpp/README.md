@@ -2,8 +2,9 @@
 
 `awesom_classify.hpp` is a header-only (C++17, standard library only)
 classifier for models written by `aweSOM.model.SOMModel.save_text`. It
-gives the same labels as `SOMModel.predict` / `aweSOM.inference.predict`,
-bit for bit, for float64 input. It is the reference that a runtime consumer
+gives the same labels as `SOMModel.predict` / `aweSOM.inference.predict`
+with `backend="numba"`, bit for bit, for float64 input. The default
+`backend="kdtree"` agrees except on exact ties and rejects non-finite points. It is the reference that a runtime consumer
 (the planned AsterX thorn `AsterCurrentSheets`) has to match.
 
 ## API
@@ -58,7 +59,7 @@ build/test_classify tests/fixtures/iris_like_model.txt tests/fixtures/iris_like_
 significant digits) for each comma-separated raw point. `tests/cpp_test.py`
 compiles it with the first of `clang++`, `g++`, `c++` it finds
 (`-O2 -std=c++17 -ffp-contract=off`) and requires exact label equality with
-`SOMModel.predict` on 2000 random points and on the committed fixture. The
+`SOMModel.predict(..., backend="numba")` on 2000 random points and on the committed fixture. The
 test is skipped when no compiler is found.
 
 ## Fixture for downstream codes

@@ -27,6 +27,8 @@ Bugs found while preparing GRMHD features for aweSOM (etk-analysis project). Eac
 
 Every code change on this branch was reviewed by GPT-6.1 Sol (Codex, medium reasoning) on 2026-10-26, in four passes: the whole branch up to the SCE rewrite (f535bc6), the JAX inference path (00358f0), the review fixes plus KD-tree backend (ef26513), and the KD-tree fixes (cd09a76). Applied: Python 3.9 import break, int32 label wrap in `sce.py`, negative chunk in `SOMModel.predict`, one-table-at-a-time SCE accumulation, zero-feature and empty-device guards, KD-tree overflow fallback. Documented instead of changed: NaN node never selected (differs from legacy argmin), XLA subnormal flush and fast-math flag limits on the bitwise JAX claim, KD-tree near-tie labels, finite-input requirement. Declined: direct-difference distances in the batch trainer (aweSOM trains on scaled features; the fix would multiply device memory by F), recorded as a docstring requirement in `batch.py`.
 
+A fifth pass (b200847, KD-tree as the default `predict` backend) found no runtime bug; the C++ equivalence statements in `cpp/README.md`, `cpp/awesom_classify.hpp`, `docs/source/astercurrentsheets.md` and `Lattice.predict` now name `backend="numba"` as the reference.
+
 ### 0. SCE ensemble loop was O(clusters² × cells) and needed a GPU for large boxes
 
 - **Where:** `src/aweSOM/sce.py` (`loop_over_all_clusters`)
