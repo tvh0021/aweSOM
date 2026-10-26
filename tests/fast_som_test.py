@@ -146,3 +146,31 @@ def test_inline_neighborhood_weight_is_bitwise_equal_to_gamma(xdim, ydim):
                 for i in np.flatnonzero(cheb <= nsize):
                     got[i] = _neighborhood_weight(float(cheb[i]), float(alpha), nsize)
                 assert np.array_equal(got, want)
+
+
+
+@pytest.mark.parametrize("n_features", [1, 2, 3, 4, 6, 7, 8, 9, 10, 15, 16])
+@pytest.mark.parametrize("case", ["plain", "nan", "zero_alpha", "inf"])
+def test_transposed_kernel_is_bitwise_equal_to_row_kernel(n_features, case):
+    from aweSOM.som import _som_train_steps, _som_train_steps_aos
+
+    rng = np.random.default_rng(n_features)
+    xdim, ydim, steps = 9, 7, 400
+    lattice = rng.normal(size=(xdim * ydim, n_features))
+    xk = rng.normal(size=(steps, n_features))
+    alphas = np.full(steps + 1, 0.3)
+    nsizes = np.minimum(10, 1 + np.arange(steps + 1) % 11).astype(np.int64)
+    if case == "nan":
+        xk[50, 0] = np.nan
+        lattice[5, -1] = np.nan
+    elif case == "zero_alpha":
+        alphas[100:200] = 0.0
+        lattice[3, 0] = -0.0
+    elif case == "inf":
+        xk[70, -1] = np.inf
+    a = lattice.copy()
+    b = lattice.copy()
+    _som_train_steps_aos(a, xk, xdim, alphas, nsizes, 0, steps)
+    _som_train_steps(b, xk, xdim, alphas, nsizes, 0, steps)
+    assert np.array_equal(a, b, equal_nan=True)
+    assert np.array_equal(np.signbit(a), np.signbit(b))
