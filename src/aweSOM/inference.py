@@ -36,10 +36,22 @@ a CPU-only machine the numba path is the faster one.
 :func:`best_match_nodes_kdtree` queries a ``scipy.spatial.cKDTree`` of the
 nodes and then re-evaluates the chosen node's distance with the exact
 float64 scan, so distances follow the contract above; only exact ties can
-pick a different node. Same benchmark (random data in [0, 1), 2368 nodes,
-M1 Max, ``workers=-1``): 8.0e6 points/s at F = 4, 3.6e6 at F = 6 and
-7.8e5 at F = 10 against 2.3e6, 1.9e6 and 1.1e6 for numba, so it pays off
-for roughly F <= 8 and loses above.
+pick a different node. On random data in [0, 1) it reaches 8.0e6 points/s
+at F = 4, but a trained lattice lies close to a 2D sheet in feature space,
+so the tree visits hundreds of nodes per point on real data.
+
+:func:`best_match_nodes_screen` (the ``predict`` default) scans every node
+in float32, certifies the float32 winner with a rounding-error bound and
+falls back to the float64 scan for every point it cannot certify, so its
+labels and distances equal :func:`best_match_nodes` bitwise. Points per
+second on an Apple M1 Max, 2368 nodes, ``planning/opt/inference-cpu``:
+
+=====================  ======  ======  ======
+data                   numba   kdtree  screen
+=====================  ======  ======  ======
+plasma lattice, F = 4  2.2e6   3.0e6   4.9e6
+random, F = 10         9.6e5   5.9e5   2.5e6
+=====================  ======  ======  ======
 """
 
 from __future__ import annotations
@@ -242,17 +254,20 @@ def best_match_nodes_screen(
     Each point is first scanned against all nodes in float32 (vectorised over
     a tile of points), keeping the smallest screen value ``s1`` (node ``j1``)
     and the smallest value over every other node ``s2``. With u = 2**-24, the
-    float32 screen distance of every node is within ``e = 2u(max|w| + |x|)``
-    of the true Euclidean distance after input rounding, and the float32 sum
-    is within a relative ``(F + 2)u``. If the resulting lower bound for the
-    second node still exceeds the upper bound for ``j1`` by a relative 1e-12,
-    every other node is strictly farther than ``j1`` by far more than float64
-    rounding, so the reference scan picks ``j1`` too; its squared distance is
-    then recomputed with the reference float64 arithmetic. Every other point
-    (near-ties, exact ties, non-finite or overflowing values) gets the full
-    float64 reference scan. Labels and distances are therefore bitwise those
-    of :func:`best_match_nodes`, for float64 and float32 input. Non-finite or
-    huge (> 1e15) weights use :func:`best_match_nodes` directly.
+    float32 screen distance of every node is within
+    ``e = 2.02u(max|w| + |x|) + 1e-18`` of the true Euclidean distance after
+    input rounding (the additive term covers float32 underflow of tiny
+    differences), and the float32 sum is within a relative ``(F + 2)u``. If
+    the resulting lower bound for the second node still exceeds the upper
+    bound for ``j1`` by a relative 1e-12, every other node is strictly
+    farther than ``j1`` by far more than float64 rounding, so the reference
+    scan picks ``j1`` too; its squared distance is then recomputed with the
+    reference float64 arithmetic. Every other point (near-ties, exact ties,
+    non-finite or overflowing values) gets the full float64 reference scan.
+    Labels and distances are therefore bitwise those of
+    :func:`best_match_nodes`, for float64 and float32 input; the bound was
+    checked independently for F = 1 to 10. Non-finite or huge (> 1e15)
+    weights use :func:`best_match_nodes` directly.
 
     Args:
         weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
@@ -570,17 +585,17 @@ def predict(
     data: np.ndarray,
     chunk: int | None = None,
     return_distance: bool = False,
-    backend: str = "kdtree",
+    backend: str = "screen",
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
 
-    ``backend="kdtree"`` (the default) runs :func:`best_match_nodes_kdtree` (CPU,
-    fastest for few features, about F <= 8 on 2368 nodes; ties may go to a
-    higher node; points must be finite).
+    ``backend="screen"`` (the default) runs :func:`best_match_nodes_screen`
+    (CPU, float32 screen certified in float64; labels and distances bitwise
+    equal to ``"numba"`` and the fastest CPU path measured).
     ``backend="numba"`` runs :func:`best_match_nodes` on the CPU, the exact
     reference scan that ``cpp/awesom_classify.hpp`` reproduces.
-    ``backend="screen"`` runs :func:`best_match_nodes_screen` (float32 screen
-    certified in float64; labels and distances bitwise equal to ``"numba"``).
+    ``backend="kdtree"`` runs :func:`best_match_nodes_kdtree` (CPU; ties may
+    go to a higher node; points must be finite).
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -591,12 +606,12 @@ def predict(
         node_cluster (np.ndarray): [nodes] cluster id of each node (-1 = unassigned).
         data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
         chunk (int | None, optional): Number of points per kernel call (numba) or
-            per tile (jax). Defaults to None: 2**20 for numba, ``2**25 // nodes``
+            per tile (jax). Defaults to None: 2**20 on the CPU, ``2**25 // nodes``
             for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
-        backend (str, optional): ``"kdtree"``, ``"numba"`` or ``"jax"``. Defaults
-            to ``"kdtree"``.
+        backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"`` or
+            ``"jax"``. Defaults to ``"screen"``.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]

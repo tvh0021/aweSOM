@@ -389,7 +389,7 @@ class SOMModel:
         data: np.ndarray,
         chunk: int = DEFAULT_CHUNK,
         return_distance: bool = False,
-        backend: str = "kdtree",
+        backend: str = "screen",
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Classify raw (unscaled) data.
 
@@ -401,9 +401,9 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
-            backend (str, optional): ``"kdtree"``, ``"numba"`` or ``"jax"``; see
-                :func:`aweSOM.inference.predict`. The JAX path picks its own device
-                tile size inside each chunk. Defaults to ``"kdtree"``.
+            backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"`` or
+                ``"jax"``; see :func:`aweSOM.inference.predict`. The JAX path picks
+                its own device tile size inside each chunk. Defaults to ``"screen"``.
 
         Returns:
             np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and float64

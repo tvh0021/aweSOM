@@ -29,7 +29,7 @@ To reproduce, run `python planning/benchmarks/bench_inference.py [N] [F]`.
 | Chunked matrix multiply (f32) | 0.54 M pts/s | 0.54 M pts/s | 99.9997% (ties) |
 
 - **Why the current code is slow:** `best_match` (`src/aweSOM/som.py:456`) creates a new `nodes × F` temporary array for every point inside the parallel loop. It also writes its output as `(N, 1)` float64 and prints progress from inside the compiled loop.
-- **The KD-tree depends on the number of features.** It is fastest at low F and drops below the plain loop by F = 10. These numbers come from random data, so they need re-checking on real trained lattices and features.
+- **The KD-tree depends on the number of features.** It is fastest at low F and drops below the plain loop by F = 10. These numbers come from random data. On a trained plasma lattice (F = 4) the KD-tree drops to 3.0 M pts/s, because the lattice lies close to a 2D sheet in feature space; the float32 screen backend reaches 4.9 M pts/s there and is exact.
 
 **Projected time for one 10¹⁰-point snapshot on this laptop:**
 
@@ -97,7 +97,7 @@ Where the current time goes:
 
 ## Open questions
 
-1. How many features and roughly what lattice size will the new project use? This decides between the KD-tree and brute force. **Partly answered 2026-10-26:** never more than 10 features, rarely more than 6, so the KD-tree is the default backend. Lattice size is still open.
+1. How many features and roughly what lattice size will the new project use? This decides between the KD-tree and brute force. **Partly answered 2026-10-26:** never more than 10 features, rarely more than 6, so the KD-tree became the default backend, then the exact float32 screen backend replaced it (faster on real data at every F tested). Lattice size is still open.
 2. What hardware: NVIDIA or AMD GPUs, and MPI? Which GRMHD code and AMR output format?
 3. What does "real-time" mean in practice: a target time per snapshot? Is running inference inside the simulation an option?
 4. Must labels match the current method exactly, or are small differences at cluster boundaries acceptable for speed?
@@ -109,3 +109,4 @@ Where the current time goes:
 | 2026-10-12 | Plan created, with baseline benchmarks and benchmark scripts in `planning/benchmarks/` |
 | 2026-10-26 | Phase 3: JAX device inference (`best_match_nodes_jax`, bitwise with numba in float64; jax-metal float32 2.9e6 pts/s). SCE ensemble loop rewritten on contingency tables (411 s -> 10 s on 28 maps x 128^3, bitwise identical). Phase 4: KD-tree backend. Two GPT-6.1 Sol reviews applied (see ISSUES.md). |
 | 2026-10-26 | `predict` (`inference`, `SOMModel`, `Lattice`) defaults to `backend="kdtree"`; `"numba"` stays the exact reference that the C++ classifier matches. |
+| 2026-10-26 | Merged from the opt/* branches: exact float32 `screen` backend, now the `predict` default (4.9 M pts/s on the plasma lattice at F = 4 vs 3.0 M kdtree, 2.2 M numba; 2.5 M at F = 10 vs 0.59 M / 0.96 M; bitwise equal to numba), KD-tree `leafsize` 64, online step kernel (1.4×, bitwise), SCE contingency tables in one numba pass (7.3×, bitwise), opt-in mask-free SCE (`write_masks=False`, `--no_masks`, `--labels_path`), vectorized `label_clumps` and `merge_double_sheets_fast` in the plasma example. |

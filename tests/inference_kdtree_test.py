@@ -49,14 +49,14 @@ def test_overflowing_distances_fall_back_to_the_scan():
     assert np.array_equal(d2, d2_ref)
 
 
-def test_kdtree_is_the_default_backend():
+def test_screen_is_the_default_backend():
     import inspect
 
     from aweSOM.model import SOMModel
     from aweSOM.som import Lattice
 
     for fn in (predict, SOMModel.predict, Lattice.predict):
-        assert inspect.signature(fn).parameters["backend"].default == "kdtree"
+        assert inspect.signature(fn).parameters["backend"].default == "screen"
 
 
 def test_lattice_predict_passes_backend():

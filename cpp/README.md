@@ -4,7 +4,9 @@
 classifier for models written by `aweSOM.model.SOMModel.save_text`. It
 gives the same labels as `SOMModel.predict` / `aweSOM.inference.predict`
 with `backend="numba"`, bit for bit, for float64 input. The default
-`backend="kdtree"` agrees except on exact ties and rejects non-finite points. It is the reference that a runtime consumer
+`backend="screen"` gives the same labels and distances bit for bit;
+`backend="kdtree"` agrees except on exact ties and rejects non-finite points.
+It is the reference that a runtime consumer
 (the planned AsterX thorn `AsterCurrentSheets`) has to match.
 
 ## API
