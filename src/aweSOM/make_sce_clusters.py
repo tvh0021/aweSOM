@@ -232,7 +232,9 @@ def combine_separated_clusters_from_labels(
     Each SCE mask file is ``np.where(labels == cid, Gsum, 0.0)``, so the combined
     map of a cluster range is the float32 sum, in ``map_list`` order, of
     ``float32(Gsum)`` over the instances whose label matches the cell. Adding the
-    zeros of non-matching masks is exact, so the result is bitwise identical to
+    zeros of non-matching masks is exact, and ``np.sum(axis=0)`` adds the stack
+    in order whenever there is more than one cell (a one-cell map repeats
+    NumPy's pairwise reduction), so the result is bitwise identical to
     summing the mask files, without writing or reading them (mask files take 8
     bytes per cell per SCE cluster).
 
@@ -266,7 +268,12 @@ def combine_separated_clusters_from_labels(
         runs = np.array([run_index[name] for _, _, name in inst], dtype=np.int64)
         cids = np.array([int(cid) for _, cid, _ in inst], dtype=np.int64)
         gsums = np.array([np.float32(np.float64(g)) for g, _, _ in inst], dtype=np.float32)
-        all_signals_map[cluster] = _sum_matching(labels, runs, cids, gsums).reshape(dims)
+        if n_cells == 1:
+            # NumPy sums a one-cell stack pairwise rather than in order; repeat its reduction
+            vals = np.where(labels[runs, 0] == cids, gsums, np.float32(0.0))
+            all_signals_map[cluster] = np.sum(vals.reshape([len(inst)] + dims), axis=0)
+        else:
+            all_signals_map[cluster] = _sum_matching(labels, runs, cids, gsums).reshape(dims)
     return all_signals_map
 
 

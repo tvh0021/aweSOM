@@ -178,6 +178,23 @@ def test_combine_from_labels_matches_mask_files_bitwise(tmp_path, monkeypatch, d
     assert got.tobytes() == ref.tobytes()
 
 
+def test_combine_from_labels_one_cell_matches_pairwise_numpy_sum(tmp_path):
+    """A one-cell stack is summed pairwise by NumPy; the label path must repeat that order."""
+    from aweSOM import make_sce_clusters as msc
+
+    g = [1.0] + [3e-8] * 7 + [2.0, 5e-9]
+    for i, gs in enumerate(g):
+        lab = 0 if i != 8 else 1  # one instance does not match the cell
+        np.save(tmp_path / f"r{i}.npy", np.array([lab]))
+        np.save(tmp_path / f"mask-r{i}-id0.npy", np.where(np.array([lab]) == 0, gs, 0.0))
+    map_list = [[gs, 0, f"r{i}"] for i, gs in enumerate(g)]
+    ranges = [[0, 8], [0, len(g)]]
+    with contextlib.redirect_stdout(io.StringIO()):
+        ref = msc.combine_separated_clusters(map_list, ranges, [1], str(tmp_path))
+    got = msc.combine_separated_clusters_from_labels(map_list, ranges, [1], str(tmp_path))
+    assert got.tobytes() == ref.tobytes()
+
+
 @pytest.mark.parametrize("cache_bytes", [0, 1 << 28])
 def test_loop_paths_match_reference(tmp_path, monkeypatch, cache_bytes):
     """Both the per-pair path (tables too big to keep) and the all-pairs batched path are bitwise exact."""

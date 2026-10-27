@@ -195,6 +195,8 @@ def _label_cc3d(data_array, structure, periodic):
     if not np.array_equal(structure, reference):  # e.g. the custom 10-neighbour set
         return None
     lo = int(data_array.min())
+    if int(data_array.max()) - lo + 1 > np.iinfo(np.uint32).max:  # would wrap and merge distinct values
+        return None
     shifted = (data_array.astype(np.int64) - lo + 1).astype(np.uint32)  # cc3d treats 0 as background
     lab = cc3d.connected_components(shifted, connectivity=n_nb, periodic_boundary=periodic, out_dtype=np.uint32)
     return lab.astype(np.int64) - 1
@@ -335,6 +337,8 @@ def merge_double_sheets_fast(double_sheet_dict: dict, positive_sheet_dict: dict,
     """
     deltas = np.array(generate_neighbors(10), dtype=np.int64)
     all_pos = [np.asarray(v, dtype=np.int64).reshape(-1, 3) for d in (double_sheet_dict, positive_sheet_dict, negative_sheet_dict) for v in d.values()]
+    if not any(p.size for p in all_pos):  # nothing can merge; the original returns every sheet unchanged
+        return dict(double_sheet_dict)
     shape = tuple(int(x) + 3 for x in np.max([p.max(axis=0) for p in all_pos if p.size], axis=0))  # pad by one: no wrap, as in the original
 
     def ordinal_volume(d):

@@ -29,6 +29,8 @@ Every code change on this branch was reviewed by GPT-6.1 Sol (Codex, medium reas
 
 A fifth pass (b200847, KD-tree as the default `predict` backend) found no runtime bug; the C++ equivalence statements in `cpp/README.md`, `cpp/awesom_classify.hpp`, `docs/source/astercurrentsheets.md` and `Lattice.predict` now name `backend="numba"` as the reference.
 
+A sixth pass (9f29e9b..2b24161: screen backend as the default, online step kernel, one-pass SCE tables, mask-free SCE, fast clump labelling and double-sheet merge) found nothing in the first three. Fixed: the cc3d path wrapped labels whose range exceeds uint32 and merged distinct values (now falls back to SciPy); `merge_double_sheets_fast` raised on input without coordinates (now returns the sheets unchanged, as the original does); the mask-free SCE combiner summed a one-cell map in order where NumPy sums pairwise (now repeats NumPy's reduction; the difference was 2e-7 relative). Each has a regression test.
+
 ### 0. SCE ensemble loop was O(clusters² × cells) and needed a GPU for large boxes
 
 - **Where:** `src/aweSOM/sce.py` (`loop_over_all_clusters`)
