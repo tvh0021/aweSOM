@@ -83,6 +83,7 @@ import time
 from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
+from numba import njit, prange
 
 try:
     import jax
@@ -477,6 +478,153 @@ def train_batch(
         "n_samples": n_total,
     }
     return weights, info
+
+
+@njit(parallel=True, cache=True)
+def _top2_kernel(w: np.ndarray, x: np.ndarray, d1: np.ndarray, i1: np.ndarray, i2: np.ndarray) -> None:
+    """First and second BMU of every row of x, ordered by (squared distance, index).
+
+    Squared distances are summed over features in order, like the einsum of
+    :func:`_sq_distances`; a strict ``<`` scan keeps the lower index on ties.
+    """
+    n_nodes, n_feat = w.shape
+    for p in prange(x.shape[0]):
+        b1 = np.inf
+        b2 = np.inf
+        j1 = 0
+        j2 = 0
+        for j in range(n_nodes):
+            acc = 0.0
+            for f in range(n_feat):
+                diff = x[p, f] - w[j, f]
+                acc += diff * diff
+            if acc < b1:
+                b2 = b1
+                j2 = j1
+                b1 = acc
+                j1 = j
+            elif acc < b2:
+                b2 = acc
+                j2 = j
+        d1[p] = b1
+        i1[p] = j1
+        i2[p] = j2
+
+
+def _top2(weights: np.ndarray, data: np.ndarray):
+    w = np.ascontiguousarray(weights, np.float64)
+    x = np.ascontiguousarray(data, np.float64)
+    n = x.shape[0]
+    d1 = np.empty(n)
+    i1 = np.empty(n, np.int64)
+    i2 = np.empty(n, np.int64)
+    _top2_kernel(w, x, d1, i1, i2)
+    return d1, i1, i2
+
+
+def quantization_error_fast(weights: np.ndarray, data: np.ndarray) -> float:
+    """:func:`quantization_error` with a compiled multithreaded scan (finite inputs)."""
+    d1, _, _ = _top2(weights, data)
+    block = _row_block(*np.shape(weights))
+    total = 0.0
+    q = np.sqrt(d1)
+    for start in range(0, q.size, block):
+        total += q[start : start + block].sum()
+    return total / q.size
+
+
+def topographic_error_fast(weights: np.ndarray, data: np.ndarray, xdim: int, ydim: int) -> float:
+    """:func:`topographic_error` with a compiled multithreaded scan (finite inputs)."""
+    if np.shape(weights)[0] != xdim * ydim:
+        raise ValueError(f"weights has {np.shape(weights)[0]} nodes, expected {xdim * ydim}")
+    _, first, second = _top2(weights, data)
+    xy = _lattice_coordinates(xdim, ydim)
+    cheb = np.abs(xy[first] - xy[second]).max(axis=1)
+    return int((cheb > 1).sum()) / first.size
+
+
+def train_batch_kdtree(
+    data: np.ndarray,
+    xdim: int,
+    ydim: int,
+    epochs: int = 40,
+    r_max: Optional[float] = None,
+    r_min: float = 8,
+    seed: int = 42,
+    init: str = "sampling",
+    initial_weights: Optional[np.ndarray] = None,
+    workers: int = -1,
+    verbose: bool = False,
+    bmu: str = "numba",
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Single-process CPU batch map with exact float64 BMUs (prototype).
+
+    ``bmu="numba"`` uses the multithreaded brute-force scan of
+    ``inference.best_match_nodes``; ``bmu="kdtree"`` a cKDTree, which is slow
+    in the early epochs when the large radius collapses the lattice.
+
+    Same schedule, initialisation and update as :func:`train_batch`; the BMU of
+    every sample comes from ``scipy.spatial.cKDTree`` over the current weights
+    (float64, ``workers`` threads) instead of the float32 matmul expansion, and
+    the per-node sums use ``np.bincount``. Fast for few features (F <= ~8).
+    """
+    from scipy.spatial import cKDTree
+    from .inference import best_match_nodes
+
+    bmu_kind = bmu
+    x = np.ascontiguousarray(data, np.float64)
+    n_total, n_feat = x.shape
+    n_nodes = xdim * ydim
+    if initial_weights is None:
+        w = _initial_weights(x, np.array([n_total]), n_nodes, init, seed)
+    else:
+        w = np.array(initial_weights, np.float64)
+    if r_max is None:
+        r_max = max(xdim, ydim) + 1
+    radii = radius_schedule(epochs, r_max, min(r_min, r_max))
+    qe_after = np.zeros(epochs)
+    times = np.zeros(epochs)
+
+    def sums(w):
+        if bmu_kind == "kdtree":
+            dist, bmu = cKDTree(w).query(x, k=1, workers=workers)
+        else:
+            bmu, d2 = best_match_nodes(w, x)
+            dist = np.sqrt(d2)
+        n = np.bincount(bmu, minlength=n_nodes).astype(np.float64)
+        s = np.empty((n_nodes, n_feat))
+        for f in range(n_feat):
+            s[:, f] = np.bincount(bmu, weights=x[:, f], minlength=n_nodes)
+        return s, n, float(dist.sum())
+
+    for e, r in enumerate(radii):
+        t0 = time.perf_counter()
+        h = _neighbourhood64(xdim, ydim, r)
+        s, n, qe_sum = sums(w)
+        num = h.T @ s
+        den = h.T @ n
+        has_hits = den > 0
+        w = np.where(has_hits[:, None], num / np.where(has_hits, den, 1.0)[:, None], w)
+        times[e] = time.perf_counter() - t0
+        if e > 0:
+            qe_after[e - 1] = qe_sum / n_total
+        else:
+            qe_initial = qe_sum / n_total
+        if verbose:
+            print(f"epoch {e + 1}/{epochs}  radius {r:.3f}  qe(entering) {qe_sum / n_total:.6g}  {times[e]:.3f} s", flush=True)
+    _, hits, qe_sum = sums(w)
+    qe_after[-1] = qe_sum / n_total
+    info = {
+        "radius": radii,
+        "qe": qe_after,
+        "qe_initial": qe_initial,
+        "hits": hits.round().astype(np.int64),
+        "epoch_time": times,
+        "n_devices": 1,
+        "chunk": n_total,
+        "n_samples": n_total,
+    }
+    return w, info
 
 
 def _row_block(n_nodes: int, n_feat: int, max_elements: int = 1 << 23) -> int:

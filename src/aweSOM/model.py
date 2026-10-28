@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numba import njit, prange
 
 from .inference import DEFAULT_CHUNK, best_match_nodes
 from .inference import predict as _predict
@@ -215,6 +216,59 @@ def _check_metadata(metadata: dict) -> dict[str, str]:
             raise ValueError(f"metadata value for {key!r} must be a single line")
         clean[key] = value
     return clean
+
+
+@njit(parallel=True, cache=True)
+def _node_percentiles(nodes_idx: np.ndarray, dist: np.ndarray, n_nodes: int, q: float) -> np.ndarray:
+    """Per-node np.percentile(dist[nodes_idx == c], 100 q) with NumPy's default
+    ("linear") method and the same floating-point steps, so values are bitwise
+    equal. Counting sort by node, then a sort of each node's distances."""
+    n = nodes_idx.size
+    starts = np.zeros(n_nodes + 1, np.int64)
+    for i in range(n):
+        starts[nodes_idx[i] + 1] += 1
+    for c in range(n_nodes):
+        starts[c + 1] += starts[c]
+    pos = starts[:-1].copy()
+    buf = np.empty(n)
+    for i in range(n):
+        c = nodes_idx[i]
+        buf[pos[c]] = dist[i]
+        pos[c] += 1
+    out = np.full(n_nodes, np.nan)
+    for c in prange(n_nodes):
+        a = starts[c]
+        m = starts[c + 1] - a
+        if m == 0:
+            continue
+        seg = np.sort(buf[a : a + m])
+        v = (m - 1) * q
+        if v >= m - 1:
+            out[c] = seg[m - 1]
+            continue
+        lo = int(np.floor(v))
+        gamma = v - np.floor(v)
+        lower = seg[lo]
+        upper = seg[lo + 1]
+        diff = upper - lower
+        if gamma >= 0.5:
+            out[c] = upper - diff * (1 - gamma)
+        else:
+            out[c] = lower + diff * gamma
+    return out
+
+
+def distance_quantiles_fast(
+    nodes_idx: np.ndarray, dist: np.ndarray, n_nodes: int, q_node: float = 99.0, q_all: float = 99.9
+) -> tuple[np.ndarray, float]:
+    """:func:`distance_quantiles` with a compiled per-node pass (finite distances)."""
+    if dist.size == 0:
+        return np.full(n_nodes, np.nan), float("nan")
+    q = float(np.true_divide(q_node, 100))
+    node_q = _node_percentiles(
+        np.ascontiguousarray(nodes_idx, np.int64), np.ascontiguousarray(dist, np.float64), n_nodes, q
+    )
+    return node_q, float(np.percentile(dist, q_all))
 
 
 def distance_quantiles(

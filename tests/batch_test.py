@@ -268,3 +268,16 @@ def test_two_process_cpu_matches_single_process(tmp_path):
     x = np.random.default_rng(0).normal(size=(10001, 4))
     w_single, _ = train_batch(x, 8, 6, epochs=6)
     np.testing.assert_allclose(np.load(out), w_single, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("n_feat", [2, 4, 7, 10])
+def test_fast_qe_te_equal_reference(n_feat):
+    from aweSOM.batch import quantization_error_fast, topographic_error_fast
+
+    rng = np.random.default_rng(n_feat)
+    w = rng.normal(size=(9 * 7, n_feat))
+    x = rng.normal(size=(5000, n_feat))
+    x[:50] = w[:50]  # exact hits
+    x[50:60] = 0.5 * (w[0] + w[1])  # possible near-ties
+    assert quantization_error_fast(w, x) == quantization_error(w, x)
+    assert topographic_error_fast(w, x, 9, 7) == topographic_error(w, x, 9, 7)
