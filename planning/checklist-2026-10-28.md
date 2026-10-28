@@ -39,3 +39,7 @@ Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/`. Nothing i
 - [ ] sheet_stats.py:697 (P2): EDT thickness alternates n±0.5 cells; the "one cell thick" claim rests on the inertia estimator, state which one is reported.
 - [ ] tubes.py:378 (P2): length_span ignores the projected cell half-widths.
 - Scale: dense bounding boxes (tubes.py:228, sheet_stats.py:623) and per-component axes would need ~49 GB at 6.8e8 selected points; not a 10^10 path yet.
+- [ ] freeze_model.py:77 (P1): frozen scaler uses float64 statistics, not the float32 reductions of manual_scaling (0.8 to 1.15 % off); use the float32 ones (saved in `flux-tubes/training_scaler_float32.npz`) and say so in the model metadata.
+- [ ] make_proposal_figures.sh:37 + proposal_figure.py:131 (P1): it 135168 gets fresh thresholds (b2_min, s_v, winsor) but is predicted with the 180224 lattice; reuse the 180224 thresholds for other snapshots.
+- [ ] analyze_chunks.py:300 (P2): resuming with a different slab width silently drops rows (657 in the probe); store the slab config in the file and refuse a mismatch.
+- [ ] analyze_chunks.py:379/340 (P1): watch mode marks a partial snapshot complete when a level or Silo shard appears later; require all referenced shards and a stable layout before marking done.
