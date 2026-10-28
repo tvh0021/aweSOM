@@ -19,9 +19,9 @@ Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/`. Nothing i
 - [ ] More physical clusters (training and cluster finding)
 - [ ] Several realizations stacked for a robust clustering
 - [ ] Current-sheet statistics: LR vs LR_flux vs LR_flux_CBD_2
-- [ ] Flux tubes: 3D grouping step and test against Michi's tubes
+- [x] Flux tubes: 3D grouping step (`src/aweSOM/tubes.py`, 15 tests; merged 5aa46db). Synthetic: 5/5 tubes recovered, no false positives. LR_flux it 180224: 51 field-aligned tubes from merge_cost 0.05 cluster 0, but |B| inside is only 1.007x its surroundings, so whether they are Michi's flux tubes is open. Matching interface `tubes.match_to_reference` accepts his labels, masks or centre+radius tracks; the test against his tubes waits on his data. Report: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/flux-tubes/report.md`.
 - [ ] Low-res AsterX test run: reader for its grid structure and output format
-- [ ] Proposal figure: current sheet between the two jets
+- [x] Proposal figure: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/proposal-figure/fig_current_sheet_between_jets_it180224.{pdf,png}` (plus it 135168), caption in `caption.md`, pipeline in `examples/grmhd-bbh/` (merged 649348c). Sheet cluster c9 at merge_cost 0.1 (none exists at 0.2): 0.21 % of the owned volume. Caveat: the stored float64 scaler in the training file is not the float32 one the lattice was trained with (up to 1 % off); the figure uses the float32 statistics, saved in `flux-tubes/training_scaler_float32.npz`.
 - [ ] Chunked analysis of extreme-resolution data as it arrives
 - [ ] Chat with Michi (user's action)
 
