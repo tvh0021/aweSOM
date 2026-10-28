@@ -90,6 +90,7 @@ from .inference import (
 )
 
 __all__ = [
+    "NpyReader",
     "train_batch_stream",
     "predict_stream",
     "stratified_sample",
@@ -185,6 +186,55 @@ class _CallableSource:
                 pos = hi
             offset += m
         return out
+
+
+class NpyReader:
+    """Read rows of a 2-D C-order ``.npy`` file with plain file reads (no memory map).
+
+    A ``numpy.memmap`` keeps the pages it touched resident (they count in the
+    process RSS until the OS evicts them); this reader copies each requested
+    row range into a fresh array, so the process holds only the current
+    chunks, like an ``h5py`` dataset. Supports ``shape``, ``dtype`` and
+    ``reader[start:stop]``; other indices go through a temporary memmap.
+    """
+
+    def __init__(self, path: str):
+        import threading
+
+        self.path = str(path)
+        with open(self.path, "rb") as fh:
+            version = np.lib.format.read_magic(fh)
+            if version == (1, 0):
+                shape, fortran, dtype = np.lib.format.read_array_header_1_0(fh)
+            else:
+                shape, fortran, dtype = np.lib.format.read_array_header_2_0(fh)
+            self.offset = fh.tell()
+        if fortran or len(shape) != 2:
+            raise ValueError("NpyReader needs a 2-D C-order array")
+        self.shape = tuple(shape)
+        self.dtype = np.dtype(dtype)
+        self.row_bytes = self.shape[1] * self.dtype.itemsize
+        self._fh = open(self.path, "rb", buffering=0)
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def __getitem__(self, key):
+        if isinstance(key, slice) and key.step in (None, 1):
+            start, stop, _ = key.indices(self.shape[0])
+            out = np.empty((max(0, stop - start), self.shape[1]), self.dtype)
+            view = memoryview(out).cast("B")
+            with self._lock:
+                self._fh.seek(self.offset + start * self.row_bytes)
+                got = 0
+                while got < len(view):
+                    k = self._fh.readinto(view[got:])
+                    if not k:
+                        raise IOError(f"short read from {self.path}")
+                    got += k
+            return out
+        return np.array(np.load(self.path, mmap_mode="r")[key])
 
 
 def _make_source(data_source: Any, n_samples: Optional[int]):

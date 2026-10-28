@@ -15,7 +15,7 @@ epoch     Time single training epochs (BMU + accumulation + update) over N rows
           I/O wait, screen fallbacks and peak RSS. ``--repeat`` passes, min reported.
 train     Full training (``--epochs``, optional ``--sample-fraction`` or
           ``--fixed-sample``) on the first N rows, then exact QE and TE.
-predict   Stream inference (``predict_stream``, screen backend) over N rows of
+predict   Stream inference (``predict_stream``, ``--backend`` patch or screen) over N rows of
           the memmap into a memmap label file.
 ioread    Sequential read throughput of the memmap (chunks copied, summed).
 
@@ -46,6 +46,7 @@ import numba
 import numpy as np
 
 from aweSOM.stream import (
+    NpyReader,
     peak_rss_bytes,
     predict_stream,
     stratified_sample,
@@ -134,7 +135,23 @@ def _emit(out: str, rec: dict) -> None:
             fh.write(json.dumps(rec) + "\n")
 
 
-def _open(path: str, n: int | None, in_ram: bool) -> np.ndarray:
+class _Prefix:
+    """First n rows of a row-sliceable source."""
+
+    def __init__(self, src, n):
+        self.src, self.shape, self.dtype = src, (n, src.shape[1]), src.dtype
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start, stop, _ = key.indices(self.shape[0])
+            return self.src[start:stop]
+        return self.src[key]
+
+
+def _open(path: str, n: int | None, in_ram: bool, reader: bool = False):
+    if reader and not in_ram:
+        src = NpyReader(path)
+        return _Prefix(src, n) if n is not None and n < src.shape[0] else src
     x = np.load(path, mmap_mode="r")
     if n is not None:
         x = x[:n]
@@ -170,7 +187,7 @@ def mode_stages(a) -> None:
 
 def mode_epoch(a) -> None:
     st = np.load(stages_path(a.results, a.xdim, a.ydim))
-    x = _open(a.data, a.N, a.in_ram)
+    x = _open(a.data, a.N, a.in_ram, a.reader)
     n = x.shape[0]
     nodes = a.xdim * a.ydim
     for stage in a.stages.split(","):
@@ -185,12 +202,13 @@ def mode_epoch(a) -> None:
             t = float(info["epoch_time"][0])
             rec = {
                 "mode": "epoch", "N": n, "xdim": a.xdim, "ydim": a.ydim, "stage": stage, "radius": r,
-                "source": "ram" if a.in_ram else "memmap", "bmu": a.bmu, "rep": rep,
+                "source": _src(a), "bmu": a.bmu, "rep": rep,
                 "sample_fraction": a.sample_fraction, "rows": int(info["rows_per_epoch"][0]),
                 "s_per_epoch": t, "io_wait": float(info["io_wait"][0]),
                 "bmu_time": float(info["bmu_time"][0]), "acc_time": float(info["acc_time"][0]),
                 "update_time": float(info["update_time"][0]),
-                "fallbacks": int(info["fallbacks"][0]), "peak_rss_gb": peak_rss_bytes() / 1e9,
+                "fallbacks": int(info["fallbacks"][0]), "bmu_kind": info["bmu_kind"][0],
+                "peak_rss_gb": peak_rss_bytes() / 1e9,
             }
             rows = rec["rows"]
             rec["mpts_s"] = rows / t / 1e6
@@ -216,7 +234,7 @@ def mode_train(a) -> None:
     t0 = time.perf_counter()
     w, info = train_batch_stream(
         train, a.xdim, a.ydim, epochs=a.epochs, seed=a.seed, sample_fraction=a.sample_fraction,
-        sample_block=a.sample_block, final_pass="none", chunk=a.chunk, verbose=a.verbose,
+        sample_block=a.sample_block, final_pass="none", chunk=a.chunk, verbose=a.verbose, bmu=a.bmu,
     )
     t_train = time.perf_counter() - t0
     t0 = time.perf_counter()
@@ -231,7 +249,8 @@ def mode_train(a) -> None:
         "seed": a.seed, "sample_fraction": a.sample_fraction, "sample_block": a.sample_block,
         "fixed_sample": a.fixed_sample, "rows_per_epoch": int(info["rows_per_epoch"][0]),
         "train_seconds": t_train, "sample_seconds": t_s, "epoch_time": info["epoch_time"].tolist(),
-        "fallbacks": info["fallbacks"].tolist(), "eval_n": int(xe.shape[0]), "qe": qe, "te": te,
+        "fallbacks": info["fallbacks"].tolist(), "bmu_kind": info["bmu_kind"], "qe_train": info["qe"].tolist(),
+        "eval_n": int(xe.shape[0]), "qe": qe, "te": te,
         "eval_seconds": t_eval, "peak_rss_gb": peak_rss_bytes() / 1e9, "tag": tag,
     })
 
@@ -239,22 +258,27 @@ def mode_train(a) -> None:
 def mode_predict(a) -> None:
     st = np.load(stages_path(a.results, a.xdim, a.ydim))
     w = st["late"]
-    x = _open(a.data, a.N, a.in_ram)
+    x = _open(a.data, a.N, a.in_ram, a.reader)
     labels_path = Path(a.scratch) / f"labels_{x.shape[0]}.npy"
     for rep in range(a.repeat):
         out = np.lib.format.open_memmap(labels_path, mode="w+", dtype=np.int32, shape=(x.shape[0],))
-        _, stats = predict_stream(w, np.arange(w.shape[0]), x, out=out, chunk=a.chunk)
+        _, stats = predict_stream(w, np.arange(w.shape[0]), x, out=out, chunk=a.chunk,
+                                  backend=a.backend, lattice_shape=(a.xdim, a.ydim))
         out.flush()
         del out
         _emit(a.out, {"mode": "predict", "N": int(x.shape[0]), "xdim": a.xdim, "ydim": a.ydim,
-                      "source": "ram" if a.in_ram else "memmap", "rep": rep, **stats,
+                      "source": _src(a), "backend": a.backend, "rep": rep, **stats,
                       "mpts_s": stats["rows"] / stats["seconds"] / 1e6,
                       "peak_rss_gb": peak_rss_bytes() / 1e9})
     labels_path.unlink()
 
 
+def _src(a) -> str:
+    return "ram" if a.in_ram else ("read" if a.reader else "memmap")
+
+
 def mode_ioread(a) -> None:
-    x = _open(a.data, a.N, False)
+    x = _open(a.data, a.N, False, a.reader)
     for rep in range(a.repeat):
         t0 = time.perf_counter()
         tot = 0.0
@@ -262,7 +286,7 @@ def mode_ioread(a) -> None:
             tot += float(np.ascontiguousarray(x[s : s + a.chunk])[:, 0].sum())
         t = time.perf_counter() - t0
         gb = x.shape[0] * x.shape[1] * 4 / 1e9
-        _emit(a.out, {"mode": "ioread", "N": int(x.shape[0]), "rep": rep, "seconds": t, "GB_s": gb / t})
+        _emit(a.out, {"mode": "ioread", "N": int(x.shape[0]), "rep": rep, "source": _src(a), "seconds": t, "GB_s": gb / t})
 
 
 def main() -> None:
@@ -275,8 +299,10 @@ def main() -> None:
     p.add_argument("--stages", default="early,late")
     p.add_argument("--repeat", type=int, default=3)
     p.add_argument("--chunk", type=int, default=2**20)
-    p.add_argument("--bmu", default="screen")
-    p.add_argument("--in-ram", action="store_true")
+    p.add_argument("--bmu", default="auto", help="training BMU search: auto, screen, patch, numba")
+    p.add_argument("--backend", default="patch", help="predict backend: patch or screen")
+    p.add_argument("--in-ram", action="store_true", help="load the N rows into memory first")
+    p.add_argument("--reader", action="store_true", help="plain file reads (NpyReader) instead of a memmap")
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--sample-fraction", type=float, default=1.0)

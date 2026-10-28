@@ -7,6 +7,7 @@ import pytest
 from aweSOM._batch_core import neighbourhood_matrix, quantization_error, radius_schedule
 from aweSOM.inference import best_match_nodes, predict
 from aweSOM.stream import (
+    NpyReader,
     _stratified_block_starts,
     neighbourhood_update,
     predict_stream,
@@ -117,6 +118,9 @@ def test_sources_memmap_h5py_callable(tmp_path, data):
     mm.flush()
     w_mm, _ = train_batch_stream(np.load(tmp_path / "x.npy", mmap_mode="r"), 6, 4, epochs=5, chunk=1024)
     np.testing.assert_array_equal(w_mm, w_ref)
+    w_rd, _ = train_batch_stream(NpyReader(tmp_path / "x.npy"), 6, 4, epochs=5, chunk=1024)
+    np.testing.assert_array_equal(w_rd, w_ref)
+    np.testing.assert_array_equal(NpyReader(tmp_path / "x.npy")[17:4000], x32[17:4000])
     w_np, _ = train_batch_stream(x32, 6, 4, epochs=5, chunk=1024, prefetch=False)
     np.testing.assert_array_equal(w_np, w_ref)
 
