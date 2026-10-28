@@ -80,7 +80,7 @@ _U32 = 2.0**-24  # float32 unit roundoff
 JAX_TILE_ELEMENTS = 2**25
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True, nogil=True, cache=True)
 def _bmu_kernel(
     weights: np.ndarray, data: np.ndarray, out_idx: np.ndarray, out_dist2: np.ndarray
 ) -> None:
@@ -161,7 +161,7 @@ def best_match_nodes(
     return nodes_idx, dist2
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True, nogil=True, cache=True)
 def _screen_kernel(
     weights: np.ndarray,
     w32: np.ndarray,
@@ -508,7 +508,7 @@ def _collect(item, nodes_idx: np.ndarray, dist2: np.ndarray) -> None:
     dist2[start:stop] = np.asarray(d2)[: stop - start]
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True, nogil=True, cache=True)
 def _dist2_kernel(
     weights: np.ndarray, data: np.ndarray, idx: np.ndarray, out_dist2: np.ndarray
 ) -> None:
