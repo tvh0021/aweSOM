@@ -217,3 +217,23 @@ def test_watch_waits_for_shards_and_extends_a_grown_snapshot(tmp_path, model_pat
     assert set(rows["level"]) == {0, 1}
     assert np.array_equal(rows["labels"], SOMModel.load(model_path).predict(rows["features"]))
     assert len(np.unique(rows["xyz"], axis=0)) == len(rows["xyz"])
+
+
+def test_six_feature_chunk_pipeline(carpet_run, model_path, tmp_path):
+    from aweSOM.features_grmhd import SIX_FEATURE_NAMES
+    m = SOMModel.load(model_path)
+    m.weights = np.column_stack((m.weights, np.zeros(len(m.weights))))
+    m.feature_names = list(SIX_FEATURE_NAMES)
+    m.scaler = Scaler.identity(6)
+    path = tmp_path / 'six-model.h5'
+    m.save(path)
+    out = tmp_path / 'six-out'
+    assert _run(carpet_run, path, out, '--reader', 'carpet', '--iterations', '0') == 0
+    rows, attrs = _read(out / 'it00000000.h5')
+    assert rows['features'].shape[1] == 6
+    reader = CarpetHDF5Reader(carpet_run, backend='native')
+    want = [compute_features(b.data, b.spacing, THR, select=b.full_mask(), names=SIX_FEATURE_NAMES)
+            for b in reader.iter_level_blocks(INPUTS, 0, halo=THR.halo, slab=4)]
+    np.testing.assert_array_equal(rows['features'], np.concatenate(want))
+    stats = json.loads((out / 'it00000000_stats.json').read_text())
+    assert 'bz_frac' in stats['total']['feature_median']

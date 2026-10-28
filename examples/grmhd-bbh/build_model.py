@@ -155,6 +155,8 @@ def main(argv=None):
         "sheet_clusters": ",".join(map(str, sheet)),
         "sheet_rule": rule_text,
     }
+    from aweSOM.features_grmhd import FeatureThresholds
+    meta.update(FeatureThresholds.from_h5(args.training_file).to_metadata())
     model = SOMModel.from_lattice(lat, scaled_training_data=da, scaler=scaler,
                                   merge_cost=args.merge_cost, metadata=meta)
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -187,3 +187,25 @@ def test_bitwise_equal_to_etkplot_on_random_block():
     want = np.stack([et.apply(n, ref[n].ravel(), aux, None) for n in FEATURE_NAMES], axis=1)
     got = finish_features({n: port[n].ravel() for n in FEATURE_NAMES}, aux["smallb2"], thr)
     assert np.array_equal(got, want, equal_nan=True)
+
+
+def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
+    from aweSOM.features_grmhd import SIX_FEATURE_NAMES
+    sys.path.insert(0, str(ETKPLOT))
+    from etkplot import features
+    from types import SimpleNamespace
+    shape = (9, 9, 9)
+    rng = np.random.default_rng(3)
+    a = {n: rng.uniform(0.1, 2, shape) for n in INPUTS}
+    a['Bx'][4, 4, 4] = a['By'][4, 4, 4] = a['Bz'][4, 4, 4] = 1e-6
+    thr = _thresholds(b2_min=1e-3)
+    actual = compute_features(a, (1, 1, 1), thr, names=SIX_FEATURE_NAMES)
+    expected = features.compute(SIX_FEATURE_NAMES, a, (1, 1, 1), SimpleNamespace(b2_min=thr.b2_min, s_v=thr.s_v, accuracy=4))
+    for j, n in enumerate(SIX_FEATURE_NAMES):
+        y = expected[n].astype(np.float32).ravel()
+        if n in thr.winsor:
+            y = np.clip(y, *thr.winsor[n])
+        np.testing.assert_array_equal(actual[:, j], y)
+    assert actual.reshape(*shape, 6)[4, 4, 4, 5] == 0
+    model = type('Model', (), {'feature_names': SIX_FEATURE_NAMES, 'metadata': thr.to_metadata()})()
+    assert FeatureThresholds.from_model(model) == thr

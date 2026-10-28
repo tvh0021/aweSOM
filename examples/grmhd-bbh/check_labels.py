@@ -43,6 +43,9 @@ def main(argv=None):
 
     src = GridFileSource(args.grid, args.labels)
     with h5py.File(args.training_file, "r") as h:
+        names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][:]]
+        if names != src.names:
+            raise ValueError(f"training names {names} != grid names {src.names}")
         t_xyz = h["xyz"][:]
         t_lev = h["level"][:]
         t_feat = h["features"][:]

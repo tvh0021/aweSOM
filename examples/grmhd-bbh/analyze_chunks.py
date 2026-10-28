@@ -1,7 +1,7 @@
 """Label GRMHD snapshots block by block with a frozen SOM model.
 
 For each iteration and each level block (``aweSOM.io``), this script reads the
-inputs, computes the five features with the thresholds frozen in the model
+inputs, computes the model features with the thresholds frozen in the model
 (``aweSOM.features_grmhd``), predicts the labels, and then:
 
 * appends labels, xyz and level (and, with ``--save-features``, the
@@ -52,13 +52,14 @@ from typing import Dict, List, Optional
 import h5py
 import numpy as np
 
-from aweSOM.features_grmhd import FEATURE_NAMES, INPUTS, FeatureThresholds, finish_features, raw_features
+from aweSOM.features_grmhd import INPUTS, FeatureThresholds, finish_features, raw_features
 from aweSOM.io import CarpetHDF5Reader, CarpetXReader
 from aweSOM.io.carpet import looks_like_carpet
 from aweSOM.model import SOMModel
 
 # fixed histogram bins for the medians: (lo, hi) per feature, 0.005 wide
 HIST_RANGE = {
+    "bz_frac": (0.0, 1.0),
     "log_beta_inv": (-12.0, 12.0),
     "log_theta": (-12.0, 12.0),
     "log_chi_B": (-3.5, 3.5),
@@ -176,14 +177,15 @@ class IterationFile:
 
 def summarise(itf: IterationFile, model: SOMModel, sheets: List[int]) -> dict:
     """Per-level and total statistics from the block records."""
+    names = tuple(model.feature_names)
     n_cl = int(model.node_cluster.max()) + 1
     per = {}
     for g in itf.f["blocks"].values():
         L = int(g.attrs["level"])
-        s = per.setdefault(L, {"counts": np.zeros(n_cl + 1, np.int64), "hist": {n: 0 for n in FEATURE_NAMES},
+        s = per.setdefault(L, {"counts": np.zeros(n_cl + 1, np.int64), "hist": {n: 0 for n in names},
                                "cells": 0, "nonfinite": 0, "blocks": 0, "dx": float(g.attrs.get("dx", np.nan))})
         s["counts"] += g["cluster_counts"][()]
-        for n in FEATURE_NAMES:
+        for n in names:
             s["hist"][n] = s["hist"][n] + g[f"hist_{n}"][()]
         s["cells"] += int(g.attrs["row_stop"] - g.attrs["row_start"])
         s["nonfinite"] += int(g.attrs["nonfinite"])
@@ -191,14 +193,14 @@ def summarise(itf: IterationFile, model: SOMModel, sheets: List[int]) -> dict:
     out = {"levels": {}, "sheet_clusters": sheets}
     tot_counts = np.zeros(n_cl + 1, np.int64)
     tot_vol = np.zeros(n_cl + 1)
-    tot_hist = {n: 0 for n in FEATURE_NAMES}
+    tot_hist = {n: 0 for n in names}
     for L, s in sorted(per.items()):
         c = s["counts"]  # index 0 = label -1 (unassigned), k + 1 = cluster k
         finite = int(c.sum())
         vol = s["dx"] ** 3
         tot_counts += c
         tot_vol += c * vol
-        for n in FEATURE_NAMES:
+        for n in names:
             tot_hist[n] = tot_hist[n] + s["hist"][n]
         out["levels"][str(L)] = {
             "dx": s["dx"],
@@ -207,7 +209,7 @@ def summarise(itf: IterationFile, model: SOMModel, sheets: List[int]) -> dict:
             "nonfinite_cells": s["nonfinite"],
             "volume_fraction": {str(k - 1): float(c[k] / max(finite, 1)) for k in range(len(c)) if c[k]},
             "sheet_cells": int(sum(c[k + 1] for k in sheets)),
-            "feature_median": {n: _median(np.asarray(s["hist"][n]), n) for n in FEATURE_NAMES},
+            "feature_median": {n: _median(np.asarray(s["hist"][n]), n) for n in names},
         }
     vt = tot_vol.sum()
     out["total"] = {
@@ -216,7 +218,7 @@ def summarise(itf: IterationFile, model: SOMModel, sheets: List[int]) -> dict:
         "volume_fraction": {str(k - 1): float(tot_vol[k] / vt) for k in range(len(tot_vol)) if tot_counts[k]} if vt else {},
         "sheet_cells": int(sum(tot_counts[k + 1] for k in sheets)),
         "feature_median": {n: _median(np.asarray(tot_hist[n]), n) if np.size(tot_hist[n]) > 1 else float("nan")
-                           for n in FEATURE_NAMES},
+                           for n in names},
     }
     return out
 
@@ -346,10 +348,11 @@ def source_layout(reader, it: int, levels=None) -> str:
 
 def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, args, sheets: List[int],
                       layout: Optional[str] = None) -> dict:
+    names = tuple(model.feature_names)
     out = Path(args.out)
     if layout is None:
         layout = source_layout(reader, it, args.levels)
-    itf = IterationFile(out / f"it{it:08d}.h5", len(FEATURE_NAMES), args.save_features, run_config(args, thr),
+    itf = IterationFile(out / f"it{it:08d}.h5", len(names), args.save_features, {**run_config(args, thr), "feature_names": list(names)},
                         layout)
     if itf.f.attrs.get("complete", False):
         print(f"[chunks] it={it}: already complete", flush=True)
@@ -360,7 +363,7 @@ def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, 
               flush=True)
     done = itf.done()
     n_cl = int(model.node_cluster.max()) + 1
-    jchi = FEATURE_NAMES.index("log_chi_B")
+    jchi = names.index("log_chi_B")
     timers = {"read": 0.0, "features": 0.0, "predict": 0.0, "write": 0.0}
     cells = 0
     t_start = time.time()
@@ -378,13 +381,13 @@ def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, 
             if last_level is not None and block.level != last_level:
                 _flush_outputs(itf, model, sheets, out, it, title)
             last_level = block.level
-            raw = raw_features(block.data, block.spacing, thr.accuracy, FEATURE_NAMES)
+            raw = raw_features(block.data, block.spacing, thr.accuracy, names)
             inner = block.interior
             owned = block.owned_mask
-            picked = {n: raw[n][inner][owned] for n in FEATURE_NAMES}
+            picked = {n: v[inner][owned] for n, v in raw.items()}
             b2 = block.data["smallb2"][inner][owned]
             del raw
-            feats = finish_features(picked, b2, thr, FEATURE_NAMES)
+            feats = finish_features(picked, b2, thr, names)
             del picked, b2
             xyz64 = block.xyz()
             t2 = time.time()
@@ -395,7 +398,7 @@ def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, 
             finite = np.all(np.isfinite(feats), axis=1)
             lab_f = labels[finite]
             counts = np.bincount(lab_f + 1, minlength=n_cl + 1)[: n_cl + 1].astype(np.int64)
-            hists = {f"hist_{n}": _hist(feats[finite, j].astype(np.float64), n) for j, n in enumerate(FEATURE_NAMES)}
+            hists = {f"hist_{n}": _hist(feats[finite, j].astype(np.float64), n) for j, n in enumerate(names)}
             mid = _midplane(block, args.midplane_z, labels, feats[:, jchi], xyz64)
             itf.append(
                 block.key, block.level, labels, xyz64.astype(np.float32), finite, feats, mid,

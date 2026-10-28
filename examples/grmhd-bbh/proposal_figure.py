@@ -35,7 +35,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-FEATURES = ["log_beta_inv", "log_theta", "log_chi_B", "log_grad_ln_b2", "asinh_div_v"]
 DX = {5: 0.25, 6: 0.125, 7: 0.0625, 8: 0.03125}
 
 
@@ -46,7 +45,7 @@ def log(msg: str) -> None:
 # --------------------------------------------------------------------------- labels
 
 
-def build_model(som_path: Path, train_features: Path, merge_cost: float):
+def build_model(som_path: Path, train_features: Path, merge_cost: float, scaler_mode="training-float32"):
     import aweSOM
     from aweSOM.model import Scaler, SOMModel
 
@@ -56,7 +55,8 @@ def build_model(som_path: Path, train_features: Path, merge_cost: float):
         raw = h["features"][()]  # float32, the rows train_som.py trained on
         mean_file = h["scaler/mean"][()]
         sigma_file = h["scaler/sigma"][()]
-    assert names == FEATURES, names
+    if raw.shape[1] != len(names):
+        raise ValueError("feature names do not match columns")
     # train_som.py scaled with run_som.manual_scaling(x) = (x - mean) / (2 std),
     # with mean and std reduced along axis 0 of the float32 array. That reduction
     # accumulates row by row in float32 and is off by up to ~1% from the float64
@@ -65,6 +65,8 @@ def build_model(som_path: Path, train_features: Path, merge_cost: float):
     mean32 = np.mean(raw, axis=0)
     std32 = np.std(raw, axis=0)
     scaler = Scaler("manual", mean32.astype(np.float64), 2.0 * std32.astype(np.float64))
+    if scaler_mode == "file":
+        scaler = Scaler("manual", mean_file, 2.0 * sigma_file)
     log(f"training scaler (float32 stats): mean {mean32}, 2 std {2 * std32}")
     log(f"file scaler (float64 stats):     mean {mean_file}, 2 sigma {2 * sigma_file}")
     del raw
@@ -104,8 +106,12 @@ def grid_clip(grid: Path, train_features: Path) -> dict:
     from aweSOM.features_grmhd import FeatureThresholds
 
     with h5py.File(train_features, "r") as h:
+        names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][:]]
         train = FeatureThresholds.from_h5_attrs(dict(h.attrs))
     with h5py.File(grid, "r") as h:
+        grid_names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][:]]
+        if grid_names != names:
+            raise ValueError(f"grid names {grid_names} != training names {names}")
         got = FeatureThresholds.from_h5_attrs(dict(h.attrs))
         same = int(h.attrs.get("iteration", -1)) == train_iteration(train_features)
     problems = []
@@ -120,10 +126,10 @@ def grid_clip(grid: Path, train_features: Path) -> dict:
     if problems and not same:
         raise SystemExit(f"{grid}: features are not on the training transform:\n  " + "\n  ".join(problems)
                          + f"\nextract the grid with --b2-min {train.b2_min!r} --s-v {train.s_v!r} --winsor 0 1")
-    limits = [(j, np.float32(lo), np.float32(hi)) for j, n in enumerate(FEATURES) for m, (lo, hi) in train.winsor.items()
+    limits = [(j, np.float32(lo), np.float32(hi)) for j, n in enumerate(names) for m, (lo, hi) in train.winsor.items()
               if m == n]
     log(f"grid thresholds: b2_min {got.b2_min:.6g} s_v {got.s_v:.6g}; clipping to the training limits "
-        + " ".join(f"{FEATURES[j]} [{lo:.4g}, {hi:.4g}]" for j, lo, hi in limits))
+        + " ".join(f"{names[j]} [{lo:.4g}, {hi:.4g}]" for j, lo, hi in limits))
     return {"limits": limits, "check": "same snapshot as training" if same else "training b2_min and s_v, "
             "training winsor limits applied here"}
 
@@ -149,7 +155,7 @@ def stage_labels(args) -> None:
         return label_statistics(args)
     out = Path(args.out)
     model, scaler, train_scaled = build_model(Path(args.som), Path(args.train_features),
-                                              args.merge_cost)
+                                              args.merge_cost, args.scaler)
     info: dict = {"merge_cost": args.merge_cost, "som": str(args.som),
                   "grid": str(args.grid), "train_features": str(args.train_features),
                   "lattice": [model.xdim, model.ydim]}
@@ -214,7 +220,7 @@ def stage_labels(args) -> None:
             "point_fraction": float(m.mean()),
             "volume_M3": float(cell_vol[m].sum()),
             "volume_fraction": float(cell_vol[m].sum() / total_vol),
-            "median": dict(zip(FEATURES, map(float, med))),
+            "median": dict(zip(model.feature_names, map(float, med))),
             "points_per_level": {int(l): int(np.sum(m & (level == l))) for l in DX},
         }
     del feats
@@ -258,7 +264,8 @@ def stage_sample(args) -> None:
     h = h5py.File(args.grid, "r")
     xyz, level = h["xyz"], h["level"]
     from proposal_stream import FeatureColumn
-    lbi, chi = FeatureColumn(h["features"], 0), FeatureColumn(h["features"], 2)
+    names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][:]]
+    lbi, chi = FeatureColumn(h["features"], names.index("log_beta_inv")), FeatureColumn(h["features"], names.index("log_chi_B"))
 
     res: dict = {"sheet_cluster": sheet, "half_width": hw, "holes": raw["holes"],
                  "time": raw["time"], "it": raw["it"]}
@@ -575,6 +582,7 @@ def main(argv=None) -> None:
     a.add_argument("--grid-labels", help="Existing full-grid labels; stream cluster statistics")
     a.add_argument("--grid", required=True)
     a.add_argument("--train-features", required=True)
+    a.add_argument("--scaler", choices=["training-float32", "file"], default="training-float32")
     a.add_argument("--som", required=True)
     a.add_argument("--merge-cost", type=float, default=0.1)
     a.add_argument("--ref-labels", default=None,

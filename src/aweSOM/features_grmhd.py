@@ -1,8 +1,8 @@
-"""The five GRMHD current-sheet features, computed on one level block.
+"""The GRMHD current-sheet features, computed on one level block.
 
 A numpy-only port of etkplot's ``features``/``derivatives``/``thresholds``
 modules (``/Volumes/ExternalNVMe/etk-analysis/etkplot``), restricted to the
-five feature columns of the training sets aweSOM was trained on:
+five default feature columns, with optional ``bz_frac`` in ``SIX_FEATURE_NAMES``:
 
 =================  =========================================================
 ``log_beta_inv``   log10(b^2 / (2 P))
@@ -12,6 +12,9 @@ five feature columns of the training sets aweSOM was trained on:
 ``log_grad_ln_b2`` log10(|grad b^2| / b^2 + eps)
 ``asinh_div_v``    asinh(div v / ``s_v``)
 =================  =========================================================
+
+``bz_frac`` is abs(Bz)/|B|, zero at zero norm or where |B| < b2_min.
+It uses the identity transform without winsor clipping.
 
 eps = 1e-3. Derivatives are centred (Fornberg) first differences of
 accuracy 2, 4 or 6 along the block's x, y, z axes (flat metric, coordinate
@@ -44,6 +47,7 @@ import numpy as np
 
 __all__ = [
     "FEATURE_NAMES",
+    "SIX_FEATURE_NAMES",
     "INPUTS",
     "EPS",
     "DEFAULT_ACCURACY",
@@ -62,6 +66,7 @@ FEATURE_NAMES: Tuple[str, ...] = (
     "log_grad_ln_b2",
     "asinh_div_v",
 )
+SIX_FEATURE_NAMES = FEATURE_NAMES + ("bz_frac",)
 INPUTS: Tuple[str, ...] = ("smallb2", "P", "rho_b", "Bx", "By", "Bz", "vel[0]", "vel[1]", "vel[2]")
 EPS = 1e-3
 ACCURACIES = (2, 4, 6)
@@ -168,6 +173,10 @@ def raw_features(
             b2 = arrays["smallb2"]
             g2 = sum(derivative(b2, d, dx[d], accuracy) ** 2 for d in range(3))
             out[n] = _log10(_ratio(np.sqrt(g2), b2) + EPS)
+        elif n == "bz_frac":
+            norm = np.sqrt(arrays["Bx"] ** 2 + arrays["By"] ** 2 + arrays["Bz"] ** 2)
+            out[n] = np.divide(np.abs(arrays["Bz"]), norm, out=np.zeros_like(norm), where=norm != 0)
+            out["B_norm"] = norm
         elif n == "asinh_div_v":
             out[n] = sum(derivative(arrays[f"vel[{d}]"], d, dx[d], accuracy) for d in range(3))
         else:
@@ -177,7 +186,7 @@ def raw_features(
 
 @dataclass
 class FeatureThresholds:
-    """The global transform settings of the five features.
+    """The global transform settings of the GRMHD features.
 
     Attributes:
         b2_min: log_chi_B is set to log10(eps) where smallb2 < b2_min (0: no floor).
@@ -280,8 +289,8 @@ class FeatureThresholds:
     @classmethod
     def from_model(cls, model) -> "FeatureThresholds":
         """From a frozen :class:`~aweSOM.model.SOMModel`; also checks that the
-        model's features are these five, in this order."""
-        if tuple(model.feature_names) != FEATURE_NAMES:
+        model uses the default five or optional six columns."""
+        if tuple(model.feature_names) not in (FEATURE_NAMES, SIX_FEATURE_NAMES):
             raise ValueError(f"model features {model.feature_names} are not {list(FEATURE_NAMES)}")
         return cls.from_metadata(model.metadata)
 
@@ -315,6 +324,8 @@ def finish_features(
             x = x.copy()
             with np.errstate(invalid="ignore"):
                 x[(np.asarray(smallb2).ravel() < thresholds.b2_min) & np.isfinite(x)] = np.log10(EPS)
+        elif n == "bz_frac":
+            x = np.where(np.asarray(raw["B_norm"]).ravel() < thresholds.b2_min, 0.0, x)
         elif n == "asinh_div_v":
             x = np.arcsinh(x / thresholds.s_v)
         y = x.astype(np.float32)
@@ -352,4 +363,4 @@ def compute_features(
         pick = lambda a: np.asarray(a).ravel()  # noqa: E731
     else:
         pick = lambda a: np.asarray(a)[select]  # noqa: E731
-    return finish_features({n: pick(raw[n]) for n in names}, pick(b2), thresholds, names)
+    return finish_features({n: pick(v) for n, v in raw.items()}, pick(b2), thresholds, names)

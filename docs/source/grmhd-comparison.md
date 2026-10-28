@@ -186,3 +186,42 @@ hours per run on this machine.
 A reasonable plan is to use the frozen `LR_flux` SOM for the headline
 comparison, and retrain on one other run to see how much the sheet volume
 fraction and thickness depend on the clustering.
+
+## Optional vertical field fraction and transfer transforms
+
+`som-features --features six` appends `bz_frac` to the five existing columns.
+`--with-bz-frac` is an alias for adding it to the selected columns.
+`--features five` and the default retain the existing five-column computation,
+including its clipping. The existing `--features NAME ...` selection also works.
+Always read column order from the HDF5 `names` dataset.
+
+`bz_frac = abs(Bz) / sqrt(Bx**2 + By**2 + Bz**2)` uses the identity transform
+and has range 0 to 1. Zero norm gives zero. The fraction is zero where the
+Euclidean norm `|B| < b2_min`. This comparison uses the saved threshold value
+literally. The existing `log_chi_B` floor still compares `smallb2 < b2_min`.
+The sixth column has no winsor clipping. Scale all columns with the fitted
+`(x - scaler/mean) / (2 * scaler/sigma)` for training and inference.
+
+`--thresholds-from TRAINING.h5` loads `b2_min`, `s_v`, all three winsor limits,
+the winsor quantiles, and `scaler/mean` and `scaler/sigma` from that file.
+The source and requested feature names must match exactly, including order.
+A five-column source cannot supply the missing sixth-column scaler.
+The extractor also reuses saved derivative accuracy and the side-column
+entropy gamma, and rejects an incompatible epsilon. Saved settings override
+current threshold options. Root attribute `thresholds_from` records the
+resolved source path in both training and grid outputs. Features remain in
+physical transformed units in HDF5, with the frozen scaler stored separately.
+
+Without this option, `b2_min` is the sample-weighted 1% quantile of `smallb2`,
+`s_v` is the sample-weighted median absolute divergence, and the three gradient
+columns use their sample-weighted 0.05% and 99.95% winsor quantiles.
+The scaler uses the extracted training rows with float64 accumulation.
+Explicit `--b2-min`, `--s-v`, and `--winsor` change those defaults.
+Transfer mode fixes these values across runs. The simulation's density and
+pressure floors remain encoded in its input arrays. The extractor does not
+fit or replace those floors. Horizon geometry, ownership, sampling weights,
+and the physical fields still belong to the current run.
+
+For training with the saved scaler, pass `scripts/train_som.py --scaler file`.
+The historical default `training-float32` retains `manual_scaling` for old runs.
+Freeze a lattice trained with the file scaler using `build_model.py --scaler file`.
