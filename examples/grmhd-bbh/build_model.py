@@ -71,6 +71,9 @@ def main(argv=None):
     ap.add_argument("--sheet-clusters", default=None, help="comma-separated ids (overrides the rule)")
     ap.add_argument("--training-labels", type=Path, default=None,
                     help="labels saved at training time with this merge cost, to check against")
+    ap.add_argument("--umat", choices=["recompute", "stored"], default="recompute",
+                    help="recompute the U-matrix from the final lattice (default), or use the pickled one; "
+                         "lattices trained with history before the som.py fix pickled the last snapshot's U-matrix")
     ap.add_argument("--name", default=None, help="dataset name stored in the metadata")
     ap.add_argument("-o", "--out", required=True, type=Path, help="output SOMModel (.h5)")
     args = ap.parse_args(argv)
@@ -103,6 +106,15 @@ def main(argv=None):
         print("scaled training data vs lattice.data_array, max abs per feature:",
               report["max_abs_scaled_minus_lattice_data_array"], flush=True)
 
+    report["umat_mode"] = args.umat
+    if args.umat == "recompute":
+        umat = lat.compute_umat()
+        stored_umat = getattr(lat, "umat", None)
+        if stored_umat is not None and np.shape(stored_umat) == umat.shape:
+            report["umat_stored_max_abs_diff"] = float(np.abs(umat - stored_umat).max())
+            print(f"U-matrix recomputed from the final lattice; max abs diff to the pickled one "
+                  f"{report['umat_stored_max_abs_diff']:.3e}", flush=True)
+        lat.umat = umat
     with contextlib.redirect_stdout(io.StringIO()):
         clusters = lat.assign_cluster_to_lattice(smoothing=None, merge_cost=args.merge_cost)
     node_cluster = clusters.ravel(order="F").astype(np.int64)
@@ -152,6 +164,7 @@ def main(argv=None):
         "training_file": str(args.training_file),
         "lattice_pickle": str(args.lattice),
         "scaler_mode": args.scaler,
+        "umat_mode": args.umat,
         "sheet_clusters": ",".join(map(str, sheet)),
         "sheet_rule": rule_text,
     }

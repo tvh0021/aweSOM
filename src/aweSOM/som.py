@@ -281,13 +281,11 @@ class Lattice:
         # update the learning rate, lattice, and Umatrix after training
         if decay_events.any():
             self.alpha = float(alphas[this_batch_train])
-        if self.history:
-            # as before: the U-matrix comes from self.lattice, i.e. the last snapshot
-            self.umat = self.compute_umat()
-            self.lattice = lattice  # lattice takes the shape of [X*Y, F]
-        else:
-            self.lattice = lattice  # lattice takes the shape of [X*Y, F]
-            self.umat = self.compute_umat()
+        # compute_umat reads self.lattice, so assign the final weights first; with
+        # history on, self.lattice still holds the last snapshot, which is not the
+        # final step unless it falls on a save_frequency boundary
+        self.lattice = lattice  # lattice takes the shape of [X*Y, F]
+        self.umat = self.compute_umat()
 
     @staticmethod
     @njit()
