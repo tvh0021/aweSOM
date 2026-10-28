@@ -20,6 +20,10 @@ training rows (default ``log_chi_B>0.3,log_beta_inv<0.5``, the criterion of
     python build_model.py --lattice som_object.<tag>.pkl \
         --training-file features_bbh_0003-180224-N10000000.h5 --merge-cost 0.05 \
         --training-labels labels.<tag>-mc0.05.npy -o som_model.h5
+
+A lattice trained with ``train_som.py --n-samples N`` saw only the first N rows of
+the file; pass the same ``--n-samples N`` here so the scaler and the stored
+``projection_1d`` refer to the same rows.
 """
 
 from __future__ import annotations
@@ -59,6 +63,9 @@ def main(argv=None):
     ap.add_argument("--lattice", required=True, type=Path, help="Lattice pickle from training")
     ap.add_argument("--training-file", required=True, type=Path, help="feature HDF5 the lattice was trained on")
     ap.add_argument("--merge-cost", type=float, required=True)
+    ap.add_argument("--n-samples", type=int, default=None,
+                    help="use only the first N rows of the training file, as train_som.py "
+                         "--n-samples did when the lattice was trained (default: all rows)")
     ap.add_argument("--scaler", choices=["training-float32", "file"], default="training-float32")
     ap.add_argument("--sheet-rule", default="log_chi_B>0.3,log_beta_inv<0.5")
     ap.add_argument("--sheet-clusters", default=None, help="comma-separated ids (overrides the rule)")
@@ -73,15 +80,16 @@ def main(argv=None):
     with open(args.lattice, "rb") as fh:
         lat = pickle.load(fh)
     with h5py.File(args.training_file, "r") as h:
-        X = h["features"][:]
+        n_use = h["features"].shape[0] if args.n_samples is None else min(args.n_samples, h["features"].shape[0])
+        X = h["features"][:n_use]
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][()]]
         file_mean = h["scaler/mean"][:] if "scaler/mean" in h else None
         file_sigma = h["scaler/sigma"][:] if "scaler/sigma" in h else None
-        weight = h["weight"][:] if "weight" in h else np.ones(len(X))
-        weight_volume = h["weight_volume"][:] if "weight_volume" in h else np.ones(len(X))
-        level = h["level"][:] if "level" in h else np.zeros(len(X), np.int8)
+        weight = h["weight"][:n_use] if "weight" in h else np.ones(len(X))
+        weight_volume = h["weight_volume"][:n_use] if "weight_volume" in h else np.ones(len(X))
+        level = h["level"][:n_use] if "level" in h else np.zeros(len(X), np.int8)
 
-    report = {"lattice": str(args.lattice), "training_file": str(args.training_file),
+    report = {"lattice": str(args.lattice), "training_file": str(args.training_file), "n_samples": int(n_use),
               "merge_cost": args.merge_cost, "scaler_mode": args.scaler, "feature_names": names}
     sc32 = Scaler("manual", X.mean(0).astype(np.float64), 2.0 * X.std(0).astype(np.float64))
     if file_mean is not None:
@@ -105,7 +113,9 @@ def main(argv=None):
     if proj is not None and len(proj) == len(X):
         lab = node_cluster[np.asarray(proj).ravel().astype(np.int64)]
     else:
-        raise SystemExit("the lattice has no projection_1d of the training rows")
+        raise SystemExit("the lattice has no projection_1d of the training rows"
+                         + ("" if proj is None else f" (lattice rows {len(proj)}, training rows {len(X)}; "
+                            "pass --n-samples to match the subsample the lattice was trained on)"))
     if args.training_labels is not None:
         stored = np.load(args.training_labels)
         report["agreement_with_training_labels"] = float(np.mean(stored == lab))
