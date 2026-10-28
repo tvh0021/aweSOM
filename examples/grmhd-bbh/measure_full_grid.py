@@ -64,7 +64,12 @@ def main():
             result['between'][w]={'owned_M3':tv,'sheet_M3':sv,'filling':sv/tv,'share':sv/sheet,'enhancement':sv/tv/(sheet/total)}
         for L in lats:
             print('EDT start',L,lats[L],flush=True)
-            thick=ridge_thickness(L,lats,sheets,owned)
+            if result['levels'][L]['sheet_n']:
+                thick=ridge_thickness(L,lats,sheets,owned)
+            else:
+                thick={'median_M':float('nan'), 'median_cells':float('nan'),
+                       'p90_cells':float('nan'), 'n_ridge':0,
+                       'n_beyond_overlap':0, 'histogram_M':{}}
             result['levels'][L]['thickness']=thick
             print('EDT done',L,thick,flush=True)
         result['seconds']=time.time()-t;result['peak_GB']=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e9
