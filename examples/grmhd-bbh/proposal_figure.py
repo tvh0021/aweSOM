@@ -36,7 +36,7 @@ import h5py
 import numpy as np
 
 FEATURES = ["log_beta_inv", "log_theta", "log_chi_B", "log_grad_ln_b2", "asinh_div_v"]
-DX = {5: 0.25, 6: 0.125, 7: 0.0625}
+DX = {5: 0.25, 6: 0.125, 7: 0.0625, 8: 0.03125}
 
 
 def log(msg: str) -> None:
@@ -144,6 +144,9 @@ def apply_clip(x: np.ndarray, clip: dict) -> np.ndarray:
 
 
 def stage_labels(args) -> None:
+    if args.grid_labels:
+        from proposal_stream import label_statistics
+        return label_statistics(args)
     out = Path(args.out)
     model, scaler, train_scaled = build_model(Path(args.som), Path(args.train_features),
                                               args.merge_cost)
@@ -194,7 +197,7 @@ def stage_labels(args) -> None:
     info["n_points"] = int(n)
 
     # per-cluster statistics on the grid: medians and volume fractions
-    vol = np.zeros(8)
+    vol = np.zeros(9)
     for l, dx in DX.items():
         vol[l] = dx**3
     cell_vol = vol[level]
@@ -251,12 +254,11 @@ def stage_sample(args) -> None:
     hw, n = args.half_width, args.n
 
     t0 = time.perf_counter()
-    with h5py.File(args.grid, "r") as h:
-        xyz = h["xyz"][()]
-        level = h["level"][()]
-        lbi = h["features"][:, 0]  # log_beta_inv
-        chi = h["features"][:, 2]  # log_chi_B
-    log(f"read grid ({len(level):,} points) in {time.perf_counter() - t0:.1f}s")
+    # Keep datasets on disk; each subsequent read is bounded by the chunk size.
+    h = h5py.File(args.grid, "r")
+    xyz, level = h["xyz"], h["level"]
+    from proposal_stream import FeatureColumn
+    lbi, chi = FeatureColumn(h["features"], 0), FeatureColumn(h["features"], 2)
 
     res: dict = {"sheet_cluster": sheet, "half_width": hw, "holes": raw["holes"],
                  "time": raw["time"], "it": raw["it"]}
@@ -273,27 +275,31 @@ def stage_sample(args) -> None:
         for l in sorted(DX, reverse=True):  # finest level first
             dx = DX[l]
             r = 0.5 * np.sqrt(3.0) * dx * 1.001
-            idx = np.flatnonzero(level == l)
-            # only the slab of this level's points that can be nearest to the plane
-            keep = []
-            for s in range(0, len(idx), 1 << 22):
-                ii = idx[s:s + (1 << 22)]
-                c = _plane_coords(xyz[ii], o, e1, e2, e3)
-                m = (np.abs(c[:, 2]) <= r) & (np.abs(c[:, 0]) <= hw + r) & (np.abs(c[:, 1]) <= hw + r)
-                keep.append(ii[m])
+            keep, keep_lab, keep_lbi = [], [], []
+            for start in range(0, len(level), 1 << 20):
+                sl = slice(start, start + (1 << 20))
+                levels_chunk = level[sl]
+                if not np.any(levels_chunk == l):
+                    continue
+                pos = xyz[sl]
+                c = _plane_coords(pos, o, e1, e2, e3)
+                m = (levels_chunk == l) & (np.abs(c[:, 2]) <= r) & (np.abs(c[:, 0]) <= hw+r) & (np.abs(c[:, 1]) <= hw+r)
+                keep.append(pos[m]); keep_lab.append(labels[sl][m]); keep_lbi.append(lbi[sl][m])
+            if not keep:
+                continue
             keep = np.concatenate(keep)
             if keep.size == 0:
                 continue
-            tree = cKDTree(xyz[keep].astype(np.float64))
+            kl, kv = np.concatenate(keep_lab), np.concatenate(keep_lbi)
+            tree = cKDTree(keep.astype(np.float64))
             q = np.flatnonzero(todo)
             dist, j = tree.query(P[q], k=1, distance_upper_bound=r, workers=4)
             hit = np.isfinite(dist)
-            g = keep[j[hit]]
-            lab[q[hit]] = labels[g]
+            lab[q[hit]] = kl[j[hit]]
             lev[q[hit]] = l
-            val_lbi[q[hit]] = lbi[g]
+            val_lbi[q[hit]] = kv[j[hit]]
             todo[q[hit]] = False
-            log(f"{kind}: level {l}: {keep.size:,} slab points, {hit.sum():,} plane points")
+            log(f"{kind}: level {l}: {len(keep):,} slab points, {hit.sum():,} plane points")
         res[f"{kind}_a"] = a
         res[f"{kind}_b"] = a.copy()
         res[f"{kind}_labels"] = lab.reshape(n, n)
@@ -324,7 +330,7 @@ def stage_sample(args) -> None:
     acc_v = np.zeros(nx * nx * nz)
     acc_s = np.zeros(nx * nx * nz)
     acc_chi = np.zeros(nx * nx * nz)
-    cellvol = np.zeros(8)
+    cellvol = np.zeros(9)
     for l, dx in DX.items():
         cellvol[l] = dx**3
     for s in range(0, len(level), 1 << 22):
@@ -347,6 +353,7 @@ def stage_sample(args) -> None:
     np.savez_compressed(out / f"sheet3d_{args.tag}.npz", sheet_fraction=frac, log_chi_B=chim,
                         voxel=vx, box_xy=hx, box_z=hz, holes=raw["holes"], origin=o, e1=e1, e2=e2,
                         ez=ez, sheet_cluster=sheet)
+    h.close()
     log(f"wrote sheet3d_{args.tag}.npz: {np.sum(frac > 0.5):,} voxels > 50% sheet "
         f"({time.perf_counter() - t0:.0f}s)")
 
@@ -394,6 +401,13 @@ def _draw_holes(ax, xy, labels=True):
 
 
 def stage_plot(args) -> None:
+    global GROUPS
+    if args.hhr_groups:
+        GROUPS = [("current sheet (c6)", "#D55E00", [6]),
+                  ("sheet envelope (c5, c9)", "#EFAE70", [5, 9]),
+                  ("hot, magnetized: funnel, corona", "#7FB5DD", [0,1,2,3,4,8]),
+                  ("cold disk, weak-field floor", "#E6E6E6", [7,10])]
+
     import matplotlib as mpl
 
     mpl.use("Agg")
@@ -540,7 +554,7 @@ def stage_plot(args) -> None:
                           label=r"$\sigma = b^2/\rho = 1$ (jet funnel edge)"))
     fig.legend(handles=handles, loc="outside lower center", ncol=3, title="aweSOM clusters (b, d)",
                title_fontsize=8, frameon=False, handlelength=1.4, columnspacing=1.2, fontsize=8)
-    fig.suptitle(f"BBH LR_flux, it {int(P['it'])} (t = {t:.0f} M), co-rotating frame",
+    fig.suptitle(f"BBH {args.run_name}, it {int(P['it'])} (t = {t:.0f} M), co-rotating frame",
                  fontsize=9, x=0.01, ha="left")
 
     stem = out / f"fig_current_sheet_between_jets_{args.tag}"
@@ -558,6 +572,7 @@ def main(argv=None) -> None:
     sub = p.add_subparsers(dest="stage", required=True)
 
     a = sub.add_parser("labels")
+    a.add_argument("--grid-labels", help="Existing full-grid labels; stream cluster statistics")
     a.add_argument("--grid", required=True)
     a.add_argument("--train-features", required=True)
     a.add_argument("--som", required=True)
@@ -579,6 +594,8 @@ def main(argv=None) -> None:
     s.add_argument("--tag", required=True)
 
     f = sub.add_parser("plot")
+    f.add_argument("--run-name", default="LR_flux")
+    f.add_argument("--hhr-groups", action="store_true")
     f.add_argument("--out", required=True)
     f.add_argument("--tag", required=True)
     f.add_argument("--vmin", type=float, default=-1.0, help="log beta_inv colour range")
@@ -598,6 +615,10 @@ def main(argv=None) -> None:
     args = p.parse_args(argv)
     Path(args.out).mkdir(parents=True, exist_ok=True)
     {"labels": stage_labels, "sample": stage_sample, "plot": stage_plot}[args.stage](args)
+    import resource
+    import sys
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    log(f"peak RSS GB: {peak / (1e9 if sys.platform == 'darwin' else 1e6):.3f}")
 
 
 if __name__ == "__main__":
