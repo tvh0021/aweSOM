@@ -131,6 +131,8 @@ def main() -> None:
         log("train", seconds=t_train, rows_per_epoch=int(info["rows_per_epoch"][0]),
             epoch_time_mean=float(info["epoch_time"].mean()), qe_last_entering=float(info["qe"][-2]) if epochs > 1 else None,
             bmu=info["bmu_kind"][-1])
+        # label from the in-RAM copy if there is one (MODE=full, LOAD_TO_RAM=1), else re-read the file
+        label_src = train_src if (mode == "full" and load_to_ram) else scaled_all
         del train_src
 
         with h5py.File(os.path.join(out_dir, "model.h5"), "w") as m5:
@@ -152,7 +154,7 @@ def main() -> None:
                 out = l5.create_dataset("bmu", shape=(n,), dtype=dtype, chunks=(min(n, 2**20),))
                 out.attrs["meaning"] = "best-matching node index (x + y * xdim) of every row"
                 buf_writer = _ChunkWriter(out)
-                _, stats = predict_stream(weights, np.arange(nodes, dtype=np.int32), scaled_all,
+                _, stats = predict_stream(weights, np.arange(nodes, dtype=np.int32), label_src,
                                           out=buf_writer, chunk=chunk, backend="patch",
                                           lattice_shape=(xdim, ydim))
             t_lab = time.perf_counter() - t0

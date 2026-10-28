@@ -26,11 +26,20 @@
 #   MODE (sample | full)  SAMPLE_ROWS (1e8)  SAMPLE_FRACTION  SAMPLE_BLOCK (4096)
 #   LOAD_TO_RAM (0/1)  SCALE (manual | none)  LABELS (1)  CHUNK  SEED
 #
-# Expected wall time for N = 10^10, F = 5, 91 x 64, 48 cores (extrapolated from
-# a 10-core M1 Max, see the report): MODE=sample (10^8-row sample, 40 epochs,
-# then labels for all rows) well under 1 h if reading the file keeps up
-# (200 GB per labelling pass); MODE=full with all rows per epoch only a few
-# epochs per hour, so use SAMPLE_FRACTION=0.01 there.
+# Expected wall time for N = 10^10, F = 5, 48 cores (extrapolated from the
+# measured CPU cost per row on a laptop, 2.2 core-us at 91 x 64 and 3.4-3.7 at
+# 160 x 100, independent of N; see the 2026-10-28 scale report):
+#   MODE=sample (10^8-row sample, 40 epochs) + labels for all 10^10 rows:
+#     91 x 64: ~11 min (linear core scaling) to ~21 min (cores 2x slower)
+#     160 x 100: ~18 to ~35 min
+#   MODE=full, every row every epoch: 91 x 64 ~8 min per epoch (4-8 epochs/h),
+#     so 40 epochs take 5-10 h; with SAMPLE_FRACTION=0.01 it costs about the
+#     same as MODE=sample.
+# Reading must keep up: 200 GB per labelling pass is ~0.4 GB/s over 8 min.
+# gzip-compressed HDF5 decompresses at only ~7 M rows/s in the reader thread
+# (25 min per pass over 10^10 rows); store the features uncompressed (float
+# features barely compress), or with MODE=full use LOAD_TO_RAM=1 (one read,
+# 200 GB of the 600 GB asked; training and labels then run from RAM).
 
 set -euo pipefail
 

@@ -52,6 +52,15 @@ data                   numba   kdtree  screen
 plasma lattice, F = 4  2.2e6   3.0e6   4.9e6
 random, F = 10         9.6e5   5.9e5   2.5e6
 =====================  ======  ======  ======
+
+:func:`best_match_nodes_patch` prunes the scan with bounding balls of
+lattice patches (side x side neighbouring nodes) and is also bitwise equal to
+:func:`best_match_nodes`. It needs the lattice shape. On synthetic 5-feature
+data (``planning/benchmarks/bench_stream.py``, M1 Max shared with other jobs)
+it was 2.2-2.9x faster than the screen at 91 x 64 nodes (2.2 vs 4.8
+core-microseconds per row when labelling with a trained lattice) and 4.5x
+(trained) to 13x (contracted early-training lattice, where the screen falls
+back often) at 160 x 100.
 """
 
 from __future__ import annotations
