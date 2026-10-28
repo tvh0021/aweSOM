@@ -131,9 +131,12 @@ class Scaler:
         the default 1.0) and to within one rounding otherwise. The scaler always
         works in float64; ``manual_scaling`` on float32 data works in float32,
         so a lattice trained on float32 features scaled that way sees slightly
-        different inputs (on the BBH features, F = 5, up to 1.5e-3 absolute in
-        the scaled space and 59 of 10^6 labels changed; see
-        ``planning/benchmarks/real_inference.py``). For "minmax",
+        different inputs (on the BBH features, F = 5: up to 1.5e-3 absolute in
+        the scaled space and 59 of 10^6 labels changed on the 10^6-point run,
+        up to 4.4e-2 and 11,544 of 10^7 labels (0.12%) on the 10^7-point run;
+        see ``planning/benchmarks/real_inference.py``). To reproduce such a
+        lattice's labels exactly, scale the input in float32 the same way
+        before ``predict``, or retrain on float64-scaled data. For "minmax",
         ``offset = min`` and ``scale = max - min``.
 
         Args:
