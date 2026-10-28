@@ -29,6 +29,25 @@ def test_best_match_matches_legacy_kernel_and_shape(trained):
     assert np.array_equal(new, old)
 
 
+@pytest.mark.parametrize("backend", ["screen", "numba", "legacy"])
+def test_best_match_backends_agree_with_legacy(trained, backend):
+    som, data = trained
+    with contextlib.redirect_stdout(io.StringIO()):
+        out = som.best_match(som.lattice, data, backend=backend)
+        old = Lattice._best_match_legacy(som.lattice, data)
+    assert out.shape == (len(data), 1) and out.dtype == np.float64
+    assert np.array_equal(out, old)
+
+
+def test_best_match_default_is_screen(trained):
+    import inspect
+
+    assert inspect.signature(Lattice.best_match).parameters["backend"].default == "screen"
+    som, data = trained
+    with pytest.raises(ValueError):
+        som.best_match(som.lattice, data, backend="nope")
+
+
 def test_best_match_full_still_returns_two_columns(trained):
     som, data = trained
     with contextlib.redirect_stdout(io.StringIO()):
