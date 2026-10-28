@@ -13,8 +13,8 @@ The ensemble goes through one SCE Gsum pass (``aweSOM.sce.loop_over_all_clusters
 ``write_masks=False``) and is then stacked two ways:
 
 - ``anchored`` (``stacked_labels.npy``, recommended): ``make_sce_clusters.anchored_sce_labels``
-  groups every realization's clusters by overlap with the medoid realization and takes a
-  plurality vote per cell (two passes; ``--weighting gsum`` weights votes by Gsum).
+  groups every realization's clusters by Jaccard index with the medoid realization's
+  clusters and takes a plurality vote per cell (two passes; ``--weighting gsum`` weights votes by Gsum).
 - ``gsum_ranges`` (``stacked_labels_gsum_ranges.npy``): ``make_sce_clusters.stack_sce_labels``,
   the make_sce_clusters CLI logic: the ranked Gsum curve is split where its smoothed
   relative derivative has local minima below ``--sce-threshold``, each range's
