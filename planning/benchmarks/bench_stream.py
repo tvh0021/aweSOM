@@ -195,10 +195,12 @@ def mode_epoch(a) -> None:
         r = float(st[f"radius_{stage}"])
         best = None
         for rep in range(a.repeat):
+            c0 = time.process_time()
             _, info = train_batch_stream(
                 x, a.xdim, a.ydim, epochs=1, initial_weights=w0, r_max=r, r_min=r,
                 final_pass="none", chunk=a.chunk, bmu=a.bmu, sample_fraction=a.sample_fraction,
             )
+            cpu = time.process_time() - c0
             t = float(info["epoch_time"][0])
             rec = {
                 "mode": "epoch", "N": n, "xdim": a.xdim, "ydim": a.ydim, "stage": stage, "radius": r,
@@ -214,6 +216,10 @@ def mode_epoch(a) -> None:
             rec["mpts_s"] = rows / t / 1e6
             rec["mpts_s_per_thread"] = rec["mpts_s"] / numba.get_num_threads()
             rec["node_evals_s_per_thread"] = rows * nodes / t / numba.get_num_threads()
+            # process CPU seconds (all threads, includes the one-off setup of the pass):
+            # core-microseconds per row, insensitive to other jobs sharing the machine
+            rec["cpu_s"] = cpu
+            rec["cpu_us_per_row"] = cpu / rows * 1e6
             _emit(a.out, rec)
             if best is None or t < best["s_per_epoch"]:
                 best = rec
@@ -262,13 +268,17 @@ def mode_predict(a) -> None:
     labels_path = Path(a.scratch) / f"labels_{x.shape[0]}.npy"
     for rep in range(a.repeat):
         out = np.lib.format.open_memmap(labels_path, mode="w+", dtype=np.int32, shape=(x.shape[0],))
+        c0 = time.process_time()
         _, stats = predict_stream(w, np.arange(w.shape[0]), x, out=out, chunk=a.chunk,
                                   backend=a.backend, lattice_shape=(a.xdim, a.ydim))
+        cpu = time.process_time() - c0
         out.flush()
         del out
         _emit(a.out, {"mode": "predict", "N": int(x.shape[0]), "xdim": a.xdim, "ydim": a.ydim,
                       "source": _src(a), "backend": a.backend, "rep": rep, **stats,
                       "mpts_s": stats["rows"] / stats["seconds"] / 1e6,
+                      "threads": numba.get_num_threads(), "cpu_s": cpu,
+                      "cpu_us_per_row": cpu / stats["rows"] * 1e6,
                       "peak_rss_gb": peak_rss_bytes() / 1e9})
     labels_path.unlink()
 
