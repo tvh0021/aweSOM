@@ -1,6 +1,7 @@
 """Print scoreboard tables as Markdown.
 
     python show.py seeds [--it 135168] [--n 1e6] [--mc 0.1,0.2] [--match substr]
+    python show.py seeds --best [--sort P_seed]   (best merge cost per config)
     python show.py single [--it 135168] [--match substr] [--mc ...]
 """
 
@@ -30,6 +31,7 @@ def main():
     ap.add_argument("--mc", default="")
     ap.add_argument("--match", default="")
     ap.add_argument("--sort", default="")
+    ap.add_argument("--best", action="store_true", help="seeds: keep only the best-P merge cost per config")
     a = ap.parse_args()
     mcs = {float(m) for m in a.mc.split(",") if m}
     if a.kind == "seeds":
@@ -44,6 +46,12 @@ def main():
     rows = [r for r in rows if (not mcs or float(r["mc"]) in mcs) and a.match in r.get("config", r.get("tag"))]
     if a.n:
         rows = [r for r in rows if f"-N{a.n}-" in r.get("config", r.get("tag"))]
+    if a.best and a.kind == "seeds":
+        best = {}
+        for r in rows:
+            if r["config"] not in best or float(r["P_seed"]) > float(best[r["config"]]["P_seed"]):
+                best[r["config"]] = r
+        rows = list(best.values())
     key = (lambda r: -float(r[a.sort] or 0)) if a.sort else (lambda r: (r.get("config", r.get("tag")), float(r["mc"])))
     rows.sort(key=key)
     print("| " + " | ".join(cols) + " |")

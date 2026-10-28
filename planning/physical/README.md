@@ -20,6 +20,12 @@ Package code added for the study:
   3^3 stencil) are dissolved into the nearest surviving label.
 - **Avoid the majority filter** (`majority_iters`) for current sheets: it
   erodes structures one or two cells thick.
+- **Lattice:** about 1,600 to 1,800 nodes, the sqrt-rule size for 10^6 rows (48x34 for 4
+  features, 51x36 for 5). Use `--lattice rule1e6` to keep that size for more rows: 10^7
+  rows on it score the same as 10^6 rows. The 10^7 sqrt-rule lattices (86x61, 91x64)
+  shrink or split the sheet cluster and score clearly lower.
+- **Merge cost:** 0.1 to 0.15 on those lattices. Merge costs do not transfer across
+  lattice sizes; re-check after changing the lattice.
 - **Features:** see the report.
   - Dropping `asinh_div_v` is the robust improvement.
   - Swapping it for `log_one_minus_C_B` scores highest, but it is partly
@@ -50,6 +56,16 @@ Python: `PYTHONPATH=src /Users/tvh0021/git_repos/aweSOM-research/.venv/bin/pytho
 6. `postproc_study.py` (via `run_postproc.sh`): cleans labels at several
    settings and scores them before and after.
 7. `figures.py` (via `make_figs.sh`): the report figures.
+
+Helpers:
+
+- `cluster_table.py`: per-cluster scoreboard of one score file.
+- `show_postproc.py`: post-processing tables.
+- `labels_from_nodes.py`: full labels from cached BMUs.
+- `mask_speckle.py`: speckle of the reference masks.
+- `check_streaks.py`: repeated-value streaks in the input grid.
+- `prod_check.py`: imported production labels against the flux-tubes labels.
+- `wait_queue.sh` and `chain_E.sh`: queue helpers.
 
 Memory: about 8 GB per scoring or post-processing process on the 68M-point
 grids, and about 2 GB per 10^7-row training.

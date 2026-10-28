@@ -26,13 +26,24 @@ plt.rcParams.update({"font.size": 9, "axes.edgecolor": MUTED, "axes.labelcolor":
 
 
 def plane_composite(grid, values, z=0.0, fill=np.nan):
-    """[(extent, 2D array)] per level at the plane z, coarse first."""
+    """[(extent, 2D array)] per level at the plane z, coarse first.
+
+    Coarser levels are filled with their nearest value within 1.5 cells so that
+    the half-cell seams at level boundaries do not show as white lines (the finer
+    level is drawn on top and covers the filled area).
+    """
+    from scipy.ndimage import distance_transform_edt
+
     out = []
-    for g in sorted(grid.groups):
+    groups = sorted(grid.groups)
+    for g in groups:
         m = np.full(grid.shape[g], fill, dtype=np.float32)
         m.ravel()[grid.flat[g]] = values[grid.rows[g]]
         k = int(round((z - grid.origin[g][2]) / DX[g]))
         sl = m[:, :, k].T
+        if g != groups[-1] and np.isnan(sl).any() and (~np.isnan(sl)).any():
+            dist, idx = distance_transform_edt(np.isnan(sl), return_distances=True, return_indices=True)
+            sl = np.where(dist <= 1.5, sl[tuple(idx)], sl)  # seams only; keep excised holes empty
         lo = grid.origin[g]
         nx, ny = grid.shape[g][:2]
         ext = (lo[0] - DX[g] / 2, lo[0] + (nx - 0.5) * DX[g], lo[1] - DX[g] / 2, lo[1] + (ny - 0.5) * DX[g])
@@ -62,24 +73,30 @@ def slice_fig(a):
         order.insert(0, a.sheet_cluster)
     cmap, k = label_cmap(order)
     n = len(labs) + 1
-    fig, axes = plt.subplots(1, n, figsize=(3.3 * n, 3.6), constrained_layout=True)
-    win = [float(v) for v in a.window.split(",")]
-    for ax, lab, title in zip(axes, labs, a.titles):
-        for ext, sl in plane_composite(grid, lab.astype(np.float32), fill=np.nan):
-            sl = np.where(sl < 0, np.nan, sl)
-            ax.imshow(sl, origin="lower", extent=ext, cmap=cmap, vmin=-0.5, vmax=k - 0.5, interpolation="nearest")
-        ax.set_title(title, color=INK)
-    ax = axes[-1]
-    for ext, sl in plane_composite(grid, sheet.astype(np.float32), fill=np.nan):
-        ax.imshow(np.where(np.isnan(sl), np.nan, sl), origin="lower", extent=ext, cmap=ListedColormap(["#f0efec", INK]),
-                  vmin=0, vmax=1, interpolation="nearest")
-    ax.set_title("metric sheets (|C|/|B|>1, θ>90°)", color=INK)
-    for ax in axes:
-        ax.set_xlim(win[0], win[1])
-        ax.set_ylim(win[2], win[3])
-        ax.set_xlabel("x [M]")
-        ax.set_aspect("equal")
-    axes[0].set_ylabel("y [M]")
+    wins = [[float(v) for v in a.window.split(",")]]
+    if a.zoom:
+        wins.append([float(v) for v in a.zoom.split(",")])
+    fig, axes = plt.subplots(len(wins), n, figsize=(3.6 * n, 2.4 + 2.2 * len(wins)), constrained_layout=True,
+                             squeeze=False)
+    lab_slices = [plane_composite(grid, lab.astype(np.float32), fill=np.nan) for lab in labs]
+    sheet_slices = plane_composite(grid, sheet.astype(np.float32), fill=np.nan)
+    for row, win in zip(axes, wins):
+        for ax, sls, title in zip(row, lab_slices, a.titles):
+            for ext, sl in sls:
+                sl = np.where(sl < 0, np.nan, sl)
+                ax.imshow(sl, origin="lower", extent=ext, cmap=cmap, vmin=-0.5, vmax=k - 0.5, interpolation="nearest")
+            ax.set_title(title, color=INK)
+        ax = row[-1]
+        for ext, sl in sheet_slices:
+            ax.imshow(sl, origin="lower", extent=ext, cmap=ListedColormap(["#f0efec", INK]), vmin=0, vmax=1,
+                      interpolation="nearest")
+        ax.set_title("metric sheets, T=1", color=INK)
+        for ax in row:
+            ax.set_xlim(win[0], win[1])
+            ax.set_ylim(win[2], win[3])
+            ax.set_xlabel("x [M]")
+            ax.set_aspect("equal")
+        row[0].set_ylabel("y [M]")
     handles = [plt.Rectangle((0, 0), 1, 1, color=SERIES[r]) for r in range(min(len(order), len(SERIES)))]
     names = [f"c{c}" + (" (sheet)" if c == a.sheet_cluster else "") for c in order[: len(SERIES)]]
     fig.legend(handles, names, loc="outside lower center", ncol=min(8, len(names)), frameon=False)
@@ -118,7 +135,7 @@ def mc_fig(a):
             ax.set_xlabel("merge cost")
             ax.grid(axis="y", color="#e4e3df", lw=0.6)
     axes[0].set_ylabel(f"score (it {a.it}, mean ± sd over seeds)")
-    fig.legend(*axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=len(a.configs), frameon=False)
+    fig.legend(*axes[0].get_legend_handles_labels(), loc="outside lower center", ncol=min(len(a.configs), 4), frameon=False)
     fig.savefig(a.out, dpi=200)
 
 
@@ -155,6 +172,7 @@ def main():
     ap.add_argument("--configs", nargs="*")
     ap.add_argument("--sheet-cluster", type=int)
     ap.add_argument("--window", default="-22,-6,-12,4")
+    ap.add_argument("--zoom", default="", help="second row: xmin,xmax,ymin,ymax")
     ap.add_argument("--suptitle", default="")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()

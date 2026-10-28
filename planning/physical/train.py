@@ -27,7 +27,9 @@ from aweSOM.run_som import number_of_nodes  # noqa: E402
 
 def lattice_dims(n, f, kind, ratio=0.7):
     nodes = number_of_nodes(n, f)
-    if kind == "half":
+    if kind == "rule1e6":  # node count of the 1e6-row rule lattice, whatever n is
+        nodes = number_of_nodes(1_000_000, f)
+    elif kind == "half":
         nodes //= 2
     elif kind == "quarter":
         nodes //= 4
@@ -45,7 +47,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", required=True, choices=list(VARIANTS))
     ap.add_argument("--n", type=int, default=1_000_000)
-    ap.add_argument("--lattice", default="rule", choices=["rule", "half", "quarter", "double"])
+    ap.add_argument("--lattice", default="rule", choices=["rule", "half", "quarter", "double", "rule1e6"])
     ap.add_argument("--alpha", type=float, default=0.5)
     ap.add_argument("--steps", type=float, default=1.0, help="training steps / N")
     ap.add_argument("--seed", type=int, default=0)
