@@ -29,3 +29,13 @@ Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/`. Nothing i
 
 - Michi: AsterX low-res test directory; Frontier allocation and HHR submission; MHD figure; flux-tube velocities and centroids.
 - Manuela: proposal duration; extra compute; diffusion-model add-on decision.
+
+## Review findings to fix (Sol, 2026-10-28; reports in `/Volumes/ExternalNVMe/awesom-results/2026-10-28/reviews/`)
+
+- [ ] tubes.py:248/150 (P1): cross-level stitching can bridge a non-selected fine cell or join cubes that do not touch; check intervening ownership and use true cube adjacency.
+- [ ] sheet_stats.py:496 (P1): floor+ceil interface rule connects coarse cells that do not contain the neighbouring point; use the nearest coarse candidate, expand only exact ties.
+- [ ] sheet_stats.py:543 (P1): composite EDT mask ORs resampled levels without ownership precedence, so coarse sheet overwrites fine background; keep the finest owner's background.
+- [ ] sheet_stats.py:479 (P2): connectivity 18/26 ignored across levels.
+- [ ] sheet_stats.py:697 (P2): EDT thickness alternates n±0.5 cells; the "one cell thick" claim rests on the inertia estimator, state which one is reported.
+- [ ] tubes.py:378 (P2): length_span ignores the projected cell half-widths.
+- Scale: dense bounding boxes (tubes.py:228, sheet_stats.py:623) and per-component axes would need ~49 GB at 6.8e8 selected points; not a 10^10 path yet.
