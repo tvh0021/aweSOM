@@ -13,7 +13,7 @@ Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/`. Nothing i
 
 ## Things to do
 
-- [ ] Google "learned simulator" paper, 2D or 3D
+- [x] Google "learned simulator" paper, 2D or 3D. It is Stachenfeld et al. 2022, "Learned Coarse Models for Efficient Turbulence Simulation" (DeepMind, ICLR 2022, arXiv:2112.15275, poster title "Learned Simulators for Turbulence"). Its headline turbulence boxes are 3D: decaying compressible turbulence in a periodic cube and a radiatively cooling mixing layer, Athena++ at 128^3 learned at 32^3; it also has 1D Kuramoto-Sivashinsky and 2D incompressible cases. The runner-up, Kochkov et al. 2021 PNAS (Google Research, learned interpolation), is 2D only. Sending it to Manuela is the user's action.
 - [ ] Test speed optimizations against baseline on real data, then adopt
 - [ ] Scale aweSOM to 10^10 points per node (training < 1 h)
 - [ ] More physical clusters (training and cluster finding)
