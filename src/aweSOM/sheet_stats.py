@@ -12,9 +12,10 @@ A "sheet" cell is one whose label is in ``sheet_clusters``. The statistics:
 * volume and volume fraction of sheet cells, per level and in total;
 * connected components (face connectivity by default) of the sheet cells.
   Components are found on each level's lattice and then joined across level
-  interfaces: a sheet cell next to a cell its level does not own is connected
-  to the sheet cell(s) of a coarser level that contain the neighbouring point
-  (with ties at coarse-cell midpoints, both candidates);
+  interfaces: a sheet cell at the edge of what its level owns is connected to
+  the sheet cells of a coarser level whose regions touch its own under the
+  same connectivity (:mod:`aweSOM.amr_adjacency`: a cell between two others
+  keeps them apart, regions that do not touch are not joined);
 * per component: volume, centroid, principal extents from the inertia tensor
   (``L_i = sqrt(12 lambda_i)``, exact for a uniform box, cells counted as cubes),
   aspect ratios, and two thickness estimates:
@@ -25,9 +26,13 @@ A "sheet" cell is one whose label is in ``sheet_clusters``. The statistics:
     ``2 d - dx / 2``, where ``d`` is the Euclidean distance from a sheet cell
     centre to the nearest non-sheet cell centre and ridge cells are local
     maxima of ``d`` (3x3x3). For a slab of ``n`` cells this is ``n + 1/2``
-    cells for odd ``n`` and ``n - 1/2`` for even ``n``. The distance map is
+    cells for odd ``n`` and ``n - 1/2`` for even ``n``: a half-cell bias
+    either way, which is 50 % for a one-cell sheet. Where the two estimates
+    differ, quote ``thickness_inertia`` for thin or unresolved sheets and
+    ``thickness_edt`` only as a local (ridge-wise) measure. The distance map is
     computed on each level's box (padded by ``edt_margin`` cells) with the
-    other levels' sheet cells resampled onto it, so level interfaces do not
+    other levels' cells resampled onto it, the finest owner of each point
+    deciding whether it is sheet or background, so level interfaces do not
     cut sheets;
 
 * volume-weighted histograms of features inside and outside sheets
@@ -67,6 +72,8 @@ import numpy as np
 from scipy import ndimage
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
+
+from .amr_adjacency import OwnedLevel, touching
 
 __all__ = [
     "SheetConfig",
@@ -470,41 +477,42 @@ def _bins(v, lo, width, nb):
     return np.clip(i, 0, nb - 1).astype(np.int64)
 
 
-def _interface_pairs(fine: LevelLattice, owned_f, comp_f, coarse: LevelLattice, comp_c) -> np.ndarray:
-    """(fine component, coarse component) pairs that touch across the edge of
-    the fine level's owned region."""
-    out = []
-    sheet_f = comp_f > 0
+def _interface_pairs(fine: LevelLattice, owned_f, comp_f, coarse: LevelLattice, owned_c, comp_c,
+                     connectivity: int = 6) -> np.ndarray:
+    """(fine component, coarse component) pairs whose cells touch across the
+    edge of the fine level's owned region, under ``connectivity`` and the
+    cross-level rule of :mod:`aweSOM.amr_adjacency`."""
     shape = owned_f.shape
-    for axis in range(3):
-        for sgn in (-1, 1):
-            nb_owned = np.zeros(shape, dtype=bool)
-            src = [slice(None)] * 3
-            dst = [slice(None)] * 3
-            if sgn == 1:
-                dst[axis], src[axis] = slice(0, -1), slice(1, None)
-            else:
-                dst[axis], src[axis] = slice(1, None), slice(0, -1)
-            nb_owned[tuple(dst)] = owned_f[tuple(src)]
-            cells = np.flatnonzero(sheet_f & ~nb_owned)
-            del nb_owned
-            if cells.size == 0:
-                continue
-            i3 = np.stack(np.unravel_index(cells, shape), axis=1)
-            i3[:, axis] += sgn
-            f = (fine.centres(i3) - np.asarray(coarse.origin)) / coarse.dx
-            lo = np.floor(f + 1e-6).astype(np.int64)
-            hi = np.ceil(f - 1e-6).astype(np.int64)
-            cf = comp_f.ravel()[cells]
-            for bits in range(8):
-                idx = np.where([(bits >> k) & 1 for k in range(3)], hi, lo)
-                ok = np.all((idx >= 0) & (idx < np.asarray(coarse.shape)), axis=1)
+    inner = ndimage.binary_erosion(owned_f, structure=np.ones((3, 3, 3), dtype=bool), border_value=0)
+    cells = np.flatnonzero((comp_f > 0) & ~inner)  # sheet cells with a non-owned position next to them
+    del inner
+    if cells.size == 0:
+        return np.zeros((0, 2), dtype=np.int64)
+    a = OwnedLevel(fine.dx, fine.origin, owned_f)
+    b = OwnedLevel(coarse.dx, coarse.origin, owned_c)
+    i3 = np.stack(np.unravel_index(cells, shape), axis=1)
+    p = fine.centres(i3)
+    f = b.fractional(p)
+    lo = np.ceil(f - 1 - 1e-3).astype(np.int64)  # coarse cells within the coarse spacing
+    hi = np.floor(f + 1 + 1e-3).astype(np.int64)
+    cf = comp_f.ravel()[cells]
+    cshape = np.asarray(coarse.shape)
+    out = []
+    for da in range(3):
+        for db in range(3):
+            for dc in range(3):
+                idx = lo + np.array([da, db, dc])
+                ok = np.all((idx <= hi) & (idx >= 0) & (idx < cshape), axis=1)
                 if not ok.any():
                     continue
                 cc = comp_c[idx[ok, 0], idx[ok, 1], idx[ok, 2]]
                 keep = cc > 0
-                if keep.any():
-                    out.append(np.stack([cf[ok][keep], cc[keep]], axis=1))
+                if not keep.any():
+                    continue
+                rows = np.flatnonzero(ok)[keep]
+                t = touching(p[rows], coarse.centres(idx[rows]), a, b, connectivity)
+                if t.any():
+                    out.append(np.stack([cf[rows][t], cc[keep][t]], axis=1))
     if not out:
         return np.zeros((0, 2), dtype=np.int64)
     return np.unique(np.concatenate(out).astype(np.int64), axis=0)
@@ -523,14 +531,15 @@ def _axis_map(xs, origin, dx, n, finer):
     return i, ok
 
 
-def _composite_sheet(L: LevelLattice, margin: int, lattices, sheets) -> np.ndarray:
+def _composite_sheet(L: LevelLattice, margin: int, lattices, sheets, owned) -> np.ndarray:
     """Sheet mask on level L's box padded by ``margin`` cells, each point taking
-    the value of whichever level owns it (coarser levels nearest-neighbour,
-    finer levels at coincident points)."""
+    the value (sheet or background) of the finest level that owns it: coarser
+    levels nearest-neighbour, finer levels at coincident points. Points no
+    level owns are background."""
     shape = tuple(s + 2 * margin for s in L.shape)
     origin = np.asarray(L.origin) - margin * L.dx
     out = np.zeros(shape, dtype=bool)
-    for K, latK in lattices.items():
+    for K, latK in sorted(lattices.items(), key=lambda kv: -kv[1].dx):  # coarsest first, finest wins
         maps = []
         for a in range(3):
             xs = origin[a] + np.arange(shape[a]) * L.dx
@@ -539,9 +548,13 @@ def _composite_sheet(L: LevelLattice, margin: int, lattices, sheets) -> np.ndarr
         if any(m[0].size == 0 for m in maps):
             continue
         (wx, ix), (wy, iy), (wz, iz) = maps
-        block = sheets[K][np.ix_(ix, iy, iz)]
-        out[np.ix_(wx, wy, wz)] |= block
-        del block
+        src = np.ix_(ix, iy, iz)
+        dst = np.ix_(wx, wy, wz)
+        own = owned[K][src]
+        block = out[dst]
+        block[own] = sheets[K][src][own]
+        out[dst] = block
+        del block, own
     return out
 
 
@@ -644,7 +657,7 @@ def sheet_statistics(
     rows, cols = [], []
     for i, L in enumerate(levels):
         for K in levels[:i]:
-            pairs = _interface_pairs(lat[L], owned[L], comp[L], lat[K], comp[K])
+            pairs = _interface_pairs(lat[L], owned[L], comp[L], lat[K], owned[K], comp[K], cfg.connectivity)
             if pairs.size:
                 rows.append(offs[L] + pairs[:, 0] - 1)
                 cols.append(offs[K] + pairs[:, 1] - 1)
@@ -672,7 +685,7 @@ def sheet_statistics(
     for L in levels:
         if ncomp[L] == 0:
             continue
-        comp_mask = _composite_sheet(lat[L], m, lat, sheet)
+        comp_mask = _composite_sheet(lat[L], m, lat, sheet, owned)
         nx, ny, nz = lat[L].shape
         bx = int(cfg.edt_block) if cfg.edt_block else nx
         for x0 in range(0, nx, bx):

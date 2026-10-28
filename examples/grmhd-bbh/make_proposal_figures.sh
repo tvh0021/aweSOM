@@ -33,9 +33,19 @@ for IT in $ITS; do
   GRID=$(grid_of $IT)
   if [[ "$MODE" == all ]]; then
     if [[ ! -f "$GRID" ]]; then  # only it 135168 needs one made (~2 min, 2.4 GB)
+      # the lattice was trained on features transformed with the 180224 training
+      # set's thresholds: another snapshot must be extracted with the same b2_min
+      # and s_v, unclipped; proposal_figure.py clips to the training winsor limits
+      read -r B2MIN SV < <("$AW_PY" - "$TRAIN" <<'PY'
+import sys, h5py
+with h5py.File(sys.argv[1], "r") as f:
+    print(repr(float(f.attrs["b2_min"])), repr(float(f.attrs["s_v"])))
+PY
+)
       mkdir -p "$(dirname "$GRID")"
       (cd "$(dirname "$GRID")" && etk -m etkplot som-features "$INDEX" --it $IT -N 1e7 \
-         --parfile "$RUN/parfile.par" -o . --grid-out "$(basename "$GRID")")
+         --parfile "$RUN/parfile.par" -o . --grid-out "$(basename "$GRID")" \
+         --b2-min "$B2MIN" --s-v "$SV" --winsor 0 1)
     fi
     aw labels --grid "$GRID" --train-features "$TRAIN" --som "$SOM" --merge-cost $MC \
        --ref-labels "$ETK/som_results/labels.bbh_0003_180224-91-64-0.5-10000000-1u-mc0.1.npy" \

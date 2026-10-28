@@ -91,6 +91,58 @@ def build_model(som_path: Path, train_features: Path, merge_cost: float):
     return model, scaler, data
 
 
+def grid_clip(grid: Path, train_features: Path) -> dict:
+    """Check that a grid's features are on the training transform and return
+    the training winsor limits to clip them to.
+
+    The lattice was trained on features transformed with the training set's
+    thresholds (``b2_min``, ``s_v``, winsor limits). A grid of another snapshot
+    extracted with fresh thresholds presents the same physical state in other
+    coordinates (the 2026-10-28 review); it must be extracted with the training
+    ``--b2-min`` and ``--s-v`` and either the training limits or no clipping.
+    """
+    from aweSOM.features_grmhd import FeatureThresholds
+
+    with h5py.File(train_features, "r") as h:
+        train = FeatureThresholds.from_h5_attrs(dict(h.attrs))
+    with h5py.File(grid, "r") as h:
+        got = FeatureThresholds.from_h5_attrs(dict(h.attrs))
+        same = int(h.attrs.get("iteration", -1)) == train_iteration(train_features)
+    problems = []
+    for name in ("b2_min", "s_v"):
+        a, b = getattr(train, name), getattr(got, name)
+        if not np.isclose(a, b, rtol=1e-9, atol=0):
+            problems.append(f"{name}: grid {b!r}, training {a!r}")
+    for name, (lo, hi) in train.winsor.items():
+        glo, ghi = got.winsor.get(name, (-np.inf, np.inf))
+        if glo > lo * (1 - 1e-6) + 1e-6 * abs(lo) + 1e-12 or ghi < hi - 1e-6 * abs(hi) - 1e-12:
+            problems.append(f"winsor {name}: grid ({glo}, {ghi}) is narrower than training ({lo}, {hi})")
+    if problems and not same:
+        raise SystemExit(f"{grid}: features are not on the training transform:\n  " + "\n  ".join(problems)
+                         + f"\nextract the grid with --b2-min {train.b2_min!r} --s-v {train.s_v!r} --winsor 0 1")
+    limits = [(j, np.float32(lo), np.float32(hi)) for j, n in enumerate(FEATURES) for m, (lo, hi) in train.winsor.items()
+              if m == n]
+    log(f"grid thresholds: b2_min {got.b2_min:.6g} s_v {got.s_v:.6g}; clipping to the training limits "
+        + " ".join(f"{FEATURES[j]} [{lo:.4g}, {hi:.4g}]" for j, lo, hi in limits))
+    return {"limits": limits, "check": "same snapshot as training" if same else "training b2_min and s_v, "
+            "training winsor limits applied here"}
+
+
+def train_iteration(train_features: Path) -> int:
+    with h5py.File(train_features, "r") as h:
+        return int(h.attrs.get("iteration", -1))
+
+
+def apply_clip(x: np.ndarray, clip: dict) -> np.ndarray:
+    """Clip the winsorised columns of float32 features to the training limits (finite values only)."""
+    x = np.asarray(x, dtype=np.float32)
+    for j, lo, hi in clip["limits"]:
+        col = x[:, j]
+        ok = np.isfinite(col)
+        col[ok] = np.clip(col[ok], lo, hi)
+    return x
+
+
 def stage_labels(args) -> None:
     out = Path(args.out)
     model, scaler, train_scaled = build_model(Path(args.som), Path(args.train_features),
@@ -120,6 +172,11 @@ def stage_labels(args) -> None:
         log(f"agreement with {Path(args.ref_labels).name} on 2e5 training rows: {agree:.5f}")
         info["ref_label_agreement"] = agree
 
+    # the grid's features must be on the training transform: same b2_min floor and
+    # s_v scale (set when the grid was extracted), and the training winsor limits
+    # (applied here, so a grid extracted without clipping is fine)
+    clip = grid_clip(args.grid, args.train_features)
+    info["threshold_check"] = clip["check"]
     t0 = time.perf_counter()
     with h5py.File(args.grid, "r") as h:
         n = h["features"].shape[0]
@@ -127,7 +184,7 @@ def stage_labels(args) -> None:
         labels = np.empty(n, dtype=np.uint8)
         step = 1 << 23
         for s in range(0, n, step):
-            x = h["features"][s:s + step]
+            x = apply_clip(h["features"][s:s + step], clip)
             labels[s:s + step] = model.predict(x, chunk=2**20, backend="screen")
             log(f"  predicted {min(s + step, n):,}/{n:,}")
     t_pred = time.perf_counter() - t0
@@ -145,7 +202,7 @@ def stage_labels(args) -> None:
     ids = np.unique(labels)
     stats = {}
     with h5py.File(args.grid, "r") as h:
-        feats = h["features"][()]
+        feats = apply_clip(h["features"][()], clip)
     for c in ids:
         m = labels == c
         med = np.median(feats[m], axis=0)

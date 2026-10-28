@@ -56,6 +56,8 @@ from scipy import ndimage, sparse
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
+from .amr_adjacency import OwnedLevel, cross_level_pairs
+
 __all__ = [
     "level_indices",
     "group_cells",
@@ -142,20 +144,12 @@ def _relabel_by_size(ids: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
-def _touch_pairs(xa, xb, h, connectivity):
-    """Index pairs (i, j) of points xa[i], xb[j] that are neighbours on a grid of
-    spacing ``h`` under ``connectivity``."""
-    if len(xa) == 0 or len(xb) == 0:
-        return np.zeros((0, 2), dtype=np.int64)
-    if connectivity == 26:
-        p, r = np.inf, h * (1 + _TOL)
-    elif connectivity == 18:
-        p, r = 2.0, np.sqrt(2.0) * h * (1 + _TOL)
-    else:
-        p, r = 2.0, h * (1 + _TOL)
-    ta, tb = cKDTree(xa), cKDTree(xb)
-    pairs = ta.sparse_distance_matrix(tb, r, p=p, output_type="ndarray")
-    return np.stack([pairs["i"], pairs["j"]], axis=1).astype(np.int64)
+def _owned_level(xyz_level: np.ndarray, h: float) -> OwnedLevel:
+    """Dense ownership of one level from the positions of all its cells."""
+    idx, origin = level_indices(xyz_level, h)
+    owned = np.zeros(tuple(idx.max(axis=0) + 1), dtype=bool)
+    owned[idx[:, 0], idx[:, 1], idx[:, 2]] = True
+    return OwnedLevel(h, origin, owned)
 
 
 def group_cells(
@@ -171,12 +165,13 @@ def group_cells(
     On each level the selected cells are placed on the level's regular grid
     (indices from ``xyz`` and the level's spacing) and labelled with
     ``scipy.ndimage.label``. With ``stitch``, a component on one level and a
-    component on another are then merged when one of their cells are grid
-    neighbours on the coarser of the two grids (Chebyshev distance at most the
-    coarser spacing for 26-connectivity, Euclidean distance at most it for 6,
-    at most sqrt(2) times it for 18). Only cells on the outer shell of each
-    level's selection (found by binary erosion) are compared, so the cost is
-    set by the size of the level boundaries, not of the components.
+    component on another are then merged when one of their cells touch across
+    the level interface under the same connectivity, with the cells' regions
+    set by what each level owns (:mod:`aweSOM.amr_adjacency`): a selected
+    cell that lies between two others keeps them apart, and regions that do
+    not touch are not joined. Only cells on the outer shell of each level's
+    selection (found by binary erosion) are compared, so the cost is set by
+    the size of the level boundaries, not of the components.
 
     Args:
         mask_or_labels (np.ndarray): (N,) bool mask of the cells to group, or an
@@ -213,6 +208,10 @@ def group_cells(
     all_levels = np.unique(level)
     dx = _dx_lookup(dx_per_level, all_levels)
     max_dx = max(dx.values()) if dx else 1.0
+    owned = {}  # level -> OwnedLevel of all its cells (for the interfaces)
+    if stitch and len(all_levels) > 1:
+        for lv in all_levels:
+            owned[int(lv)] = _owned_level(xyz[level == lv], dx[int(lv)])
     ids = np.full(n, -1, dtype=np.int64)
     next_id = 0
     edges = []
@@ -223,8 +222,12 @@ def group_cells(
             if rows.size == 0:
                 continue
             h = dx[int(lv)]
-            idx, _ = level_indices(xyz[rows], h)
-            shape = tuple(idx.max(axis=0) + 1)
+            if int(lv) in owned:
+                idx, _ = level_indices(xyz[rows], h, owned[int(lv)].origin)
+                shape = owned[int(lv)].shape
+            else:
+                idx, _ = level_indices(xyz[rows], h)
+                shape = tuple(idx.max(axis=0) + 1)
             vol = np.zeros(shape, dtype=bool)
             vol[idx[:, 0], idx[:, 1], idx[:, 2]] = True
             lab, k = ndimage.label(vol, structure=structure)
@@ -244,9 +247,8 @@ def group_cells(
             for a in range(len(lvs)):
                 for b in range(a + 1, len(lvs)):
                     ra, rb = shells[lvs[a]], shells[lvs[b]]
-                    h = max(dx[lvs[a]], dx[lvs[b]])
-                    pairs = _touch_pairs(xyz[ra].astype(np.float64), xyz[rb].astype(np.float64),
-                                         h, connectivity)
+                    pairs = cross_level_pairs(xyz[ra], owned[lvs[a]], xyz[rb], owned[lvs[b]],
+                                              connectivity)
                     if len(pairs):
                         edges.append(np.stack([ids[ra[pairs[:, 0]]], ids[rb[pairs[:, 1]]]], axis=1))
     if edges and next_id:
@@ -344,8 +346,9 @@ def tube_descriptors(
         - ``id``: k; ``n_cells``; ``volume``; ``centroid`` (K, 3);
         - ``eigvals`` (K, 3) descending position variances (cube-corrected);
         - ``axes`` (K, 3, 3), ``axes[k, i]`` the unit principal axis ``e_{i+1}``;
-        - ``extents`` (K, 3) = sqrt(12 eigvals); ``span`` (K, 3) max - min of
-          the cell coordinates projected on each axis, plus one cell;
+        - ``extents`` (K, 3) = sqrt(12 eigvals); ``span`` (K, 3) extent of
+          the cells' cubes projected on each axis (max - min of the projected
+          cube bounds);
         - ``elongation`` = extents[:, 0] / extents[:, 1];
           ``flatness`` = extents[:, 1] / extents[:, 2];
         - ``alignment`` mean |cos(B, e_1)|; ``align_axes`` (K, 3) mean |cos| with
@@ -374,8 +377,11 @@ def tube_descriptors(
     proj = np.einsum("ni,nji->nj", x - centroid[key], axes[key])  # (n, 3) along e_1..e_3
     span = np.empty((K, 3))
     for j in range(3):
-        lo, hi = _group_minmax(key, proj[:, j], K)
-        span[:, j] = hi - lo + np.bincount(key, weights=w * h, minlength=K) / np.where(volume > 0, volume, 1)
+        # each cell's cube projects onto axis j with half-width (h / 2) sum_i |e_j,i|
+        half = 0.5 * h * np.abs(axes[key, j, :]).sum(axis=1)
+        lo, _ = _group_minmax(key, proj[:, j] - half, K)
+        _, hi = _group_minmax(key, proj[:, j] + half, K)
+        span[:, j] = hi - lo
     with np.errstate(divide="ignore", invalid="ignore"):
         elongation = extents[:, 0] / extents[:, 1]
         flatness = extents[:, 1] / extents[:, 2]

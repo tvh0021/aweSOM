@@ -51,6 +51,21 @@ def sheet_clusters(features: np.ndarray, labels: np.ndarray, chi: float, beta: f
     return sheets, means
 
 
+def training_scaler(raw: np.ndarray, dtype: str) -> Scaler:
+    """The scaler ``run_som.manual_scaling`` applied when the lattice was trained.
+
+    ``manual_scaling`` reduces mean and std in the dtype of the array it is
+    given: training sets are float32, so the reductions are float32 and differ
+    from float64 ones by up to about 1 % (the 2026-10-28 review). The scaler
+    must use the same reductions, or every point is presented to the lattice
+    in slightly different coordinates.
+    """
+    x = np.asarray(raw, dtype=np.dtype(dtype))
+    mean = np.mean(x, axis=0)
+    scale = 2.0 * np.std(x, axis=0)
+    return Scaler("manual", mean.astype(np.float64), scale.astype(np.float64))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--lattice", required=True, help="pickled aweSOM Lattice (run_som.save_som_object)")
@@ -59,6 +74,11 @@ def main(argv=None):
     ap.add_argument("--sheet-chi", type=float, default=0.3)
     ap.add_argument("--sheet-beta", type=float, default=0.5)
     ap.add_argument("--check-labels", help="optional .npy of labels of the training rows to compare with")
+    ap.add_argument("--scaler-dtype", choices=("float32", "float64"), default="float32",
+                    help="dtype in which run_som.manual_scaling reduced the training rows when the lattice was "
+                         "trained: float32 when the rows were loaded as float32 (default), float64 otherwise")
+    ap.add_argument("--scaler-tolerance", type=float, default=1e-5,
+                    help="largest allowed difference between the scaled rows and lattice.data_array")
     ap.add_argument("-o", "--out", required=True, help="model file (.h5)")
     args = ap.parse_args(argv)
     t0 = time.time()
@@ -74,8 +94,18 @@ def main(argv=None):
 
     with open(args.lattice, "rb") as f:
         lattice = pickle.load(f)
-    scaler = Scaler.fit(raw, "manual")
+    scaler = training_scaler(raw, args.scaler_dtype)
     scaled = scaler.transform(raw)
+    stored = getattr(lattice, "data_array", None)
+    if stored is not None and len(stored):
+        n = min(len(stored), 1_000_000)
+        d = float(np.max(np.abs(scaled[:n] - np.asarray(stored[:n], dtype=np.float64))))
+        print(f"[freeze] max |scaler(raw) - lattice.data_array| on {n} rows: {d:.2e}", flush=True)
+        if d > args.scaler_tolerance:
+            raise SystemExit(f"the {args.scaler_dtype} scaler does not reproduce the lattice's training rows "
+                             f"(max difference {d:.2e} > {args.scaler_tolerance}); try the other --scaler-dtype")
+    else:
+        d = None
     with contextlib.redirect_stdout(io.StringIO()):
         clusters = lattice.assign_cluster_to_lattice(smoothing=None, merge_cost=args.merge_cost)
     lattice.lattice_assigned_clusters = clusters
@@ -86,6 +116,8 @@ def main(argv=None):
         "training_iteration": str(iteration),
         "lattice_file": Path(args.lattice).name,
         "cluster_rule": f"assign_cluster_to_lattice(smoothing=None,merge_cost={args.merge_cost})",
+        "scaler_statistics": f"manual_scaling mean and 2 std reduced in {args.scaler_dtype} over the training rows",
+        "scaler_check_maxabs": "not checked" if d is None else f"{d:.3e}",
         **thresholds.to_metadata(),
     }
     model = SOMModel.from_lattice(lattice, scaled, scaler, merge_cost=args.merge_cost, metadata=meta)

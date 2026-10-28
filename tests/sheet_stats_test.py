@@ -269,3 +269,17 @@ def test_blocked_edt_matches_whole_box():
     thick = np.where((iz >= 2) & (iz < 22), SHEET, 0)
     flagged = _run(xyz, thick, cfg=SheetConfig(plane_z=None, edt_block=8, edt_overlap=3))
     assert flagged.summary["thickness"]["edt"]["n_ridge_beyond_overlap"] > 0
+
+
+def test_composite_mask_keeps_fine_background():
+    from aweSOM.sheet_stats import LevelLattice, _composite_sheet
+
+    coarse = LevelLattice(5, 1.0, (0, 0, 0), (1, 1, 1))
+    fine = LevelLattice(7, 0.25, (0.25, 0, 0), (2, 1, 1))
+    sheets = {5: np.ones(coarse.shape, bool), 7: np.zeros(fine.shape, bool)}
+    owned = {5: np.ones(coarse.shape, bool), 7: np.ones(fine.shape, bool)}
+    assert not _composite_sheet(fine, 0, {5: coarse, 7: fine}, sheets, owned).any()
+    # and a fine sheet cell is seen from the coarse box
+    sheets[7][:] = True
+    comp = _composite_sheet(coarse, 1, {5: coarse, 7: fine}, sheets, owned)
+    assert comp[1, 1, 1]  # the coarse cell itself

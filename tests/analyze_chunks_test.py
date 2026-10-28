@@ -114,6 +114,9 @@ class _StopAfter:
     def __init__(self, reader, n):
         self.reader, self.n, self.cache = reader, n, reader.cache
 
+    def __getattr__(self, name):  # levels, reference_var, _cat, ... for the layout signature
+        return getattr(self.reader, name)
+
     def iter_level_blocks(self, *a, **kw):
         for i, b in enumerate(self.reader.iter_level_blocks(*a, **kw)):
             if i == self.n:
@@ -127,7 +130,8 @@ def test_resume_after_interruption(carpet_run, model_path, tmp_path):
     model = SOMModel.load(model_path)
     args = ac.main.__globals__["argparse"].Namespace(
         out=str(part), source=str(carpet_run), levels=None, slab=4, save_features=True, midplane_z=0.25,
-        predict_backend="screen", verbose=False)
+        predict_backend="screen", verbose=False, reader="carpet", carpet_backend="native", fill="coarse",
+        model=str(model_path))
     part.mkdir()
     reader = _StopAfter(CarpetHDF5Reader(carpet_run, backend="native"), 5)
     with pytest.raises(_Interrupt):
@@ -157,3 +161,59 @@ def test_watch_carpetx_silo(silo_run, model_path, tmp_path):
     assert attrs["complete"] and len(rows["labels"]) == ROWS["silo"]
     assert np.array_equal(rows["labels"], SOMModel.load(model_path).predict(rows["features"]))
     assert rows["finite"].all()  # Silo ghosts and coarse fill give every halo cell a value
+
+
+def test_resume_refuses_a_different_slab_width(carpet_run, model_path, tmp_path):
+    out = tmp_path / "part"
+    model = SOMModel.load(model_path)
+    args = ac.main.__globals__["argparse"].Namespace(
+        out=str(out), source=str(carpet_run), levels=None, slab=4, save_features=True, midplane_z=0.25,
+        predict_backend="screen", verbose=False, reader="carpet", carpet_backend="native", fill="coarse",
+        model=str(model_path))
+    out.mkdir()
+    reader = _StopAfter(CarpetHDF5Reader(carpet_run, backend="native"), 3)
+    with pytest.raises(_Interrupt):
+        ac.process_iteration(reader, model, THR, 0, args, [1])
+    # block keys encode only the slab start: a wider slab would skip rows the narrow blocks never held
+    with pytest.raises(SystemExit, match="different configuration"):
+        _run(carpet_run, model_path, out, "--reader", "carpet", "--iterations", "0", "--slab", "8")
+    with pytest.raises(SystemExit, match="different configuration"):
+        _run(carpet_run, model_path, out, "--reader", "carpet", "--iterations", "0", "--levels", "0")
+    assert _run(carpet_run, model_path, out, "--reader", "carpet", "--iterations", "0") == 0
+    full = tmp_path / "full"
+    assert _run(carpet_run, model_path, full, "--reader", "carpet", "--iterations", "0") == 0
+    a, _ = _read(full / "it00000000.h5")
+    b, _ = _read(out / "it00000000.h5")
+    assert np.array_equal(a["xyz"], b["xyz"])
+
+
+def test_watch_waits_for_shards_and_extends_a_grown_snapshot(tmp_path, model_path, monkeypatch):
+    import grmhd_fixtures
+
+    src = tmp_path / "silo"
+    out = tmp_path / "watch"
+    two = grmhd_fixtures.carpetx_levels()
+    # 1. the metafile is there but the data file it refers to is not yet: nothing is processed
+    grmhd_fixtures.write_silo(src, it=0)
+    shard = src / "run.it00000000.silo.dir" / "run.it00000000.p000000.silo"
+    hidden = shard.with_suffix(".hidden")
+    shard.rename(hidden)
+    assert _run(src, model_path, out, "--watch", "--poll", "0.05", "--settle", "0", "--max-idle", "0.2") == 0
+    assert not (out / "it00000000.h5").exists()
+    # 2. only level 0 written: processed and marked complete for that layout
+    hidden.rename(shard)
+    monkeypatch.setattr(grmhd_fixtures, "carpetx_levels", lambda: {0: two[0]})
+    grmhd_fixtures.write_silo(src, it=0)
+    assert _run(src, model_path, out, "--watch", "--poll", "0.05", "--settle", "0", "--max-idle", "0.2") == 0
+    rows, attrs = _read(out / "it00000000.h5")
+    assert attrs["complete"] and set(rows["level"]) == {0}
+    n0 = len(rows["labels"])
+    # 3. level 1 appears later: level 0 loses the cells it covers, so the file is redone, not left as it was
+    monkeypatch.setattr(grmhd_fixtures, "carpetx_levels", lambda: two)
+    grmhd_fixtures.write_silo(src, it=0)
+    assert _run(src, model_path, out, "--watch", "--poll", "0.05", "--settle", "0", "--max-idle", "0.2") == 0
+    rows, attrs = _read(out / "it00000000.h5")
+    assert attrs["complete"] and len(rows["labels"]) == ROWS["silo"] > n0
+    assert set(rows["level"]) == {0, 1}
+    assert np.array_equal(rows["labels"], SOMModel.load(model_path).predict(rows["features"]))
+    assert len(np.unique(rows["xyz"], axis=0)) == len(rows["xyz"])
