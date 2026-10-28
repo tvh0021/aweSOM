@@ -1,7 +1,7 @@
 # Checklist, session of 2026-10-28
 
 Living copy of the user's to-do list. Each tick names the evidence (file, figure, or commit).
-Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/`. Nothing is pushed; all commits are local.
+Results directory: `/Volumes/ExternalNVMe/awesom-results/2026-10-28/` (one-page overview: `OVERNIGHT-SUMMARY.md` there). Nothing is pushed; all commits are local.
 
 ## Decisions settled in the opening session
 
