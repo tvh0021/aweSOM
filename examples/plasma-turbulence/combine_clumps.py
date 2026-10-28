@@ -145,13 +145,22 @@ def label_clumps(data_array: np.ndarray, connectivity, periodic: bool = False, u
     else:
         from scipy import ndimage
 
-        out = np.zeros(data_array.shape, dtype=np.int64)
+        # Label each value inside its bounding box only: a clump of value v lies within the
+        # box of all v cells, and translation keeps the C order of first cells, so the ids
+        # equal those of labelling the full-size mask of every value, at O(cells + box volumes)
+        # instead of O(values x cells) (the clump-id arrays of the plasma example hold 400 to
+        # 5000 values).
+        _, inverse = np.unique(data_array, return_inverse=True)
+        inverse = inverse.reshape(data_array.shape)
+        out = np.full(data_array.shape, -1, dtype=np.int64)
         offset = 0
-        for value in np.unique(data_array):
-            lab, n = ndimage.label(data_array == value, structure=structure)
-            out[lab > 0] = lab[lab > 0] + offset
+        for k, box in enumerate(ndimage.find_objects(inverse + 1)):
+            if box is None:
+                continue
+            mask = inverse[box] == k
+            lab, n = ndimage.label(mask, structure=structure)
+            out[box][mask] = lab[mask] - 1 + offset
             offset += n
-        out -= 1
         if periodic:
             out, offset = _merge_periodic(data_array, out, offset, connectivity)
     if not renumber:

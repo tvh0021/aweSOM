@@ -53,7 +53,8 @@ def compare(files, nids, dims, base, reps, tag):
     res = dict(maps=len(files), clusters_total=int(np.sum(nids)), cells=int(np.prod(dims)))
     tb, tbs, lb, _ = rc.timed(lambda: run_loop(base, files, nids, dims, "out_base"), reps)
     rc.log(f"[sce {tag}] baseline {tb:.2f} s, load {lb}")
-    run_loop(sce, files[:2], nids[:2], dims, "out_warm")  # numba warm-up
+    with rc.quiet_fd():
+        run_loop(sce, files[:2], nids[:2], dims, "out_warm")  # numba warm-up
     tn, tns, ln, _ = rc.timed(lambda: run_loop(sce, files, nids, dims, "out_new"), reps)
     rc.log(f"[sce {tag}] new {tn:.2f} s, load {ln}")
     tm, tms, lm, _ = rc.timed(lambda: run_loop(sce, files, nids, dims, "out_nomask", write_masks=False), reps)
