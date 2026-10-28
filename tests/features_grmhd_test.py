@@ -209,3 +209,31 @@ def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
     assert actual.reshape(*shape, 6)[4, 4, 4, 5] == 0
     model = type('Model', (), {'feature_names': SIX_FEATURE_NAMES, 'metadata': thr.to_metadata()})()
     assert FeatureThresholds.from_model(model) == thr
+
+
+def test_v2_smooth_floor_analytic_and_port():
+    from aweSOM.features_grmhd import SIX_FEATURE_NAMES
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ETKPLOT))
+    from etkplot import features
+    (x, y, z), dx = _grid()
+    a = dict(smallb2=np.ones_like(x), P=np.ones_like(x), rho_b=np.ones_like(x),
+             Bx=x, By=np.zeros_like(x), Bz=np.ones_like(x))
+    a.update({f'vel[{j}]': x*0 for j in range(3)})
+    thr = FeatureThresholds(b2_min=0.5, s_v=1, pipeline='v2')
+    select = (slice(2,-2),)*3
+    got = compute_features(a, dx, thr, select=select, names=SIX_FEATURE_NAMES)
+    norm2 = x*x+1+0.5
+    # d(B/D)/dx = ((1.5)/D^3, 0, -x/D^3)
+    chi = np.sqrt(1.5**2+x*x)/norm2**1.5
+    np.testing.assert_allclose(got[:,2], np.log10(chi[select].ravel()+EPS), rtol=1e-6)
+    np.testing.assert_allclose(got[:,5], (1/np.sqrt(norm2))[select].ravel(), rtol=1e-6)
+    port = features.compute(SIX_FEATURE_NAMES, a, dx, SimpleNamespace(pipeline='v2', b2_min=.5, s_v=1, accuracy=4))
+    np.testing.assert_array_equal(got, np.column_stack([port[n][select].ravel() for n in SIX_FEATURE_NAMES]).astype(np.float32))
+    assert FeatureThresholds.from_metadata(thr.to_metadata()).pipeline == 'v2'
+    # The exact zero field stays finite, without the legacy 0/0.
+    for n in ('Bx','By','Bz'):
+        a[n] = x*0
+    zero = compute_features(a, dx, thr, select=select, names=SIX_FEATURE_NAMES)
+    np.testing.assert_array_equal(zero[:,2], -3)
+    np.testing.assert_array_equal(zero[:,5], 0)

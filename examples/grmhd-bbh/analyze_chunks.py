@@ -381,7 +381,7 @@ def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, 
             if last_level is not None and block.level != last_level:
                 _flush_outputs(itf, model, sheets, out, it, title)
             last_level = block.level
-            raw = raw_features(block.data, block.spacing, thr.accuracy, names)
+            raw = raw_features(block.data, block.spacing, thr.accuracy, names, thr.pipeline)
             inner = block.interior
             owned = block.owned_mask
             picked = {n: v[inner][owned] for n, v in raw.items()}

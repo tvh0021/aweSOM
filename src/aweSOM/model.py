@@ -50,7 +50,7 @@ __all__ = ["Scaler", "SOMModel"]
 
 FORMAT_VERSION = "1"
 _TEXT_MAGIC = "awesom-som-text"
-_SCALER_KINDS = ("none", "manual", "minmax")
+_SCALER_KINDS = ("none", "manual", "minmax", "median-iqr")
 # header keys with a fixed meaning; metadata keys may not reuse them
 _RESERVED_KEYS = frozenset(
     {
@@ -79,7 +79,7 @@ class Scaler:
 
     Attributes:
         kind (str): "none", "manual" (mean and two standard deviations, as
-            ``run_som.manual_scaling``) or "minmax".
+            ``run_som.manual_scaling``), "minmax", or "median-iqr".
         offset (np.ndarray): float64 [F] value subtracted from each feature.
         scale (np.ndarray): float64 [F] divisor of each feature.
         bulk_range (float): The ``bulk_range`` used for "manual" scaling; it is
@@ -108,6 +108,19 @@ class Scaler:
             )
             self.scale[bad] = 1.0
         self.bulk_range = float(self.bulk_range)
+
+    @classmethod
+    def from_feature_file(cls, h):
+        """Read the frozen training-file scaler, including legacy files."""
+        g = h["scaler"]
+        kind = g["kind"][()] if "kind" in g else g.attrs.get("kind", "manual")
+        if isinstance(kind, bytes):
+            kind = kind.decode()
+        if kind not in ("manual", "median-iqr"):
+            raise ValueError("unknown feature-file scaler kind")
+        if kind == "median-iqr":
+            return cls("median-iqr", g["center"][:], g["scale"][:])
+        return cls("manual", g["mean"][:], 2 * g["sigma"][:])
 
     @classmethod
     def identity(cls, n_features: int) -> "Scaler":
@@ -154,6 +167,9 @@ class Scaler:
         n_features = data.shape[1]
         if kind == "none":
             return cls.identity(n_features)
+        if kind == "median-iqr":
+            q = np.percentile(data, [25, 50, 75], axis=0)
+            return cls(kind, q[1], q[2] - q[0])
         if kind == "manual":
             offset = np.mean(data, axis=0)
             scale = 2.0 * np.std(data, axis=0) / bulk_range
@@ -311,6 +327,11 @@ def distance_quantiles(
 @dataclass
 class SOMModel:
     """A trained SOM frozen for inference.
+
+    Normalization is part of the model. Fit it once on the lattice training
+    sample, then apply it unchanged across snapshots and runs. GRMHD v2 uses
+    median/IQR scaling; see docs/source/grmhd-comparison.md for floor, clipping,
+    and resolution limits.
 
     Attributes:
         xdim (int): x dimension of the lattice.

@@ -83,8 +83,9 @@ def main(argv=None):
         n_use = h["features"].shape[0] if args.n_samples is None else min(args.n_samples, h["features"].shape[0])
         X = h["features"][:n_use]
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][()]]
-        file_mean = h["scaler/mean"][:] if "scaler/mean" in h else None
-        file_sigma = h["scaler/sigma"][:] if "scaler/sigma" in h else None
+        scf = Scaler.from_feature_file(h)
+        if scf.kind == "median-iqr" and args.scaler != "file":
+            raise ValueError("v2 requires --scaler file; training-float32 is unsupported")
         weight = h["weight"][:n_use] if "weight" in h else np.ones(len(X))
         weight_volume = h["weight_volume"][:n_use] if "weight_volume" in h else np.ones(len(X))
         level = h["level"][:n_use] if "level" in h else np.zeros(len(X), np.int8)
@@ -92,8 +93,7 @@ def main(argv=None):
     report = {"lattice": str(args.lattice), "training_file": str(args.training_file), "n_samples": int(n_use),
               "merge_cost": args.merge_cost, "scaler_mode": args.scaler, "feature_names": names}
     sc32 = Scaler("manual", X.mean(0).astype(np.float64), 2.0 * X.std(0).astype(np.float64))
-    if file_mean is not None:
-        scf = Scaler("manual", file_mean, 2.0 * file_sigma)
+    if scf.kind == "manual":
         report["scaler_float32_minus_file_offset"] = (sc32.offset - scf.offset).tolist()
         report["scaler_float32_over_file_scale"] = (sc32.scale / scf.scale).tolist()
     scaler = sc32 if args.scaler == "training-float32" else scf

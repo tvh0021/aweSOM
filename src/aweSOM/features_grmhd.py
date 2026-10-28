@@ -140,11 +140,26 @@ def _chi_B(B: Sequence[np.ndarray], dx, accuracy: int) -> np.ndarray:
     return np.sqrt(chi2)
 
 
+def smooth_chi(aux, floor):
+    """Analytic gradient of B/sqrt(B.B + floor), with a spatially fixed floor."""
+    B = [aux[k] for k in ("Bx", "By", "Bz")]
+    norm = np.sqrt(sum(c*c for c in B) + floor)
+    b = [c / norm for c in B]
+    chi2 = np.zeros_like(norm)
+    for j in range(3):
+        dB = [aux[f"dB{i}{j}"] for i in range(3)]
+        along = sum(b[i]*dB[i] for i in range(3))
+        for i in range(3):
+            chi2 += ((dB[i] - b[i]*along)/norm)**2
+    return np.sqrt(chi2)
+
+
 def raw_features(
     arrays: Mapping[str, np.ndarray],
     dx: Sequence[float],
     accuracy: int = DEFAULT_ACCURACY,
     names: Sequence[str] = FEATURE_NAMES,
+    pipeline: str = "v1",
 ) -> Dict[str, np.ndarray]:
     """Each feature before its thresholds, float64, on the block's shape.
 
@@ -168,6 +183,15 @@ def raw_features(
         elif n == "log_theta":
             out[n] = _log10(_ratio(arrays["P"], arrays["rho_b"]))
         elif n == "log_chi_B":
+            if pipeline == "v2":
+                out.update({k: arrays[k] for k in ("Bx", "By", "Bz")})
+                for i, k in enumerate(("Bx", "By", "Bz")):
+                    for j in range(3):
+                        out[f"dB{i}{j}"] = derivative(arrays[k], j, dx[j], accuracy)
+                # Provisional floor tests stencil finiteness, including B=0.
+                # finish_features uses these derivatives with the frozen floor.
+                out[n] = _log10(smooth_chi(out, 1.0) + EPS)
+                continue
             out[n] = _log10(_chi_B([arrays["Bx"], arrays["By"], arrays["Bz"]], dx, accuracy) + EPS)
         elif n == "log_grad_ln_b2":
             b2 = arrays["smallb2"]
@@ -177,6 +201,7 @@ def raw_features(
             norm = np.sqrt(arrays["Bx"] ** 2 + arrays["By"] ** 2 + arrays["Bz"] ** 2)
             out[n] = np.divide(np.abs(arrays["Bz"]), norm, out=np.zeros_like(norm), where=norm != 0)
             out["B_norm"] = norm
+            out["abs_Bz"] = np.abs(arrays["Bz"])
         elif n == "asinh_div_v":
             out[n] = sum(derivative(arrays[f"vel[{d}]"], d, dx[d], accuracy) for d in range(3))
         else:
@@ -201,8 +226,13 @@ class FeatureThresholds:
     winsor: Dict[str, Tuple[float, float]] = field(default_factory=dict)
     accuracy: int = DEFAULT_ACCURACY
     epsilon: float = EPS
+    pipeline: str = "v1"
 
     def __post_init__(self):
+        if self.pipeline not in ("v1", "v2"):
+            raise ValueError(f"unknown pipeline {self.pipeline}")
+        if self.pipeline == "v2" and self.winsor:
+            raise ValueError("v2 does not allow winsor clipping")
         self.b2_min = float(self.b2_min)
         self.s_v = float(self.s_v)
         self.accuracy = int(self.accuracy)
@@ -238,6 +268,7 @@ class FeatureThresholds:
             winsor=winsor,
             accuracy=int(attrs.get("accuracy", DEFAULT_ACCURACY)),
             epsilon=float(attrs.get("epsilon", EPS)),
+            pipeline=str(attrs.get("pipeline", "v1")),
         )
 
     @classmethod
@@ -253,7 +284,8 @@ class FeatureThresholds:
         they read back bitwise)."""
         fmt = lambda x: "%.17g" % x  # noqa: E731
         meta = {
-            f"{_META_PREFIX}set": "grmhd-etkplot-v1",
+            f"{_META_PREFIX}set": f"grmhd-etkplot-{self.pipeline}",
+            f"{_META_PREFIX}pipeline": self.pipeline,
             f"{_META_PREFIX}b2_min": fmt(self.b2_min),
             f"{_META_PREFIX}s_v": fmt(self.s_v),
             f"{_META_PREFIX}accuracy": str(self.accuracy),
@@ -284,6 +316,7 @@ class FeatureThresholds:
             winsor=winsor,
             accuracy=int(meta.get(f"{p}accuracy", DEFAULT_ACCURACY)),
             epsilon=float(meta.get(f"{p}epsilon", EPS)),
+            pipeline=str(meta.get(f"{p}pipeline", "v1")),
         )
 
     @classmethod
@@ -320,7 +353,12 @@ def finish_features(
     out = np.empty((np.asarray(first).size, len(names)), np.float32)
     for j, n in enumerate(names):
         x = np.asarray(raw[n]).ravel()
-        if n == "log_chi_B" and thresholds.b2_min > 0:
+        if n == "log_chi_B" and thresholds.pipeline == "v2":
+            x = _log10(smooth_chi(raw, thresholds.b2_min).ravel() + EPS)
+        elif n == "bz_frac" and thresholds.pipeline == "v2":
+            denom = np.sqrt(np.asarray(raw["B_norm"]).ravel()**2 + thresholds.b2_min)
+            x = np.divide(np.asarray(raw["abs_Bz"]).ravel(), denom, out=np.zeros_like(denom), where=denom != 0)
+        elif n == "log_chi_B" and thresholds.b2_min > 0:
             x = x.copy()
             with np.errstate(invalid="ignore"):
                 x[(np.asarray(smallb2).ravel() < thresholds.b2_min) & np.isfinite(x)] = np.log10(EPS)
@@ -357,7 +395,7 @@ def compute_features(
     Returns:
         np.ndarray: float32 [N, len(names)].
     """
-    raw = raw_features(arrays, dx, thresholds.accuracy, names)
+    raw = raw_features(arrays, dx, thresholds.accuracy, names, thresholds.pipeline)
     b2 = arrays["smallb2"]
     if select is None:
         pick = lambda a: np.asarray(a).ravel()  # noqa: E731

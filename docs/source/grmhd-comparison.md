@@ -225,3 +225,39 @@ and the physical fields still belong to the current run.
 For training with the saved scaler, pass `scripts/train_som.py --scaler file`.
 The historical default `training-float32` retains `manual_scaling` for old runs.
 Freeze a lattice trained with the file scaler using `build_model.py --scaler file`.
+
+## Optional feature pipeline v2, 2026-10-28
+
+`etkplot som-features --pipeline v2` enables a smooth direction floor,
+removes winsor clipping, and saves median/IQR scaling. V1 remains the default
+for new extraction and for old files and models without a pipeline version.
+Use `--features six` to include `bz_frac` independently.
+
+V1 masks direction features because division by `|B|` amplifies atmospheric
+noise. V2 replaces `B/|B|` with `B/sqrt(B.B+b2_min)` before its analytic
+gradient, and uses `|Bz|/sqrt(B.B+b2_min)` for `bz_frac`. This keeps the
+protection without a discontinuity. `B.B` is the Eulerian Euclidean norm;
+`b2_min` still comes from the inverse-selection-weighted 1st percentile of
+comoving `smallb2` and is frozen. The additive 0.001 in logs remains.
+The asinh divergence scale `s_v` remains a frozen threshold too.
+
+Winsor clipping protected mean/two-standard-deviation scaling from extremes
+near horizons and refinement boundaries. It also removed physical information
+and introduced run-dependent limits. Median/IQR scaling removes that need.
+Feature files store `scaler/center`, `scaler/scale`, and the scaler group
+dataset `scaler/kind="median-iqr"`. Quantiles use unweighted training rows,
+float64 arithmetic, and linear interpolation. Zero IQR uses divisor one.
+
+Normalization is part of the model. Fit it once on the sample that defines
+the lattice, potentially pooled across runs and times, then freeze it for all
+snapshots and runs. `--thresholds-from` copies it unchanged and rejects a
+pipeline mismatch. Train and freeze v2 files with `--scaler file`.
+`--scaler training-float32` refuses v2 files. `Scaler` and `SOMModel` retain
+the robust kind and statistics. Chunk inference uses the model's feature
+pipeline, floor, and asinh scale unchanged.
+
+Unresolved gradient features scale as `1/dx`. Resolution itself limits transfer
+across resolutions, even when normalization is frozen.
+The full design note and before/after measurements are in etk-analysis at
+`docs/spec/feature-pipeline-v2-2026-10-28.md` and the local report at
+`/Volumes/ExternalNVMe/awesom-results/2026-10-28/feature-v2/report.md`.
