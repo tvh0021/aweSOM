@@ -145,13 +145,22 @@ def label_clumps(data_array: np.ndarray, connectivity, periodic: bool = False, u
     else:
         from scipy import ndimage
 
-        out = np.zeros(data_array.shape, dtype=np.int64)
+        # Label each value inside its bounding box only: a clump of value v lies within the
+        # box of all v cells, and translation keeps the C order of first cells, so the ids
+        # equal those of labelling the full-size mask of every value, at O(cells + box volumes)
+        # instead of O(values x cells) (the clump-id arrays of the plasma example hold 400 to
+        # 5000 values).
+        _, inverse = np.unique(data_array, return_inverse=True)
+        inverse = inverse.reshape(data_array.shape)
+        out = np.full(data_array.shape, -1, dtype=np.int64)
         offset = 0
-        for value in np.unique(data_array):
-            lab, n = ndimage.label(data_array == value, structure=structure)
-            out[lab > 0] = lab[lab > 0] + offset
+        for k, box in enumerate(ndimage.find_objects(inverse + 1)):
+            if box is None:
+                continue
+            mask = inverse[box] == k
+            lab, n = ndimage.label(mask, structure=structure)
+            out[box][mask] = lab[mask] - 1 + offset
             offset += n
-        out -= 1
         if periodic:
             out, offset = _merge_periodic(data_array, out, offset, connectivity)
     if not renumber:
@@ -234,9 +243,27 @@ def _merge_periodic(data_array, labels, n_labels, connectivity):
     return comp[labels], n
 
 
+class _ClumpOverlapError(ValueError):
+    """Two clumps of one dict share a cell (unsupported by ``merge_double_sheets_fast``)."""
+
+
 def merge_double_sheets(
-    double_sheet_dict: dict, positive_sheet_dict: dict, negative_sheet_dict: dict
+    double_sheet_dict: dict, positive_sheet_dict: dict, negative_sheet_dict: dict, fast: bool = True
 ):
+    """Merge each double sheet with the positive and negative clumps it touches (10-neighbor).
+
+    With ``fast=True`` (the default) this runs ``merge_double_sheets_fast``, which returns the
+    same dict (keys, order, cell sets, value types) and makes the same in-place deletions; it
+    was checked against this loop on the plasma merged_sheets arrays
+    (``planning/benchmarks/real_clumps.py``). If clumps of one dict overlap, which the fast
+    version does not support, the original loop runs instead. ``fast=False`` always runs the
+    original loop (with its per-sheet printout and progress bar).
+    """
+    if fast:
+        try:
+            return merge_double_sheets_fast(double_sheet_dict, positive_sheet_dict, negative_sheet_dict)
+        except _ClumpOverlapError:  # raised before any dict is modified
+            pass
     merged_double_sheets = dict()
     neighbor_deltas = generate_neighbors(10)
 
@@ -347,7 +374,7 @@ def merge_double_sheets_fast(double_sheet_dict: dict, positive_sheet_dict: dict,
         for k, key in enumerate(keys):
             p = np.asarray(d[key], dtype=np.int64).reshape(-1, 3) + 1
             if (vol[tuple(p.T)] >= 0).any():
-                raise ValueError("clumps of one dict overlap")
+                raise _ClumpOverlapError("clumps of one dict overlap")
             vol[tuple(p.T)] = k
         return keys, vol
 

@@ -15,7 +15,7 @@ from sklearn.metrics.pairwise import euclidean_distances
 from numba import njit, prange
 from scipy.ndimage import map_coordinates
 
-from .inference import DEFAULT_CHUNK, best_match_nodes
+from .inference import DEFAULT_CHUNK, best_match_nodes, best_match_nodes_screen
 from .inference import predict as _predict_nodes
 
 seed = 42
@@ -437,27 +437,38 @@ class Lattice:
         return cluster_id
 
     @staticmethod
-    def best_match(lattice: np.ndarray, obs: np.ndarray, full=False) -> np.ndarray:
+    def best_match(
+        lattice: np.ndarray, obs: np.ndarray, full=False, backend: str = "screen"
+    ) -> np.ndarray:
         """
         Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node.
 
-        The single-best search delegates to ``aweSOM.inference.best_match_nodes``
-        (chunked, allocation-free, float64 reference arithmetic). It returns the
-        same node indices as the original kernel, which is kept as
-        ``_best_match_legacy`` for ``full=True`` and for tests.
+        The single-best search delegates to ``aweSOM.inference``: by default the
+        float32 screen certified in float64 (``best_match_nodes_screen``), whose
+        node indices are bitwise those of the float64 reference scan
+        (``backend="numba"``, ``best_match_nodes``). Both return the same node
+        indices as the original per-point kernel, which is kept as
+        ``_best_match_legacy`` (``backend="legacy"``) and is always used for
+        ``full=True``.
 
         Args:
                 lattice (np.ndarray): weight values of the lattice
                 obs (np.ndarray): observations (input vectors)
                 full (bool, optional): indicate whether to return first and second best match. Defaults to False.
+                backend (str, optional): ``"screen"`` (default), ``"numba"`` or ``"legacy"`` (the original kernel). Ignored if ``full``.
 
         Returns:
                 np.ndarray: float array of shape (n, 1) with the 1d index of the best-matched node for each observation, or (n, 2) with the two best if ``full``.
         """
 
-        if full:
-            return Lattice._best_match_legacy(lattice, obs, True)
-        idx, _ = best_match_nodes(lattice, obs)
+        if full or backend == "legacy":
+            return Lattice._best_match_legacy(lattice, obs, full)
+        if backend == "screen":
+            idx, _ = best_match_nodes_screen(lattice, obs)
+        elif backend == "numba":
+            idx, _ = best_match_nodes(lattice, obs)
+        else:
+            raise ValueError('backend must be "screen", "numba" or "legacy"')
         return idx.astype(np.float64).reshape(-1, 1)
 
     @staticmethod
@@ -514,8 +525,8 @@ class Lattice:
         latter does not exist yet, ``assign_cluster_to_lattice`` is called with
         ``merge_cost`` (0.0 if None). Equivalent to ``map_data_to_lattice`` +
         ``assign_cluster_to_data`` without the two full-size intermediates
-        (exactly with ``backend="numba"``; the default KD-tree can resolve
-        exact ties differently).
+        (exactly with the default ``"screen"`` and with ``"numba"``; ``"kdtree"``
+        can resolve exact ties differently).
 
         Args:
                 data (np.ndarray): [N, F] float64 or float32 points in the same space as the training data.

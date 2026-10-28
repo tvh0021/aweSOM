@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numba import njit, prange
 
-from .inference import DEFAULT_CHUNK, best_match_nodes
+from .inference import DEFAULT_CHUNK, best_match_nodes_screen
 from .inference import predict as _predict
 
 if TYPE_CHECKING:
@@ -126,10 +126,18 @@ class Scaler:
         """Fit a scaler on a training sample.
 
         For "manual", ``offset = mean`` and ``scale = 2 * std / bulk_range``, so
-        ``transform`` equals ``run_som.manual_scaling(data, bulk_range)`` bitwise
-        when ``bulk_range`` is a power of two (including the default 1.0) and to
-        within one rounding otherwise. For "minmax", ``offset = min`` and
-        ``scale = max - min``.
+        for float64 data ``transform`` equals ``run_som.manual_scaling(data,
+        bulk_range)`` bitwise when ``bulk_range`` is a power of two (including
+        the default 1.0) and to within one rounding otherwise. The scaler always
+        works in float64; ``manual_scaling`` on float32 data works in float32,
+        so a lattice trained on float32 features scaled that way sees slightly
+        different inputs (on the BBH features, F = 5: up to 1.5e-3 absolute in
+        the scaled space and 59 of 10^6 labels changed on the 10^6-point run,
+        up to 4.4e-2 and 11,544 of 10^7 labels (0.12%) on the 10^7-point run;
+        see ``planning/benchmarks/real_inference.py``). To reproduce such a
+        lattice's labels exactly, scale the input in float32 the same way
+        before ``predict``, or retrain on float64-scaled data. For "minmax",
+        ``offset = min`` and ``scale = max - min``.
 
         Args:
             data (np.ndarray): [N, F] training sample.
@@ -413,7 +421,7 @@ class SOMModel:
 
         if scaled_training_data is None:
             scaled_training_data = lattice.data_array
-        nodes_idx, dist2 = best_match_nodes(weights, scaled_training_data)
+        nodes_idx, dist2 = best_match_nodes_screen(weights, scaled_training_data)  # bitwise = best_match_nodes
         node_q, reject = distance_quantiles(nodes_idx, np.sqrt(dist2), xdim * ydim)
 
         meta = _default_metadata()

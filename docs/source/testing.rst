@@ -107,5 +107,74 @@ and :math:`R = 10`, aweSOM is faster than the legacy implementation by a factor 
 :math:`L^3 \gtrsim 500, N = 10^8`, aweSOM is the only feasible option for performing the SCE analysis.
 
 
+Measured on real data
+~~~~~~~~~~~~~~~~~~~~~
+
+Measured on 2026-10-28 on an Apple M1 Max (10 cores), comparing the current code with the original implementation
+(commit ``1069cff``). The inputs are the trained BBH lattices (F = 5) and the plasma-turbulence run (F = 4,
+:math:`128^3` cells, 28 SCE maps). Each time is the minimum of 3 runs. Other jobs shared the machine (1-minute load
+5 to 64), so read the speedups as rough. Every output listed below is bitwise identical to the original: BMU indices,
+cluster labels, BMU distances, trained lattices, U-matrices, SCE output files and clump lists. The scripts are
+``planning/benchmarks/real_*.py``.
+
+.. list-table:: Inference, all CPU threads (points/s; baseline on the first 1,048,576 points)
+   :header-rows: 1
+
+   * - Case
+     - Baseline
+     - ``numba``
+     - ``screen`` (default)
+     - ``kdtree``
+   * - plasma, 64 x 37 lattice, :math:`2.1\times10^6` points
+     - 1.5e5
+     - 1.0e6
+     - 2.1e6
+     - 1.9e6
+   * - BBH 29 x 20, :math:`10^5` points
+     - 3.7e5
+     - 3.1e6
+     - 5.2e6
+     - 1.5e6
+   * - BBH 51 x 36, :math:`10^6` points
+     - 9.0e4
+     - 1.1e6
+     - 2.4e6
+     - 1.7e6
+   * - BBH 91 x 64, :math:`10^7` points
+     - 2.9e4
+     - 3.7e5
+     - 6.9e5
+     - 1.2e6
+
+.. list-table:: Training and post-processing
+   :header-rows: 1
+
+   * - Step
+     - Baseline
+     - Current
+     - Speedup
+   * - Online training, BBH 29 x 20, :math:`10^5` steps
+     - 7.40 s
+     - 1.03 s (0.48 s with ``history=False``)
+     - 7x (15x)
+   * - Online training, BBH 51 x 36, :math:`10^6` steps
+     - 187 s
+     - 19.9 s
+     - 9x
+   * - SCE, 28 plasma maps
+     - 550 s
+     - 4.9 s (0.55 s with ``write_masks=False``)
+     - 112x (995x)
+   * - ``label_clumps`` vs ``get_clumps``, :math:`128^3` sheet masks
+     - 7.8 to 34 s
+     - 0.06 to 0.13 s
+     - 71x to 296x
+
+The ``kdtree`` backend wins on the largest lattice (5824 nodes); ``screen`` wins on the others. Labels from
+``SOMModel`` agree with the baseline only when the input is scaled at the same precision as the training data: the
+BBH lattices were trained on float32 features scaled in float32, and ``Scaler`` works in float64, so on
+:math:`10^7` points 11,544 labels (0.12%) differ.
+
+
 .. _pytest: https://docs.pytest.org/en/stable/
 
