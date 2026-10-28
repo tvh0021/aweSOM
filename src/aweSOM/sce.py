@@ -239,6 +239,7 @@ def contingency_table(
         np.ndarray: ``[n_a, n_b]`` int64 counts. Labels outside the id range are
             ignored, exactly as ``create_mask`` never selects them.
     """
+    n_a, n_b = int(n_a), int(n_b)  # NumPy integers (e.g. uint8 from labels.max() + 1) would overflow below
     if HAVE_NUMBA and use_numba:
         # one private table per part; keep their total under ~64 MB for large id counts
         n_parts = min(_numba.get_num_threads() * 4, labels_a.shape[0] // 65536 + 1)
