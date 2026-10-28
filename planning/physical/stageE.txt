@@ -1,0 +1,7 @@
+# 1e7 rows on the 1e6 rule lattice size: separates "more rows" from "more nodes"
+--variant nodiv4 --lattice rule1e6 --n 10000000 --seed 0
+--variant cb_swap5 --lattice rule1e6 --n 10000000 --seed 0
+--variant nodiv4 --lattice rule1e6 --n 10000000 --seed 1
+--variant cb_swap5 --lattice rule1e6 --n 10000000 --seed 1
+--variant nodiv4 --lattice rule1e6 --n 10000000 --seed 2
+--variant cb_swap5 --lattice rule1e6 --n 10000000 --seed 2

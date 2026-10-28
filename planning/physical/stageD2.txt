@@ -1,0 +1,7 @@
+--variant cb_swap5 --lattice half --n 10000000
+--variant cb_swap5 --lattice half --n 10000000 --seed 1
+--variant nodiv4 --lattice half --n 10000000 --seed 1
+--variant base5 --lattice half --n 10000000 --seed 1
+--variant cb_swap5 --lattice half --n 10000000 --seed 2
+--variant nodiv4 --lattice half --n 10000000 --seed 2
+--variant base5 --lattice half --n 10000000 --seed 2

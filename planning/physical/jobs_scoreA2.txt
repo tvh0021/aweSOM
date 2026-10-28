@@ -1,0 +1,6 @@
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/cb_add6-N1e+06-half-a0.5-s1-seed0-it180224.npz
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/cb_add6-N1e+06-rule-a0.5-s1-seed0-it180224.npz
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/chic_add6-N1e+06-half-a0.5-s1-seed0-it180224.npz
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/chic_add6-N1e+06-rule-a0.5-s1-seed0-it180224.npz
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/chic_swap5-N1e+06-half-a0.5-s1-seed0-it180224.npz
+/Volumes/ExternalNVMe/awesom-results/2026-10-28/physical/models/chic_swap5-N1e+06-rule-a0.5-s1-seed0-it180224.npz

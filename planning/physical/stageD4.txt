@@ -1,0 +1,4 @@
+--variant nodiv4 --lattice rule --n 10000000 --seed 1
+--variant base5 --lattice rule --n 10000000 --seed 2
+--variant cb_swap5 --lattice rule --n 10000000 --seed 2
+--variant nodiv4 --lattice rule --n 10000000 --seed 2
