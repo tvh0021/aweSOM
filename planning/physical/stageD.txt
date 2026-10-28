@@ -1,0 +1,3 @@
+--variant base5 --lattice rule --n 10000000
+--variant base5 --lattice half --n 10000000
+--variant nodiv4 --lattice half --n 10000000

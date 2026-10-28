@@ -1,0 +1,6 @@
+--variant base5 --lattice rule --alpha 0.25
+--variant base5 --lattice rule --alpha 1.0
+--variant base5 --lattice rule --steps 3
+--variant base5 --lattice half --alpha 0.25
+--variant base5 --lattice half --alpha 1.0
+--variant base5 --lattice half --steps 3
