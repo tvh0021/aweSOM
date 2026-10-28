@@ -68,6 +68,7 @@ __all__ = [
     "best_match_nodes",
     "best_match_nodes_jax",
     "best_match_nodes_kdtree",
+    "best_match_nodes_patch",
     "best_match_nodes_screen",
     "predict",
     "benchmark",
@@ -579,6 +580,198 @@ def best_match_nodes_kdtree(
     return nodes_idx, dist2
 
 
+PATCH_TILE = 64
+
+
+def lattice_patches(weights: np.ndarray, xdim: int, ydim: int, side: int | None = None) -> tuple:
+    """Group the nodes into ``side x side`` lattice patches with a bounding ball each.
+
+    Returns ``(wpT, perm, offs, centT, rad)``: weights in patch-major order,
+    transposed to ``(F, nodes)``; ``perm`` maps that order to node indices
+    (ascending within a patch); ``offs`` the patch boundaries; ``centT`` the
+    ``(F, patches)`` centroids; ``rad`` the radii of the balls around them, inflated
+    by a relative 1e-9 (plus 1e-300) so that rounding cannot make a bound too tight.
+    """
+    w = np.ascontiguousarray(weights, dtype=np.float64)
+    n_nodes = w.shape[0]
+    if n_nodes != xdim * ydim:
+        raise ValueError(f"weights has {n_nodes} nodes, expected {xdim} * {ydim}")
+    if side is None:
+        side = default_patch_side(n_nodes)
+    side = max(1, int(side))
+    perm = []
+    offs = [0]
+    for by in range(0, ydim, side):
+        for bx in range(0, xdim, side):
+            perm.extend(
+                x + y * xdim
+                for y in range(by, min(ydim, by + side))
+                for x in range(bx, min(xdim, bx + side))
+            )
+            offs.append(len(perm))
+    perm = np.asarray(perm, dtype=np.int64)
+    offs = np.asarray(offs, dtype=np.int64)
+    n_patch = len(offs) - 1
+    cent = np.empty((n_patch, w.shape[1]))
+    rad = np.empty(n_patch)
+    for b in range(n_patch):
+        m = w[perm[offs[b] : offs[b + 1]]]
+        cent[b] = m.mean(axis=0)
+        rad[b] = np.sqrt(((m - cent[b]) ** 2).sum(axis=1)).max()
+    rad = rad * (1.0 + 1e-9) + 1e-300
+    return np.ascontiguousarray(w[perm].T), perm, offs, np.ascontiguousarray(cent.T), rad
+
+
+def default_patch_side(n_nodes: int) -> int:
+    """Patch side used when none is given: 4 up to 8000 nodes, 5 above.
+
+    From a sweep of sides 3 to 8 on synthetic 5-feature data
+    (``planning/benchmarks/bench_stream.py``): at 91 x 64 nodes side 4 was
+    fastest (2.4-2.6x the screen on early and trained lattices), at 160 x 100
+    side 5 (2.7-4x).
+    """
+    return 4 if n_nodes <= 8000 else 5
+
+
+@njit(parallel=True, nogil=True, cache=True)
+def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
+    """Exact BMU search pruned by patch balls; see best_match_nodes_patch. Returns node evaluations."""
+    n = data.shape[0]
+    F, n_patch = centT.shape
+    max_size = 0
+    for b in range(n_patch):
+        max_size = max(max_size, offs[b + 1] - offs[b])
+    ntiles = (n + PATCH_TILE - 1) // PATCH_TILE
+    evals = np.zeros(ntiles, dtype=np.int64)
+    for t in prange(ntiles):
+        x = np.empty(F)
+        dc2 = np.empty(n_patch)
+        acc = np.empty(max_size)
+        ev = 0
+        for p in range(t * PATCH_TILE, min(n, (t + 1) * PATCH_TILE)):
+            for f in range(F):
+                x[f] = np.float64(data[p, f])
+            # squared distance to every patch centroid (vectorised over patches)
+            for b in range(n_patch):
+                d = centT[0, b] - x[0]
+                dc2[b] = d * d
+            for f in range(1, F):
+                xf = x[f]
+                for b in range(n_patch):
+                    d = centT[f, b] - xf
+                    dc2[b] += d * d
+            first = 0
+            dfirst = np.inf
+            for b in range(n_patch):
+                if dc2[b] < dfirst:
+                    dfirst = dc2[b]
+                    first = b
+            best = np.inf
+            best_idx = 0
+            sb = np.inf  # sqrt(best), inflated
+            # the patch with the nearest centroid first, then every patch whose
+            # ball can still hold a node at distance <= sqrt(best)
+            for step in range(n_patch + 1):
+                if step == 0:
+                    b = first
+                else:
+                    b = step - 1
+                    if b == first:
+                        continue
+                    lim = sb + rad[b]
+                    if dc2[b] * (1.0 - 1e-10) > lim * lim:
+                        continue
+                lo = offs[b]
+                s = offs[b + 1] - lo
+                # reference arithmetic of _bmu_kernel per node: acc = 0; acc += d * d
+                for k in range(s):
+                    d = wpT[0, lo + k] - x[0]
+                    acc[k] = d * d
+                for f in range(1, F):
+                    xf = x[f]
+                    for k in range(s):
+                        d = wpT[f, lo + k] - xf
+                        acc[k] += d * d
+                improved = False
+                for k in range(s):
+                    a = acc[k]
+                    i = perm[lo + k]
+                    # lexicographic (distance, index) minimum = strict ascending scan
+                    if a < best or (a == best and i < best_idx):
+                        best = a
+                        best_idx = i
+                        improved = True
+                if improved:
+                    sb = np.sqrt(best) * (1.0 + 1e-10)
+                ev += s
+            out_idx[p] = best_idx
+            out_dist2[p] = best
+        evals[t] = ev
+    return evals.sum()
+
+
+def best_match_nodes_patch(
+    weights: np.ndarray,
+    data: np.ndarray,
+    xdim: int,
+    ydim: int,
+    chunk: int = DEFAULT_CHUNK,
+    side: int | None = None,
+    return_evaluations: bool = False,
+):
+    """Find the best-matching node of every point; bitwise equal to :func:`best_match_nodes`.
+
+    The lattice is cut into ``side x side`` patches of neighbouring nodes, and
+    each patch gets the ball (centroid, radius) that contains its weights. For
+    every point the squared distances to all centroids are computed, the patch
+    with the nearest centroid is scanned first, and every other patch is
+    scanned only if its ball can still hold a node at least as close as the
+    best found so far (``|x - c| - r <= best``, checked with a relative margin
+    of 1e-10, far above float64 rounding). The nodes of a scanned patch use the
+    reference float64 arithmetic of :func:`best_match_nodes`, and a node wins if
+    its distance is smaller, or equal with a lower index, so the result is the
+    lexicographic (distance, index) minimum: labels and distances are bitwise
+    those of :func:`best_match_nodes` (NaN and inf rows included). Because a
+    trained lattice is a smooth 2-D sheet, a point usually needs a few patches;
+    the cost per point is about ``patches + scanned nodes`` distance
+    evaluations instead of ``nodes``. Non-finite or huge (> 1e15) weights use
+    :func:`best_match_nodes`.
+
+    Args:
+        weights (np.ndarray): [xdim * ydim, F] lattice weights, node index = x + y * xdim.
+        data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
+        xdim (int): Lattice x dimension.
+        ydim (int): Lattice y dimension.
+        chunk (int, optional): Points per kernel call. Defaults to 2**20.
+        side (int | None, optional): Patch side in nodes. Defaults to
+            :func:`default_patch_side`.
+        return_evaluations (bool, optional): Also return the number of node
+            distance evaluations (patch centroids not included).
+
+    Returns:
+        tuple: int32 [N] node indices and float64 [N] squared distances (and the
+            evaluation count if ``return_evaluations``).
+    """
+    weights, data = _check_inputs(weights, data)
+    if chunk < 1:
+        raise ValueError("chunk must be positive")
+    n_points = data.shape[0]
+    if not np.all(np.isfinite(weights)) or np.max(np.abs(weights)) > 1e15:
+        out = best_match_nodes(weights, data, chunk=chunk)
+        return (*out, n_points * weights.shape[0]) if return_evaluations else out
+    patches = lattice_patches(weights, xdim, ydim, side)
+    nodes_idx = np.empty(n_points, dtype=np.int32)
+    dist2 = np.empty(n_points, dtype=np.float64)
+    evals = 0
+    for start in range(0, n_points, chunk):
+        stop = min(start + chunk, n_points)
+        block = np.ascontiguousarray(data[start:stop])
+        evals += int(_patch_kernel(*patches, block, nodes_idx[start:stop], dist2[start:stop]))
+    if return_evaluations:
+        return nodes_idx, dist2, evals
+    return nodes_idx, dist2
+
+
 def predict(
     weights: np.ndarray,
     node_cluster: np.ndarray,
@@ -586,6 +779,7 @@ def predict(
     chunk: int | None = None,
     return_distance: bool = False,
     backend: str = "screen",
+    lattice_shape: tuple[int, int] | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
 
@@ -596,6 +790,9 @@ def predict(
     reference scan that ``cpp/awesom_classify.hpp`` reproduces.
     ``backend="kdtree"`` runs :func:`best_match_nodes_kdtree` (CPU; ties may
     go to a higher node; points must be finite).
+    ``backend="patch"`` runs :func:`best_match_nodes_patch` (CPU, exact,
+    bitwise equal to ``"numba"``; needs ``lattice_shape``), the fastest exact
+    CPU path on trained lattices of a few thousand nodes or more.
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -610,8 +807,10 @@ def predict(
             for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
-        backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"`` or
-            ``"jax"``. Defaults to ``"screen"``.
+        backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"``,
+            ``"patch"`` or ``"jax"``. Defaults to ``"screen"``.
+        lattice_shape (tuple[int, int] | None, optional): ``(xdim, ydim)``,
+            required by ``backend="patch"``.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]
@@ -633,10 +832,16 @@ def predict(
         nodes_idx, dist2 = best_match_nodes_screen(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
+    elif backend == "patch":
+        if lattice_shape is None:
+            raise ValueError('backend="patch" needs lattice_shape=(xdim, ydim)')
+        nodes_idx, dist2 = best_match_nodes_patch(
+            weights, data, *lattice_shape, chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree", "screen" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)

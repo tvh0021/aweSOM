@@ -80,7 +80,14 @@ import numpy as np
 from numba import njit, prange
 
 from ._batch_core import radius_schedule
-from .inference import SCREEN_TILE, _bmu_kernel, _screen_kernel, predict
+from .inference import (
+    SCREEN_TILE,
+    _bmu_kernel,
+    _patch_kernel,
+    _screen_kernel,
+    lattice_patches,
+    predict,
+)
 
 __all__ = [
     "train_batch_stream",
@@ -327,22 +334,47 @@ def neighbourhood_update(
 
 
 class _BMU:
-    """Exact BMU search of one chunk against fixed weights."""
+    """Exact BMU search of one chunk against fixed weights.
 
-    def __init__(self, weights: np.ndarray, kind: str):
+    ``"auto"`` times the screen and patch searches on the first rows of the
+    first chunk and keeps the faster one for the pass (both are exact, with
+    bitwise-equal results, so the choice only affects speed).
+    """
+
+    PROBE = 16384
+
+    def __init__(self, weights: np.ndarray, kind: str, xdim: int, ydim: int):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
-        if kind == "screen" and (not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15):
+        if kind in ("screen", "patch", "auto") and (
+            not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15
+        ):
             self.kind = "numba"
-        if self.kind == "screen":
+        if self.kind in ("screen", "auto"):
             self.w32 = self.w.astype(np.float32)
             self.wmax = float(np.sqrt((self.w * self.w).sum(axis=1)).max())
+        if self.kind in ("patch", "auto"):
+            self.patches = lattice_patches(self.w, xdim, ydim)
 
-    def __call__(self, block: np.ndarray, idx: np.ndarray, d2: np.ndarray) -> int:
-        if self.kind == "screen":
+    def _run(self, kind: str, block, idx, d2) -> int:
+        if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
+        if kind == "patch":
+            _patch_kernel(*self.patches, block, idx, d2)
+            return 0
         _bmu_kernel(self.w, block, idx, d2)
         return 0
+
+    def __call__(self, block: np.ndarray, idx: np.ndarray, d2: np.ndarray) -> int:
+        if self.kind == "auto":
+            m = min(self.PROBE, block.shape[0])
+            times = {}
+            for kind in ("screen", "patch"):
+                t0 = time.perf_counter()
+                self._run(kind, block[:m], idx[:m], d2[:m])
+                times[kind] = time.perf_counter() - t0
+            self.kind = min(times, key=times.get)
+        return self._run(self.kind, block, idx, d2)
 
 
 def peak_rss_bytes() -> int:
@@ -410,7 +442,7 @@ def train_batch_stream(
     seed: int = 42,
     init: str = "sampling",
     initial_weights: Optional[np.ndarray] = None,
-    bmu: str = "screen",
+    bmu: str = "auto",
     sample_fraction: float = 1.0,
     sample_block: int = 4096,
     sample_seed: Optional[int] = None,
@@ -442,8 +474,12 @@ def train_batch_stream(
             same rows as :func:`aweSOM.batch.train_batch` are drawn.
         init: ``"sampling"`` or ``"uniform"``; ignored with ``initial_weights``.
         initial_weights: Optional ``(xdim * ydim, F)`` starting lattice.
-        bmu: ``"screen"`` (float32 screen certified in float64, exact) or
-            ``"numba"`` (float64 brute force); both give the exact float64 BMU.
+        bmu: ``"auto"`` (default: per pass, the faster of screen and patch on
+            the first 16384 rows), ``"screen"`` (float32 screen certified in
+            float64), ``"patch"`` (lattice-patch pruned search,
+            :func:`aweSOM.inference.best_match_nodes_patch`) or ``"numba"``
+            (float64 brute force). All four give the exact float64 BMU
+            (bitwise-equal labels), so the weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified
             block sample every epoch; see the module docstring). 1.0 = all rows.
         sample_block: Rows per sampled block (array sources). Use 1 for i.i.d.
@@ -472,8 +508,8 @@ def train_batch_stream(
         sampling it is measured on the next epoch's sample. ``hits`` is empty
         when ``final_pass="none"``.
     """
-    if bmu not in ("screen", "numba"):
-        raise ValueError('bmu must be "screen" or "numba"')
+    if bmu not in ("auto", "screen", "patch", "numba"):
+        raise ValueError('bmu must be "auto", "screen", "patch" or "numba"')
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError("sample_fraction must be in (0, 1]")
     if final_pass not in ("full", "sample", "none"):
@@ -515,13 +551,16 @@ def train_batch_stream(
         rec = {k: np.zeros(epochs) for k in keys}
         rows = np.zeros(epochs, np.int64)
         fallbacks = np.zeros(epochs, np.int64)
+        bmu_kinds = []
         qe_after = np.zeros(epochs)
         qe_initial = math.nan
 
         for e, r in enumerate(radii):
             t0 = time.perf_counter()
-            st = _pass(source, _BMU(w, bmu), n_nodes, n_feat, chunk, sample_fraction,
+            searcher = _BMU(w, bmu, xdim, ydim)
+            st = _pass(source, searcher, n_nodes, n_feat, chunk, sample_fraction,
                        sample_block, epoch_rng(e), groups, prefetch)
+            bmu_kinds.append(searcher.kind)
             t1 = time.perf_counter()
             w = neighbourhood_update(st["s"], st["n"], w, xdim, ydim, r)
             t2 = time.perf_counter()
@@ -542,7 +581,7 @@ def train_batch_stream(
                     f"epoch {e + 1}/{epochs}  radius {r:.3f}  rows {st['rows']}  "
                     f"qe(entering) {qe_entering:.6g}  {t2 - t0:.3f} s "
                     f"(io wait {st['io_wait']:.2f}, bmu {st['bmu']:.2f}, update {t2 - t1:.3f}, "
-                    f"fallbacks {st['fallbacks']})",
+                    f"fallbacks {st['fallbacks']}, {searcher.kind})",
                     flush=True,
                 )
             if callback is not None:
@@ -552,7 +591,7 @@ def train_batch_stream(
         hits = np.zeros(0, np.int64)
         if final_pass != "none":
             frac = 1.0 if final_pass == "full" else sample_fraction
-            st = _pass(source, _BMU(w, bmu), n_nodes, n_feat, chunk, frac, sample_block,
+            st = _pass(source, _BMU(w, bmu, xdim, ydim), n_nodes, n_feat, chunk, frac, sample_block,
                        np.random.default_rng([s_seed, epochs]) if frac < 1.0 else None,
                        groups, prefetch)
             qe_after[-1] = st["qe_sum"] / st["rows"]
@@ -573,6 +612,7 @@ def train_batch_stream(
         "n_samples": n_total,
         "rows_per_epoch": rows,
         "fallbacks": fallbacks,
+        "bmu_kind": bmu_kinds,
         "final_time": final_time,
         "n_threads": threads,
         "peak_rss": peak_rss_bytes(),
@@ -592,6 +632,7 @@ def predict_stream(
     out_distance: Any = None,
     chunk: int = DEFAULT_CHUNK,
     backend: str = "screen",
+    lattice_shape: Optional[tuple[int, int]] = None,
     prefetch: bool = True,
     n_samples: Optional[int] = None,
 ) -> tuple[Any, dict[str, float]]:
@@ -606,7 +647,9 @@ def predict_stream(
             ``h5py.Dataset``); allocated in memory if None.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
-        backend: ``predict`` backend (default ``"screen"``, exact).
+        backend: ``predict`` backend (default ``"screen"``; ``"patch"`` is
+            exact too and faster on trained lattices, needs ``lattice_shape``).
+        lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
 
@@ -625,7 +668,8 @@ def predict_stream(
     for c in it:
         t0 = time.perf_counter()
         res = predict(weights, node_cluster, c, chunk=c.shape[0],
-                      return_distance=out_distance is not None, backend=backend)
+                      return_distance=out_distance is not None, backend=backend,
+                      lattice_shape=lattice_shape)
         t1 = time.perf_counter()
         m = c.shape[0]
         if out_distance is not None:
