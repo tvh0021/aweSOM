@@ -317,13 +317,16 @@ def _midplane(block, z0: float, labels, logchi, xyz) -> np.ndarray:
 
 def run_config(args, thr: FeatureThresholds) -> dict:
     """The settings that decide which rows a block holds; a file is only resumed with the same ones."""
-    return {
+    config = {
         "slab": int(args.slab), "levels": None if args.levels is None else [int(L) for L in args.levels],
         "halo": int(thr.halo), "save_features": bool(args.save_features), "midplane_z": float(args.midplane_z),
         "reader": args.reader, "carpet_backend": args.carpet_backend, "fill": args.fill,
         "source": Path(args.source).name, "model": Path(args.model).name,
-        "hole_centres": getattr(args, "bh", None),
     }
+    # only when given, so files written before pol_frac existed still resume
+    if getattr(args, "bh", None) is not None:
+        config["hole_centres"] = args.bh
+    return config
 
 
 def source_layout(reader, it: int, levels=None) -> str:
@@ -516,7 +519,7 @@ def main(argv=None):
     thr = FeatureThresholds.from_model(model)
     if "pol_frac" in model.feature_names and (args.bh is None or not np.all(np.isfinite(args.bh))):
         ap.error("pol_frac requires --bh with six finite coordinates")
-    sheets = [int(s) for s in model.metadata.get("sheet_clusters", "").split() if s.lstrip("-").isdigit()]
+    sheets = [int(s) for s in model.metadata.get("sheet_clusters", "").replace(",", " ").split() if s.lstrip("-").isdigit()]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"[chunks] model {args.model}: {model.xdim}x{model.ydim}, thresholds {thr}, sheet clusters {sheets}", flush=True)

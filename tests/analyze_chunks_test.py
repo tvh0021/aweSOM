@@ -187,6 +187,39 @@ def test_resume_refuses_a_different_slab_width(carpet_run, model_path, tmp_path)
     assert np.array_equal(a["xyz"], b["xyz"])
 
 
+def test_resume_accepts_a_file_from_before_hole_centres(carpet_run, model_path, tmp_path):
+    out = tmp_path / "part"
+    model = SOMModel.load(model_path)
+    args = ac.main.__globals__["argparse"].Namespace(
+        out=str(out), source=str(carpet_run), levels=None, slab=4, save_features=True, midplane_z=0.25,
+        predict_backend="screen", verbose=False, reader="carpet", carpet_backend="native", fill="coarse",
+        model=str(model_path))
+    out.mkdir()
+    reader = _StopAfter(CarpetHDF5Reader(carpet_run, backend="native"), 3)
+    with pytest.raises(_Interrupt):
+        ac.process_iteration(reader, model, THR, 0, args, [1])
+    # the configuration exactly as analyze_chunks wrote it before pol_frac: no hole_centres key
+    legacy = {"slab": 4, "levels": None, "halo": int(THR.halo), "save_features": True, "midplane_z": 0.25,
+              "reader": "carpet", "carpet_backend": "native", "fill": "coarse", "source": Path(carpet_run).name,
+              "model": Path(model_path).name, "feature_names": list(FEATURE_NAMES)}
+    with h5py.File(out / "it00000000.h5", "a") as f:
+        f.attrs["config"] = json.dumps(legacy, sort_keys=True)
+    assert _run(carpet_run, model_path, out, "--reader", "carpet", "--iterations", "0") == 0
+    rows, attrs = _read(out / "it00000000.h5")
+    assert attrs["complete"] and len(rows["labels"]) == ROWS["carpet"]
+
+
+def test_comma_separated_sheet_clusters(carpet_run, model_path, tmp_path):
+    m = SOMModel.load(model_path)
+    m.metadata["sheet_clusters"] = "1,2"  # as build_model.py and production_pool.py write it
+    path = tmp_path / "two-sheet-model.h5"
+    m.save(path)
+    out = tmp_path / "out"
+    assert _run(carpet_run, path, out, "--reader", "carpet", "--iterations", "0") == 0
+    stats = json.loads((out / "it00000000_stats.json").read_text())
+    assert stats["sheet_clusters"] == [1, 2]
+
+
 def test_watch_waits_for_shards_and_extends_a_grown_snapshot(tmp_path, model_path, monkeypatch):
     import grmhd_fixtures
 
