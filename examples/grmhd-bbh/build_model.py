@@ -1,9 +1,11 @@
 """Freeze a trained aweSOM Lattice (pickle) into a pickle-free SOMModel for
 the GRMHD BBH sheet comparison, and pick the current-sheet clusters.
 
-The scaler is frozen from the training file. Two choices:
+Scaler choices:
 
-* ``--scaler training-float32`` (default): ``mean`` and ``2 std`` of the
+* ``--scaler auto`` (default): use the frozen median-IQR scaler for v2,
+  including feature weights, or reproduce legacy manual reductions.
+* ``--scaler training-float32``: ``mean`` and ``2 std`` of the
   training features computed the way ``run_som.manual_scaling`` computed them
   when the lattice was trained (NumPy reductions on the float32 array). This
   reproduces the lattice's ``data_array`` to float32 rounding, so the model
@@ -41,6 +43,7 @@ import numpy as np
 
 import aweSOM
 from aweSOM.model import Scaler, SOMModel
+from aweSOM.grmhd_freeze import training_scaler, set_lattice_names
 
 
 def parse_rule(text):
@@ -74,7 +77,7 @@ def main(argv=None):
     ap.add_argument("--n-samples", type=int, default=None,
                     help="use only the first N rows of the training file, as train_som.py "
                          "--n-samples did when the lattice was trained (default: all rows)")
-    ap.add_argument("--scaler", choices=["training-float32", "file"], default="training-float32")
+    ap.add_argument("--scaler", choices=["auto", "training-float32", "file"], default="auto")
     ap.add_argument("--sheet-rule", default="log_chi_B>0.3,log_beta_inv<0.5")
     ap.add_argument("--sheet-clusters", default=None, help="comma-separated ids (overrides the rule)")
     ap.add_argument("--training-labels", type=Path, default=None,
@@ -95,8 +98,10 @@ def main(argv=None):
         X = h["features"][:n_use]
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h["names"][()]]
         scf = Scaler.from_feature_file(h)
-        if scf.kind == "median-iqr" and args.scaler != "file":
-            raise ValueError("v2 requires --scaler file; training-float32 is unsupported")
+        if scf.kind == "median-iqr" and args.scaler == "training-float32":
+            raise ValueError("v2 requires --scaler file or auto; training-float32 is unsupported")
+        scaler, scaling_meta = training_scaler(h, X, names, dtype=X.dtype, mode=args.scaler)
+        set_lattice_names(lat, names)
         weight = h["weight"][:n_use] if "weight" in h else np.ones(len(X))
         weight_volume = h["weight_volume"][:n_use] if "weight_volume" in h else np.ones(len(X))
         level = h["level"][:n_use] if "level" in h else np.zeros(len(X), np.int8)
@@ -107,7 +112,6 @@ def main(argv=None):
     if scf.kind == "manual":
         report["scaler_float32_minus_file_offset"] = (sc32.offset - scf.offset).tolist()
         report["scaler_float32_over_file_scale"] = (sc32.scale / scf.scale).tolist()
-    scaler = sc32 if args.scaler == "training-float32" else scf
     da = getattr(lat, "data_array", None)
     if da is not None and da.shape == X.shape:
         report["max_abs_scaled_minus_lattice_data_array"] = np.abs(scaler.transform(X) - da).max(0).tolist()
@@ -167,6 +171,7 @@ def main(argv=None):
 
     t0 = time.perf_counter()
     meta = {
+        **scaling_meta,
         "dataset": args.name or args.lattice.stem,
         "training_file": str(args.training_file),
         "lattice_pickle": str(args.lattice),

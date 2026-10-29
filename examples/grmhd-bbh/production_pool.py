@@ -229,6 +229,7 @@ def quantiles(dataset, start=0, stop=None):
 def pool(args, records, quota, out):
     strata, order_hash = [], hashlib.sha256()
     with h5py.File(out / 'pool.h5', 'x') as dst:
+        dst['names'] = np.array(records[0]['names'], dtype='S')
         raw = dst.create_dataset('raw', (quota*len(records), len(records[0]['names'])), dtype='f4')
         offset = 0
         for rec in records:
@@ -392,9 +393,11 @@ def fit(args, shape, seed, scaling, out):
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
         q, reject, medians = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk)
         del nodes, distances
-        names = NAMES[:raw.shape[1]]
-        sheets = [c for c,m in medians.items() if m[2] > args.sheet_chi and m[0] < args.sheet_beta]
-        tubes = [c for c,m in medians.items() if m[5] > args.tube_bz and m[0] > args.tube_beta]
+        names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
+        chi, beta = names.index('log_chi_B'), names.index('log_beta_inv')
+        sheets = [c for c,m in medians.items() if m[chi] > args.sheet_chi and m[beta] < args.sheet_beta]
+        bz = names.index('bz_frac') if 'bz_frac' in names else None
+        tubes = [c for c,m in medians.items() if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
         meta = dict(seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
                     sheet_clusters=','.join(map(str,sheets)), sheet_rule_statistic='median',
                     sheet_rule=f'median log_chi_B > {args.sheet_chi} and median log_beta_inv < {args.sheet_beta}',
@@ -403,6 +406,11 @@ def fit(args, shape, seed, scaling, out):
                     feature_weights=json.dumps(plain(scaling['feature_weights'])),
                     b2_min=str(args.anchor_attrs['b2_min']), s_v=str(args.anchor_attrs['s_v']),
                     pipeline='v2', freeze_manifest='freeze-manifest.json', aweSOM_commit=args.code_commit)
+        from aweSOM.features_grmhd import FeatureThresholds
+        thresholds = FeatureThresholds.from_h5_attrs(args.anchor_attrs)
+        thresholds.feature_names = tuple(names)
+        thresholds.__post_init__()
+        meta.update(thresholds.to_metadata())
         model = SOMModel(*shape,w,nc,names,scaler,q,reject,metadata=meta)
         temp = out / f'{tag}.partial.h5'; model.save(temp); publish(temp,out / f'{tag}.h5')
         loaded = SOMModel.load(out / f'{tag}.h5')

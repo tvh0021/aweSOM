@@ -14,8 +14,9 @@ Example (the BBH output-0003, it 180224, 10^7-point lattice)::
         --training /Volumes/ExternalNVMe/som-proto-f5/features_bbh_0003-180224-N10000000.h5 \\
         --merge-cost 0.1 -o model.h5
 
-The scaler is refitted on the training features ("manual": mean and two
-standard deviations, as ``run_som.manual_scaling`` did before training).
+Median-IQR scales are read from the training file, including feature weights.
+Legacy manual scales use the original training-dtype mean and two standard
+deviations, with any recorded feature weights.
 Sheet clusters are those whose training-set mean has ``log_chi_B`` above
 ``--sheet-chi`` and ``log_beta_inv`` below ``--sheet-beta``; they are
 recorded as ``sheet_clusters`` in the metadata.
@@ -35,18 +36,18 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from aweSOM.features_grmhd import FEATURE_NAMES, FeatureThresholds
+from aweSOM.features_grmhd import FeatureThresholds
+from aweSOM.grmhd_freeze import training_scaler as file_training_scaler, set_lattice_names
 from aweSOM.model import Scaler, SOMModel
 
 
-def sheet_clusters(features: np.ndarray, labels: np.ndarray, chi: float, beta: float):
+def sheet_clusters(features: np.ndarray, labels: np.ndarray, chi: float, beta: float, names):
     """Clusters whose mean log_chi_B > chi and mean log_beta_inv < beta, and every cluster's means."""
-    jc, jb = FEATURE_NAMES.index("log_chi_B"), FEATURE_NAMES.index("log_beta_inv")
     means = {}
     for c in np.unique(labels):
         sel = labels == c
         m = np.nanmean(features[sel].astype(np.float64), axis=0)
-        means[int(c)] = {"share": float(sel.mean()), **{n: float(v) for n, v in zip(FEATURE_NAMES, m)}}
+        means[int(c)] = {"share": float(sel.mean()), **{n: float(v) for n, v in zip(names, m)}}
     sheets = [c for c, m in means.items() if c >= 0 and m["log_chi_B"] > chi and m["log_beta_inv"] < beta]
     return sheets, means
 
@@ -85,19 +86,20 @@ def main(argv=None):
 
     with h5py.File(args.training, "r") as f:
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in f["names"][()]]
-        if tuple(names) != FEATURE_NAMES:
-            raise SystemExit(f"{args.training}: features {names} are not {list(FEATURE_NAMES)}")
         raw = f["features"][()]
-        thresholds = FeatureThresholds.from_h5_attrs(dict(f.attrs))
+        thresholds = FeatureThresholds.from_h5(args.training)
+        scaler, scaling_meta = file_training_scaler(f, raw, names, args.scaler_dtype)
         iteration = int(f.attrs.get("iteration", -1))
     print(f"[freeze] {len(raw)} training rows, thresholds {thresholds}", flush=True)
 
     with open(args.lattice, "rb") as f:
         lattice = pickle.load(f)
-    scaler = training_scaler(raw, args.scaler_dtype)
+    set_lattice_names(lattice, names)
     scaled = scaler.transform(raw)
     stored = getattr(lattice, "data_array", None)
     if stored is not None and len(stored):
+        if np.shape(stored) != raw.shape:
+            raise ValueError("lattice training rows and training file shapes disagree")
         n = min(len(stored), 1_000_000)
         d = float(np.max(np.abs(scaled[:n] - np.asarray(stored[:n], dtype=np.float64))))
         print(f"[freeze] max |scaler(raw) - lattice.data_array| on {n} rows: {d:.2e}", flush=True)
@@ -109,15 +111,15 @@ def main(argv=None):
     with contextlib.redirect_stdout(io.StringIO()):
         clusters = lattice.assign_cluster_to_lattice(smoothing=None, merge_cost=args.merge_cost)
     lattice.lattice_assigned_clusters = clusters
-    if getattr(lattice, "features_names", None) is None:
-        lattice.features_names = list(FEATURE_NAMES)
     meta = {
         "dataset": Path(args.training).name,
         "training_iteration": str(iteration),
         "lattice_file": Path(args.lattice).name,
         "cluster_rule": f"assign_cluster_to_lattice(smoothing=None,merge_cost={args.merge_cost})",
-        "scaler_statistics": f"manual_scaling mean and 2 std reduced in {args.scaler_dtype} over the training rows",
+        "scaler_statistics": (f"manual_scaling mean and 2 std reduced in {args.scaler_dtype} over the training rows"
+                              if scaler.kind == "manual" else "frozen training-file median-IQR, including feature weights"),
         "scaler_check_maxabs": "not checked" if d is None else f"{d:.3e}",
+        **scaling_meta,
         **thresholds.to_metadata(),
     }
     model = SOMModel.from_lattice(lattice, scaled, scaler, merge_cost=args.merge_cost, metadata=meta)
@@ -126,7 +128,7 @@ def main(argv=None):
           f"{time.time() - t0:.0f}s", flush=True)
 
     labels = model.predict(raw)
-    sheets, means = sheet_clusters(raw, labels, args.sheet_chi, args.sheet_beta)
+    sheets, means = sheet_clusters(raw, labels, args.sheet_chi, args.sheet_beta, names)
     model.metadata["sheet_clusters"] = " ".join(map(str, sheets)) or "none"
     model.metadata["sheet_rule"] = f"mean_log_chi_B>{args.sheet_chi},mean_log_beta_inv<{args.sheet_beta}"
     report = {"sheet_clusters": sheets, "cluster_means": means, "seconds": None}
