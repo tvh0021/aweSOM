@@ -35,6 +35,20 @@ def test_invalid_target(target):
         synthetic().assign_cluster_to_lattice(target_clusters=target)
 
 
+def test_target_rejects_float32_umat():
+    lat = Lattice(12, 10)
+    lat.umat = np.random.default_rng(7).random((12, 10)).astype('f4')
+    with pytest.raises(ValueError, match='float64 U-matrix'):
+        lat.assign_cluster_to_lattice(target_clusters=3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        lat.assign_cluster_to_lattice(merge_cost=.05)  # legacy path still accepts float32
+        lat.umat = lat.umat.astype(np.float64)
+        target = lat.assign_cluster_to_lattice(target_clusters=3).copy()
+        cost = lat.merge_cost_used
+        assert np.array_equal(target, lat.assign_cluster_to_lattice(merge_cost=cost))
+        assert len(np.unique(lat.assign_cluster_to_lattice(merge_cost=np.nextafter(cost, -np.inf)))) > 3
+
+
 def test_target_frozen_roundtrip(tmp_path, monkeypatch):
     lat = synthetic()
     with contextlib.redirect_stdout(io.StringIO()):

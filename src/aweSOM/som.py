@@ -1010,6 +1010,13 @@ class Lattice:
         """
 
         heat = self.umat
+        if target_clusters is not None and np.asarray(heat).dtype != np.float64:
+            # float32 costs would make the next float64 above a barrier not the smallest
+            # replayable threshold, so the recorded cost would overshoot.
+            raise ValueError(
+                "target_clusters needs a float64 U-matrix; "
+                "cast it with lattice.umat = lattice.umat.astype(np.float64)"
+            )
         heat_squared = heat**2
         centroids = naive_centroids.copy()
 
