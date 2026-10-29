@@ -29,7 +29,7 @@ def inputs(tmp):
             x=np.random.default_rng(it).normal(size=(120,7)).astype('f4')
             h['features']=x; h['names']=np.array(pool.NAMES,dtype='S')
             h['level']=np.tile([5,6,6],40); h['weight']=np.ones(120)*2; h['weight_volume']=np.ones(120)*.2
-            h.create_group('level_counts')['owned']=[80,160]
+            g=h.create_group('level_counts'); g['owned']=[80,160]; g['level']=[5,6]; g['kept']=[40,80]
             h.attrs.update(iteration=it,pipeline='v2',b2_min=1.,s_v=1.,source='one-run',seed=0,
                            exponent=2.,accuracy=4,epsilon=.001,gamma_K=5/3,C_B_box=5,
                            direction_norm='Eulerian B dot B',horizon_mask=True,time=float(it))
@@ -73,8 +73,8 @@ def test_override_and_strata(tmp_path):
     a.out.mkdir(); scaling=pool.pool(a,rec,quota,a.out)
     with h5py.File(a.out/'pool.h5') as h:
         source=pool.EpochSource(h['scaled'],scaling['strata'],60,42,17)
-        assert source.quotas.tolist()==[10,20,10,20]
         assert sum(len(x) for x in source())==60
+        assert source.quotas.tolist()==[10,20,10,20]
         assert h['scaled'].dtype==np.float64
     assert all(r['pool_quotas']=={5:20,6:40} for r in rec)
 
@@ -109,7 +109,107 @@ def test_end_to_end(tmp_path):
     assert set(m)>={'feature_names','pipeline','etk_analysis_commit','physics','scaler','models',
                     'selection','sample_manifest','aweSOM_commit','input_hashes','verification'}
     for r in m['models']:
-        assert r['verification']['reload_mismatches']==r['verification']['patch_screen_mismatches']==0
+        assert r['verification']['reload_mismatches']==r['verification']['cluster_label_patch_screen_mismatches']==0
         assert r['verification']['scaler_max_abs_error']==0
         assert r['weights_dtype']=='float64'
     assert m['sample_manifest']['held_out_IDs']==['3']
+    # reduced training settings are a rehearsal, never a production manifest
+    assert m['diagnostic_only'] and any(r.startswith('epochs=2') for r in m['diagnostic_reasons'])
+
+
+def test_diagnostic_reasons(tmp_path):
+    base=['--inputs','x.h5','--anchor','1','--held-out','3','--out',str(tmp_path/'o'),'--rows-per-snapshot','10000000',
+          '--rows-per-epoch','20000000']
+    assert pool.diagnostic_reasons(pool.parser().parse_args(base))==[]
+    for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
+                      (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features')]:
+        assert any(r.startswith(key) for r in pool.diagnostic_reasons(pool.parser().parse_args(base+extra))),key
+
+
+def test_rare_levels():
+    data=np.arange(200)
+    strata=[dict(snapshot=str(i//2), start=a, rows=n) for i,(a,n) in enumerate([(0,99),(99,1),(100,99),(199,1)])]
+    a=pool.EpochSource(data,strata,20,42,7)
+    b=pool.EpochSource(data,strata,20,42,7)
+    seen=set()
+    for _ in range(100):
+        x=np.concatenate(list(a())); y=np.concatenate(list(b()))
+        assert np.array_equal(x,y)
+        assert len(np.unique(x))==20
+        assert np.count_nonzero(x<100)==10
+        seen.update(x)
+    assert {99,199} <= seen
+    with pytest.raises(ValueError,match='erase'): pool.allocate([99,1],10)
+    with pytest.raises(ValueError,match='strata'): pool.EpochSource(data,strata,2,42,7)
+
+
+@pytest.mark.parametrize('explained',[False,True])
+def test_missing_extraction_level(tmp_path,explained):
+    paths=inputs(tmp_path); a=args(tmp_path,paths)
+    with h5py.File(paths[0],'r+') as h:
+        h['level'][:]=5
+        h['level_counts/kept'][:]=[120,0] if explained else [40,80]
+    if explained:
+        rec,*_=pool.inspect(a)
+        assert rec[0]['observed_level_counts'][6]==0
+    else:
+        with pytest.raises(ValueError,match='observed count'): pool.inspect(a)
+
+
+def test_export_statistics_exact(tmp_path):
+    from aweSOM.model import distance_quantiles_fast
+    rng=np.random.default_rng(12)
+    raw=rng.normal(size=(1003,7)).astype('f4')
+    nodes=rng.integers(0,9,len(raw),dtype='i4'); labels=nodes%3
+    distances=rng.random(len(raw))
+    q,r,medians=pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'test',29)
+    expected,reject=distance_quantiles_fast(nodes,distances,10)
+    assert np.array_equal(q,expected,equal_nan=True)
+    assert r==reject
+    for c in medians:
+        assert np.array_equal(medians[c],np.median(raw[labels==c].astype('f8'),axis=0))
+    assert not list(tmp_path.glob('*statistics*'))
+
+
+@pytest.mark.parametrize('damage',['none','driver','source','missing'])
+def test_non_git_kit(tmp_path,damage):
+    import shutil
+    paths=inputs(tmp_path); a=args(tmp_path,paths)
+    kit=tmp_path/'kit'; kit.mkdir()
+    driver=kit/'production_pool.py'; shutil.copy2(pool.__file__,driver)
+    source=kit/'aweSOM-src/src/aweSOM'
+    shutil.copytree(ROOT/'src/aweSOM',source,ignore=shutil.ignore_patterns('__pycache__','*.pyc','*.nbc','*.nbi'))
+    manifest=dict(commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+                  files={str(p.relative_to(source)):pool.digest(p) for p in source.rglob('*') if p.is_file()},
+                  driver_sha256=pool.digest(driver))
+    if damage!='missing': (kit/'production_pool-source.json').write_text(json.dumps(manifest))
+    if damage=='driver': driver.write_text(driver.read_text()+'\n# changed\n')
+    if damage=='source':
+        p=source/'__init__.py'; p.write_text(p.read_text()+'\n# changed\n')
+    cmd=[sys.executable,str(driver),'--inputs',*map(str,paths),'--anchor','1','--held-out','3',
+         '--out',str(a.out),'--rows-per-snapshot','60','--rows-per-epoch','60',
+         '--lattices','3x2','--seeds','42','--epochs','1','--chunk','29','--min-free-gb','0']
+    env=dict(os.environ,PYTHONPATH=str(source.parent),PYTHONDONTWRITEBYTECODE='1',
+             NUMBA_CACHE_DIR=str(tmp_path/'cache'))
+    result=subprocess.run(cmd,env=env,capture_output=True,text=True,cwd=kit)
+    if damage=='none':
+        assert result.returncode==0,result.stdout+result.stderr
+        m=json.loads((a.out/'results/freeze-manifest.json').read_text())
+        assert m['aweSOM_commit']==manifest['commit']
+        v=m['models'][0]['verification']
+        assert v['bmu_node_mismatches']==0 and v['bmu_distance_rtol_1e6']
+        assert all(v['saved_components_equal'].values())
+        assert not list((a.out/'results').glob('*-nodes.npy'))
+        assert not list((a.out/'results').glob('*-distances.npy'))
+    else:
+        assert result.returncode!=0 and not a.out.exists()
+        assert ('hash mismatch' if damage!='missing' else 'required outside') in result.stderr
+
+
+def test_disk_scaler_quantiles(tmp_path):
+    x=np.random.default_rng(93).normal(size=(1003,7)).astype('f4')
+    with h5py.File(tmp_path/'pool.h5','w') as h:
+        raw=h.create_dataset('raw',data=x)
+        assert np.array_equal(pool.quantiles(raw),np.percentile(x.astype('f8'),[25,50,75],axis=0))
+        assert np.array_equal(pool.quantiles(raw,13,752),np.percentile(x[13:752].astype('f8'),[25,50,75],axis=0))
+    assert not (tmp_path/'scaler-column.npy').exists()

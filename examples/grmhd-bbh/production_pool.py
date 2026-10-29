@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import multiprocessing as mp
 import os
@@ -60,6 +61,56 @@ def commit(root):
     return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
 
 
+def provenance():
+    """Verify the deployed driver and imported package before creating run outputs."""
+    spec = importlib.util.find_spec('aweSOM')
+    if spec is None or spec.origin is None:
+        raise ValueError('cannot locate imported aweSOM source')
+    source = Path(spec.origin).resolve().parent
+    manifest_path = Path(__file__).with_name('production_pool-source.json')
+    files = {str(p.relative_to(source)): digest(p) for p in source.rglob('*')
+             if p.is_file() and '__pycache__' not in p.parts and p.suffix not in {'.pyc', '.nbc', '.nbi'}}
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if not re.fullmatch(r'[0-9a-f]{40}', manifest['commit']):
+            raise ValueError('invalid source manifest commit')
+        if files != manifest['files'] or digest(Path(__file__)) != manifest['driver_sha256']:
+            raise ValueError('source manifest hash mismatch: aweSOM package or production_pool.py')
+        return manifest['commit']
+    # Only the imported package's own checkout can supply fallback provenance.
+    root = source.parents[1]
+    if not (root / '.git').exists() or Path(__file__).resolve() != root/'examples/grmhd-bbh/production_pool.py':
+        raise ValueError('production_pool-source.json required outside the aweSOM git checkout')
+    return commit(root)
+
+
+def randomized_allocate(counts, total, rng):
+    """Dependent rounding: fixed total, floor/ceil counts, exact marginal means."""
+    c = np.asarray(counts, dtype=np.int64)
+    if total < np.count_nonzero(c) or total > c.sum():
+        raise ValueError('epoch budget smaller than populated strata or exceeds pool')
+    exact = c * (total / int(c.sum()))
+    q = np.floor(exact).astype(np.int64)
+    f = exact-q
+    # Pairwise pivotal rounding preserves each fractional seat's expectation.
+    active = list(np.flatnonzero((f > 0) & (f < 1)))
+    while len(active) >= 2:
+        i, j = active.pop(), active.pop()
+        up, down = min(1-f[i], f[j]), min(f[i], 1-f[j])
+        if rng.random() < down/(up+down):
+            f[i] += up; f[j] -= up
+        else:
+            f[i] -= down; f[j] += down
+        for k in (i,j):
+            if f[k] < 1e-12: f[k] = 0
+            elif f[k] > 1-1e-12: f[k] = 1
+            else: active.append(k)
+    if active: f[active[0]] = total-int(q.sum())-int(np.rint(f).sum()-np.rint(f[active[0]]))
+    q += np.rint(f).astype(np.int64)
+    assert q.sum() == total and np.all(q <= c)
+    return q
+
+
 def validated(path):
     status = path.parent / 'status'
     attempts = sorted(status.iterdir(), key=lambda p: p.stat().st_mtime_ns) if status.exists() else []
@@ -77,6 +128,8 @@ def allocate(counts, total):
     q = np.floor(exact).astype(np.int64)
     order = np.argsort(-(exact-q), kind='stable')
     q[order[:total-int(q.sum())]] += 1
+    if np.any((c > 0) & (q == 0)):
+        raise ValueError('pool thinning would erase a populated level')
     return q
 
 
@@ -102,9 +155,24 @@ def inspect(args):
             for a in range(0, n, args.chunk):
                 lv, ct = np.unique(h['level'][a:a+args.chunk], return_counts=True)
                 for l, c in zip(lv, ct): counts[int(l)] = counts.get(int(l), 0) + int(c)
+            extraction = {k: plain(v[:]) for k,v in h['level_counts'].items()}
+            if 'level' not in extraction:
+                raise ValueError('extraction level_counts must identify levels')
+            levels = extraction['level']
+            if len(set(levels)) != len(levels) or set(counts)-set(levels):
+                raise ValueError('observed levels differ from extraction level_counts')
+            if any(len(v) != len(levels) for v in extraction.values()):
+                raise ValueError('bad extraction level_counts shape')
+            for i, level in enumerate(levels):
+                observed = counts.get(level, 0)
+                if 'kept' in extraction and observed != extraction['kept'][i]:
+                    raise ValueError(f'level {level}: observed count differs from extraction kept')
+                if extraction.get('owned', [0]*len(levels))[i] > 0 and observed == 0:
+                    if 'kept' not in extraction or extraction['kept'][i] != 0:
+                        raise ValueError(f'populated extraction level {level} absent without explanation')
             records.append(dict(path=str(path.resolve()), snapshot=str(attrs['iteration']),
                                 attrs=attrs, names=names, rows=n, counts=counts, status=marker,
-                                extraction_counts={k: plain(v[:]) for k,v in h['level_counts'].items()},
+                                extraction_counts=extraction, observed_level_counts={l: counts.get(l,0) for l in levels},
                                 sha256=digest(path)))
     ids = [r['snapshot'] for r in records]
     if len(set(ids)) != len(ids): raise ValueError('duplicate snapshot IDs')
@@ -143,10 +211,19 @@ def inspect(args):
 
 
 def quantiles(dataset, start=0, stop=None):
-    """One float64 feature column at a time; no second full float64 pool."""
+    """Exact quartiles using one disk-backed column and chunked HDF5 reads."""
     stop = len(dataset) if stop is None else stop
-    return np.stack([np.percentile(np.asarray(dataset[start:stop, j], dtype=np.float64), [25,50,75])
-                     for j in range(dataset.shape[1])], axis=1)
+    path = Path(dataset.file.filename).with_name('scaler-column.npy')
+    column = np.lib.format.open_memmap(path, mode='w+', dtype='f8', shape=(stop-start,))
+    result = []
+    for j in range(dataset.shape[1]):
+        for a in range(start,stop,2**18):
+            column[a-start:min(a+2**18,stop)-start] = dataset[a:min(a+2**18,stop),j]
+        result.append(np.percentile(column, [25,50,75], overwrite_input=True))
+    del column
+    path.unlink()
+    return np.stack(result, axis=1)
+
 
 
 def pool(args, records, quota, out):
@@ -221,13 +298,18 @@ class EpochSource:
         snapshots = list(dict.fromkeys(s['snapshot'] for s in strata))
         if rows > len(data) or rows < len(snapshots) or rows % len(snapshots):
             raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
+        self.rows = rows
+        self.groups = [[i for i,s in enumerate(strata) if s['snapshot'] == snap] for snap in snapshots]
+        if any(rows//len(snapshots) < len(ix) for ix in self.groups):
+            raise ValueError('epoch budget smaller than populated strata per snapshot')
         self.quotas = np.zeros(len(strata), dtype=int)
-        for snap in snapshots:
-            ix = [i for i,s in enumerate(strata) if s['snapshot'] == snap]
-            self.quotas[ix] = allocate([strata[i]['rows'] for i in ix], rows//len(snapshots))
 
     def __call__(self):
         rng = np.random.default_rng([self.seed, self.calls]); self.calls += 1
+        for ix in self.groups:
+            self.quotas[ix] = randomized_allocate([self.strata[i]['rows'] for i in ix],
+                                                  self.rows//len(self.groups), rng)
+
         for s, q in zip(self.strata, self.quotas):
             pos = int(rng.integers(s['rows']))
             while q:
@@ -236,10 +318,54 @@ class EpochSource:
                 q -= n; pos = (pos+n) % s['rows']
 
 
+def grouped_values(keys, values, n_groups, out, chunk):
+    """Counting scatter into one disk-backed float64 buffer; O(chunk+groups) RAM."""
+    counts = np.zeros(n_groups, np.int64)
+    for a in range(0,len(keys),chunk):
+        counts += np.bincount(keys[a:a+chunk], minlength=n_groups)
+    edges = np.r_[0, np.cumsum(counts)]
+    positions = edges[:-1].copy()
+    buf = np.lib.format.open_memmap(out, mode='w+', dtype='f8', shape=(len(keys),))
+    for a in range(0,len(keys),chunk):
+        scatter_values(np.asarray(keys[a:a+chunk]), np.asarray(values[a:a+chunk], dtype='f8'), positions, buf)
+    return buf, edges
+
+
+from numba import njit
+
+@njit(cache=False)
+def scatter_values(keys, values, positions, buf):
+    for i in range(len(keys)):
+        k = keys[i]
+        buf[positions[k]] = values[i]
+        positions[k] += 1
+
+
+def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
+    scratch = out / f'{tag}-statistics.npy'
+    buf, edges = grouped_values(nodes, distances, n_nodes, scratch, chunk)
+    q = np.full(n_nodes, np.nan)
+    for i in range(n_nodes):
+        if edges[i+1] > edges[i]:
+            q[i] = np.percentile(buf[edges[i]:edges[i+1]], 99., overwrite_input=True)
+    reject = float(np.percentile(buf, 99.9, overwrite_input=True))
+    del buf
+    medians = {int(c): [] for a in range(0,len(labels),chunk) for c in np.unique(labels[a:a+chunk])}
+    class Column:
+        def __init__(self, j): self.j = j
+        def __getitem__(self, key): return raw[key,self.j]
+    for j in range(raw.shape[1]):
+        buf, edges = grouped_values(labels, Column(j), int(max(medians))+1, scratch, chunk)
+        for c in medians:
+            medians[c].append(float(np.median(buf[edges[c]:edges[c+1]], overwrite_input=True)))
+        del buf
+    scratch.unlink()
+    return q, reject, medians
+
+
 def fit(args, shape, seed, scaling, out):
     from aweSOM import Lattice, SOMModel, Scaler
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
-    from aweSOM.model import distance_quantiles_fast
     from aweSOM.inference import best_match_nodes_patch
     t = time.perf_counter()
     tag = f'{shape[0]}x{shape[1]}-s{seed}'
@@ -257,22 +383,15 @@ def fit(args, shape, seed, scaling, out):
         nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost).ravel(order='F').astype(np.int32)
         np.save(out / f'{tag}-umat.npy', lat.umat)
         labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
-        nodes = np.empty(len(raw), np.int32); distances = np.empty(len(raw), np.float64)
+        node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
+        nodes = np.lib.format.open_memmap(node_path, mode='w+', dtype='i4', shape=(len(raw),))
+        distances = np.lib.format.open_memmap(distance_path, mode='w+', dtype='f8', shape=(len(raw),))
         for a in range(0, len(raw), args.chunk):
             b = min(a+args.chunk, len(raw))
             nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
-        q, reject = distance_quantiles_fast(nodes, distances, len(w))
+        q, reject, medians = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk)
         del nodes, distances
-        clusters, counts = np.unique(labels, return_counts=True)
-        order = np.argsort(labels, kind='stable')
-        edges = np.r_[0, np.cumsum(counts)]
-        medians = {int(c): [] for c in clusters}
-        for j in range(raw.shape[1]):
-            column = np.asarray(raw[:,j], dtype=np.float64)[order]
-            for i, c in enumerate(clusters):
-                medians[int(c)].append(float(np.median(column[edges[i]:edges[i+1]])))
-        del order, column
         names = NAMES[:raw.shape[1]]
         sheets = [c for c,m in medians.items() if m[2] > args.sheet_chi and m[0] < args.sheet_beta]
         tubes = [c for c,m in medians.items() if m[5] > args.tube_bz and m[0] > args.tube_beta]
@@ -294,7 +413,20 @@ def fit(args, shape, seed, scaling, out):
             scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-scaled[a:a+len(block)]))))
         probe = raw[np.unique(np.linspace(0,len(raw)-1,min(8192,len(raw)),dtype=int))]
         parity = int(np.count_nonzero(loaded.predict(probe,backend='patch') != loaded.predict(probe,backend='screen')))
-        if mismatch or parity or scaler_error > 1e-4: raise RuntimeError('freeze verification failed')
+        from aweSOM.inference import best_match_nodes_screen
+        probe_scaled = loaded.scaler.transform(probe)
+        pn, pd = best_match_nodes_patch(loaded.weights, probe_scaled, *shape)
+        sn, sd = best_match_nodes_screen(loaded.weights, probe_scaled)
+        bmu_mismatches = int(np.count_nonzero(pn != sn))
+        distance_parity = bool(np.allclose(np.sqrt(pd), np.sqrt(sd), rtol=1e-6, atol=0))
+        components = dict(weights=np.array_equal(w,loaded.weights),
+                          scaler=loaded.scaler.kind == scaler.kind and np.array_equal(scaler.offset,loaded.scaler.offset) and np.array_equal(scaler.scale,loaded.scaler.scale),
+                          node_map=np.array_equal(nc,loaded.node_cluster),
+                          distance_quantiles=np.array_equal(q,loaded.node_dist_q99,equal_nan=True),
+                          reject_distance=reject == loaded.reject_distance)
+        if mismatch or parity or scaler_error > 1e-4 or bmu_mismatches or not distance_parity or not all(components.values()):
+            raise RuntimeError('freeze verification failed')
+        node_path.unlink(); distance_path.unlink()
         labels.flush()
     rec = dict(tag=tag, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
@@ -305,7 +437,9 @@ def fit(args, shape, seed, scaling, out):
                sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
                tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
                reject_distance=reject, umat_file=f'{tag}-umat.npy',
-               verification=dict(reload_mismatches=mismatch,patch_screen_mismatches=parity,
+               verification=dict(reload_mismatches=mismatch,cluster_label_patch_screen_mismatches=parity,
+                                 bmu_node_mismatches=bmu_mismatches, bmu_distance_rtol_1e6=distance_parity,
+                                 saved_components_equal=components,
                                  parity_rows=len(probe),scaler_max_abs_error=scaler_error))
     dump(out / f'{tag}.json',rec)
     return plain(rec)
@@ -366,6 +500,21 @@ def parser():
     return p
 
 
+# The approved production training settings (production_pool.sbatch defaults). A run that departs
+# from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
+APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
+                seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
+                r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
+                tube_bz=.7, tube_beta=0.)
+
+
+def diagnostic_reasons(args):
+    reasons=[f'{k}={getattr(args,k)!r}, approved {v!r}' for k,v in APPROVED.items() if getattr(args,k)!=v]
+    if args.allow_independent_thresholds: reasons.append('allow_independent_thresholds')
+    if args.allow_six_features: reasons.append('allow_six_features')
+    return reasons
+
+
 def main(argv=None):
     started = time.perf_counter()
     args = parser().parse_args(argv)
@@ -376,11 +525,11 @@ def main(argv=None):
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
+    args.code_commit = provenance()
     records,quota,disk,mismatches = inspect(args)
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
-    args.code_commit=commit(Path(__file__).resolve().parents[2])
     args.anchor_attrs=next(r['attrs'] for r in records if r['snapshot']==args.anchor)
     out=args.out/'results.partial'; out.mkdir()
     scaling=pool(args,records,quota,out)
@@ -409,12 +558,12 @@ def main(argv=None):
                   sample_manifest=dict(snapshots=records,anchor_ID=args.anchor,held_out_IDs=args.held_out,
                                        held_out_evaluation={'status':'not available','reason':'named snapshots reserved; no held-out feature inputs supplied'},
                                        equal_snapshot_quota=quota,levels='extractor p_l=min(1,c*dx_l**2), then proportional quotas',
-                                       epoch_sampling='exact equal snapshot quotas; largest-remainder level quotas; fresh uniform cyclic window per stratum; callable setup consumes first two draws',
+                                       epoch_sampling='exact equal snapshot quotas; floor level quotas with seeded dependent fractional-seat rounding each epoch; fresh uniform cyclic window per stratum; callable setup consumes first two draws',
                                        extraction_seeds=[r['attrs'].get('seed',UNAVAILABLE) for r in records],
                                        volume_weights='input weight_volume; selected weight hashes recorded; effective inverse probability includes pool quota / extracted count',
                                        row_order_sha256=scaling['row_order_sha256']),
                   aweSOM_commit=args.code_commit,input_hashes={r['path']:r['sha256'] for r in records},disk=disk,
-                  diagnostic_only=bool(args.allow_independent_thresholds or args.allow_six_features),
+                  diagnostic_only=bool(diagnostic_reasons(args)),diagnostic_reasons=diagnostic_reasons(args),
                   threshold_override_mismatches=mismatches,
                   verification={r['tag']:r['verification'] for r in fits})
     dump(out/'freeze-manifest.json',manifest)
@@ -422,4 +571,6 @@ def main(argv=None):
     print(json.dumps(plain(choices)),flush=True)
 
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    if sys.argv[1:] == ['--verify-source-only']: print(provenance())
+    else: main()
