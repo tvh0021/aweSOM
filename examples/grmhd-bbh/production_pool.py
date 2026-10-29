@@ -381,7 +381,7 @@ def fit(args, shape, seed, scaling, out):
         if w.dtype != np.float64 or not np.isfinite(w).all():
             raise RuntimeError('training returned invalid float64 weights')
         lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
-        nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost).ravel(order='F').astype(np.int32)
+        nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
         np.save(out / f'{tag}-umat.npy', lat.umat)
         labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
         node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
@@ -398,7 +398,9 @@ def fit(args, shape, seed, scaling, out):
         sheets = [c for c,m in medians.items() if m[chi] > args.sheet_chi and m[beta] < args.sheet_beta]
         bz = names.index('bz_frac') if 'bz_frac' in names else None
         tubes = [c for c,m in medians.items() if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
-        meta = dict(seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
+        merge_settings = dict(merge_cost_used=lat.merge_cost_used,
+                              target_clusters=args.target_clusters, n_clusters=lat.n_clusters)
+        meta = dict(**merge_settings, seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
                     sheet_clusters=','.join(map(str,sheets)), sheet_rule_statistic='median',
                     sheet_rule=f'median log_chi_B > {args.sheet_chi} and median log_beta_inv < {args.sheet_beta}',
                     tube_clusters=','.join(map(str,tubes)), tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}',
@@ -441,7 +443,7 @@ def fit(args, shape, seed, scaling, out):
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
                training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
-               node_to_cluster=nc, merge_cost=args.merge_cost, cluster_medians=medians,
+               node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, cluster_medians=medians,
                sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
                tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
                reject_distance=reject, umat_file=f'{tag}-umat.npy',
@@ -498,7 +500,8 @@ def parser():
     p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43,44])
     p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
     p.add_argument('--sample-seed',type=int,default=42); p.add_argument('--groups',type=int,default=64)
-    p.add_argument('--merge-cost',type=float,default=.05); p.add_argument('--r-max',type=float); p.add_argument('--r-min',type=float)
+    p.add_argument('--target-clusters',type=int,default=10,help='merge to at most this count; ties may yield fewer')
+    p.add_argument('--merge-cost',type=float,default=.05,help='merge cost floor; keep the selected cost for subsequent training'); p.add_argument('--r-max',type=float); p.add_argument('--r-min',type=float)
     p.add_argument('--bz-weight',type=float,default=2.); p.add_argument('--pol-weight',type=float,default=2.)
     p.add_argument('--sheet-chi',type=float,default=1.); p.add_argument('--sheet-beta',type=float,default=.5)
     p.add_argument('--tube-bz',type=float,default=.7); p.add_argument('--tube-beta',type=float,default=0.)
@@ -511,7 +514,7 @@ def parser():
 # The approved production training settings (production_pool.sbatch defaults). A run that departs
 # from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
 APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
-                seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
+                seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
                 r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
                 tube_bz=.7, tube_beta=0.)
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
