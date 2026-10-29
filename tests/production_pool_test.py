@@ -392,3 +392,41 @@ def alive(pid):
     try: os.kill(pid, 0)
     except ProcessLookupError: return False
     return True
+
+
+@pytest.mark.parametrize('chunk', [1, 29, 1000])
+def test_export_statistics_production_pool_bitwise(tmp_path, monkeypatch, chunk):
+    from production_pool_statistics_reference import export_statistics as old_export
+    paths = inputs(tmp_path); a = args(tmp_path, paths)
+    records, quota, *_ = pool.inspect(a)
+    a.out.mkdir(); pool.pool(a, records, quota, a.out)
+    rng = np.random.default_rng(802)
+    with h5py.File(a.out/'pool.h5') as h:
+        raw = h['raw']
+        assert raw.chunks is None and raw.dtype == np.dtype('f4')
+        nodes = rng.integers(0, 9, len(raw), dtype='i4')
+        labels = np.array([0, 3, 7], dtype='i4')[nodes % 3]
+        distances = rng.random(len(raw))
+        for name, data in [('nodes', nodes), ('labels', labels), ('distances', distances)]:
+            np.save(a.out/f'{name}.npy', data)
+        nodes = np.load(a.out/'nodes.npy', mmap_mode='r')
+        labels = np.load(a.out/'labels.npy', mmap_mode='r')
+        distances = np.load(a.out/'distances.npy', mmap_mode='r')
+        old = old_export(raw, nodes, distances, labels, 10, a.out, 'old', chunk)
+        # Statistics must never create a disk buffer or read individual columns.
+        def no_scratch(*args, **kwargs):
+            raise AssertionError('statistics scratch allocation')
+        monkeypatch.setattr(np.lib.format, 'open_memmap', no_scratch)
+        class RowsOnly:
+            shape = raw.shape
+            dtype = raw.dtype
+            def __len__(self): return len(raw)
+            def __getitem__(self, key):
+                assert isinstance(key, slice)
+                return raw[key]
+        new = pool.export_statistics(RowsOnly(), nodes, distances, labels, 10, a.out, 'new', chunk)
+    assert old[0].tobytes() == new[0].tobytes()
+    assert np.float64(old[1]).tobytes() == np.float64(new[1]).tobytes()
+    assert list(old[2]) == list(new[2])
+    for c in old[2]:
+        assert np.asarray(old[2][c]).tobytes() == np.asarray(new[2][c]).tobytes()

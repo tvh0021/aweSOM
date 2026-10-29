@@ -323,48 +323,60 @@ class EpochSource:
                 q -= n; pos = (pos+n) % s['rows']
 
 
-def grouped_values(keys, values, n_groups, out, chunk):
-    """Counting scatter into one disk-backed float64 buffer; O(chunk+groups) RAM."""
-    counts = np.zeros(n_groups, np.int64)
-    for a in range(0,len(keys),chunk):
-        counts += np.bincount(keys[a:a+chunk], minlength=n_groups)
-    edges = np.r_[0, np.cumsum(counts)]
-    positions = edges[:-1].copy()
-    buf = np.lib.format.open_memmap(out, mode='w+', dtype='f8', shape=(len(keys),))
-    for a in range(0,len(keys),chunk):
-        scatter_values(np.asarray(keys[a:a+chunk]), np.asarray(values[a:a+chunk], dtype='f8'), positions, buf)
-    return buf, edges
-
-
 from numba import njit
 
+
 @njit(cache=False)
-def scatter_values(keys, values, positions, buf):
+def scatter_order(keys, positions, order):
+    """Stable counting-sort permutation, with no comparison-sort workspace."""
     for i in range(len(keys)):
         k = keys[i]
-        buf[positions[k]] = values[i]
+        order[positions[k]] = i
         positions[k] += 1
 
 
+def grouped_order(keys, n_groups):
+    edges = np.r_[0, np.cumsum(np.bincount(keys, minlength=n_groups))]
+    order = np.empty(len(keys), dtype=np.intp)
+    scatter_order(keys, edges[:-1].copy(), order)
+    return order, edges
+
+
 def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
-    scratch = out / f'{tag}-statistics.npy'
-    buf, edges = grouped_values(nodes, distances, n_nodes, scratch, chunk)
+    """Exact float64 statistics with one sequential pass over the raw rows.
+
+    Stable grouping reproduces the old counting scatter's input order, including
+    its per-node partitioning before the global rejection percentile. Keep the
+    float64 column buffer separate from raw so median partitioning cannot change
+    another column. No scratch files are created.
+
+    RAM is O(N*D + N + chunk*D + groups): raw retains its input dtype, one intp
+    permutation and one float64 column are live during feature statistics.
+    See statistics-performance.md for conservative production memory estimates.
+    """
+    order, edges = grouped_order(nodes, n_nodes)
+    buf = np.asarray(distances, dtype='f8')[order]
     q = np.full(n_nodes, np.nan)
     for i in range(n_nodes):
         if edges[i+1] > edges[i]:
             q[i] = np.percentile(buf[edges[i]:edges[i+1]], 99., overwrite_input=True)
     reject = float(np.percentile(buf, 99.9, overwrite_input=True))
-    del buf
-    medians = {int(c): [] for a in range(0,len(labels),chunk) for c in np.unique(labels[a:a+chunk])}
-    class Column:
-        def __init__(self, j): self.j = j
-        def __getitem__(self, key): return raw[key,self.j]
+    del buf, order
+
+    # Copy mapped labels once, then release them before loading the raw matrix.
+    keys = np.array(labels)
+    medians = {int(c): [] for a in range(0,len(keys),chunk) for c in np.unique(keys[a:a+chunk])}
+    order, edges = grouped_order(keys, int(max(medians))+1)
+    del keys
+    values = np.empty(raw.shape, dtype=raw.dtype)
+    for a in range(0, len(raw), chunk):
+        values[a:a+chunk] = raw[a:a+chunk]
+    buf = np.empty(len(raw), dtype='f8')
     for j in range(raw.shape[1]):
-        buf, edges = grouped_values(labels, Column(j), int(max(medians))+1, scratch, chunk)
+        for a in range(0, len(raw), chunk):
+            buf[a:a+chunk] = values[order[a:a+chunk], j]
         for c in medians:
             medians[c].append(float(np.median(buf[edges[c]:edges[c+1]], overwrite_input=True)))
-        del buf
-    scratch.unlink()
     return q, reject, medians
 
 
