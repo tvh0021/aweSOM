@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 
 import h5py
+import numpy as np
 
 from aweSOM.features_grmhd import FeatureThresholds
 
@@ -34,6 +35,15 @@ def text(value):
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
+def plain(value):
+    """Match the historical driver's JSON representation of HDF5 attributes."""
+    if isinstance(value, (np.ndarray, np.generic)):
+        return plain(value.tolist())
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    return value.decode() if isinstance(value, bytes) else value
+
+
 def tool_commit(explicit):
     if explicit is None:
         try:
@@ -47,7 +57,48 @@ def tool_commit(explicit):
     return explicit
 
 
-def patch(model, anchor, output, commit):
+def validate_settings(meta, ref, thresholds, names, allow_missing_settings):
+    """Check the historical driver's saved anchor settings before copying."""
+    try:
+        settings = json.loads(text(meta['feature_settings']))
+        if not isinstance(settings, dict):
+            raise ValueError('expected a JSON object')
+    except (KeyError, ValueError) as exc:
+        if allow_missing_settings:
+            return
+        raise ValueError('missing or invalid feature_settings; '
+                         'supply --allow-missing-settings to proceed') from exc
+
+    # Use the same defaults as FeatureThresholds for omitted anchor attributes.
+    defaults = dict(accuracy=thresholds.accuracy, epsilon=thresholds.epsilon,
+                    pipeline=thresholds.pipeline, scaler_kind=thresholds.scaler_kind,
+                    direction_norm='Eulerian B dot B')
+    fields = {'accuracy', 'epsilon', 'pipeline', 'scaler_kind', 'direction_norm',
+              'b2_min', 's_v', 'exponent', 'gamma_K', 'C_B_box', 'horizon_mask',
+              'zslab', 'hole_boxes', 'horizon_centres', 'horizon_radius',
+              'horizon_mass', 'horizon_spin', 'bh_positions', 'pol_frac_centres',
+              'pol_frac_frame', 'inputs'}
+    name_fields = {'names', 'feature_names', 'columns', 'feature_columns'}
+    for key, saved in settings.items():
+        if key in name_fields:
+            expected = names
+            saved = saved.split() if isinstance(saved, str) else saved
+        elif key == 'winsor':
+            expected = {k: list(v) for k, v in thresholds.winsor.items()}
+            if saved != expected:
+                raise ValueError(f'feature_settings and anchor {key} disagree')
+            continue
+        elif key in fields or key.startswith('winsor_'):
+            if key not in ref.attrs and key not in defaults:
+                raise ValueError(f'feature_settings and anchor {key} disagree')
+            expected = ref.attrs.get(key, defaults.get(key))
+        else:
+            continue
+        if not np.array_equal(saved, plain(expected)):
+            raise ValueError(f'feature_settings and anchor {key} disagree')
+
+
+def patch(model, anchor, output, commit, allow_missing_settings=False):
     """Validate inputs, copy the model, and publish without overwriting a file."""
     model, anchor, output = map(Path, (model, anchor, output))
     if output.exists() or output.is_symlink():
@@ -68,6 +119,7 @@ def patch(model, anchor, output, commit):
             raise ValueError('model and anchor feature names disagree')
         thresholds.feature_names = names
         thresholds.__post_init__()
+        validate_settings(meta, ref, thresholds, names, allow_missing_settings)
         additions = thresholds.to_metadata()
         for key, value in additions.items():
             if key in meta and text(meta[key]) != value:
@@ -77,8 +129,10 @@ def patch(model, anchor, output, commit):
                 raise ValueError(f'v2 forbids existing metadata: {key}')
         if 'metadata_patched_by' in meta:
             raise ValueError('model already has metadata_patched_by')
-    additions['metadata_patched_by'] = json.dumps(dict(
-        tool_commit=commit, input_model_sha256=model_hash, anchor_sha256=anchor_hash), sort_keys=True)
+    provenance = dict(tool_commit=commit, input_model_sha256=model_hash, anchor_sha256=anchor_hash)
+    if allow_missing_settings:
+        provenance['allow_missing_settings'] = True
+    additions['metadata_patched_by'] = json.dumps(provenance, sort_keys=True)
     # Build beside the destination, then use a hard link for atomic no-clobber
     # publication. Copying bytes preserves datasets, including NaN payloads.
     fd, temporary = tempfile.mkstemp(prefix=f'.{output.name}.', suffix='.partial', dir=output.parent)
@@ -100,9 +154,12 @@ def main(argv=None):
     parser.add_argument('--anchor', type=Path, required=True)
     parser.add_argument('-o', '--output', type=Path, required=True)
     parser.add_argument('--tool-commit', help='full tool commit SHA; required in a non-git kit')
+    parser.add_argument('--allow-missing-settings', action='store_true',
+                        help='allow absent or invalid saved feature_settings; recorded in provenance')
     args = parser.parse_args(argv)
     try:
-        patch(args.model, args.anchor, args.output, tool_commit(args.tool_commit))
+        patch(args.model, args.anchor, args.output, tool_commit(args.tool_commit),
+              allow_missing_settings=args.allow_missing_settings)
     except (ValueError, KeyError, OSError) as exc:
         parser.exit(1, f'patch refused: {exc}\n')
     print(args.output)

@@ -188,3 +188,96 @@ def test_invalid_tool_commit(historical, tmp_path):
     result = run_patch(old, anchor, output, '--tool-commit', 'unknown')
     assert result.returncode != 0 and 'full 40-character' in result.stderr
     assert not output.exists()
+
+
+@pytest.mark.parametrize('key,value', [
+    ('accuracy', 2), ('epsilon', .002),
+    ('direction_norm', 'other'), ('pipeline', 'v1'),
+    ('scaler_kind', 'manual'), ('b2_min', 2.), ('s_v', 2.),
+    ('winsor_log_chi_B', [-1., 1.]), ('winsor_quantiles', [.01, .99]),
+    ('feature_names', ['wrong']), ('columns', 'wrong'), ('names', ['wrong']),
+    ('exponent', 3.), ('gamma_K', 1.4), ('C_B_box', 6.),
+])
+@pytest.mark.parametrize('override', [False, True])
+def test_saved_settings_mismatch_refused(historical, tmp_path, key, value, override):
+    import shutil
+    old, _, anchor, _ = historical
+    model = tmp_path / 'model.h5'
+    shutil.copyfile(old, model)
+    with h5py.File(model, 'r+') as h:
+        settings = json.loads(h['metadata'].attrs['feature_settings'])
+        settings[key] = value
+        h['metadata'].attrs['feature_settings'] = json.dumps(settings)
+    before = sha(model), sha(anchor)
+    output = tmp_path / 'rejected.h5'
+    result = run_patch(model, anchor, output,
+                       *(['--allow-missing-settings'] if override else []))
+    assert result.returncode != 0
+    assert 'feature_settings' in result.stderr and key in result.stderr
+    assert not output.exists()
+    assert not list(tmp_path.glob('.*.partial'))
+    assert (sha(model), sha(anchor)) == before
+
+
+@pytest.mark.parametrize('settings', [None, '{garbled', '[]', 'null'])
+@pytest.mark.parametrize('override', [False, True])
+def test_unavailable_saved_settings_require_explicit_override(historical, tmp_path, settings, override):
+    import shutil
+    old, _, anchor, _ = historical
+    model = tmp_path / 'model.h5'
+    shutil.copyfile(old, model)
+    with h5py.File(model, 'r+') as h:
+        if settings is None:
+            del h['metadata'].attrs['feature_settings']
+        else:
+            h['metadata'].attrs['feature_settings'] = settings
+    before = sha(model), sha(anchor)
+    output = tmp_path / 'patched.h5'
+    result = run_patch(model, anchor, output,
+                       *(['--allow-missing-settings'] if override else []))
+    if override:
+        assert result.returncode == 0, result.stderr
+        patched = SOMModel.load(output)
+        assert FeatureThresholds.from_model(patched).accuracy == 4
+        record = json.loads(patched.metadata['metadata_patched_by'])
+        assert record['allow_missing_settings'] is True
+    else:
+        assert result.returncode != 0
+        assert 'feature_settings' in result.stderr
+        assert '--allow-missing-settings' in result.stderr
+        assert not output.exists()
+    assert not list(tmp_path.glob('.*.partial'))
+    assert (sha(model), sha(anchor)) == before
+
+
+def test_saved_settings_accept_equivalent_hdf5_bytes(historical, tmp_path):
+    import shutil
+    old, _, anchor, _ = historical
+    model, ref = tmp_path / 'model.h5', tmp_path / 'anchor.h5'
+    shutil.copyfile(old, model)
+    shutil.copyfile(anchor, ref)
+    with h5py.File(model, 'r+') as m, h5py.File(ref, 'r+') as a:
+        a.attrs['inputs'] = np.array(['Bx', 'By'], dtype='S')
+        settings = json.loads(m['metadata'].attrs['feature_settings'])
+        settings.update(inputs=['Bx', 'By'], feature_names=list(SEVEN_FEATURE_NAMES),
+                        columns=' '.join(SEVEN_FEATURE_NAMES), winsor={},
+                        scaler_kind='median-iqr')
+        m['metadata'].attrs['feature_settings'] = json.dumps(settings)
+    output = tmp_path / 'patched.h5'
+    result = run_patch(model, ref, output)
+    assert result.returncode == 0, result.stderr
+    assert FeatureThresholds.from_model(SOMModel.load(output)).accuracy == 4
+
+
+def test_review_accuracy_anchor_mismatch(historical, tmp_path):
+    import shutil
+    old, _, anchor, _ = historical
+    ref = tmp_path / 'accuracy2.h5'
+    shutil.copyfile(anchor, ref)
+    with h5py.File(ref, 'r+') as h:
+        h.attrs['accuracy'] = 2
+    output = tmp_path / 'rejected.h5'
+    result = run_patch(old, ref, output)
+    assert result.returncode != 0
+    assert 'feature_settings' in result.stderr and 'accuracy' in result.stderr
+    assert not output.exists()
