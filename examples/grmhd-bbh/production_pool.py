@@ -1,0 +1,425 @@
+"""Train and verify frozen SOMs from equal, level-stratified snapshot quotas.
+
+Inputs are read only. Outputs require a fresh directory. See --help for overrides.
+The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import multiprocessing as mp
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import time
+import traceback
+
+sys.dont_write_bytecode = True
+import h5py
+import numpy as np
+
+NAMES = ['log_beta_inv', 'log_theta', 'log_chi_B', 'log_grad_ln_b2',
+         'asinh_div_v', 'bz_frac', 'pol_frac']
+UNAVAILABLE = {'status': 'not available', 'reason': 'not recorded by the extraction'}
+
+
+def plain(x):
+    if isinstance(x, dict): return {str(k): plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)): return [plain(v) for v in x]
+    if isinstance(x, np.ndarray): return plain(x.tolist())
+    if isinstance(x, np.generic): return plain(x.item())
+    if isinstance(x, bytes): return x.decode()
+    if isinstance(x, float) and not np.isfinite(x): return None
+    return x
+
+
+def dump(path, data):
+    tmp = Path(str(path) + '.partial')
+    with tmp.open('x') as f:
+        json.dump(plain(data), f, indent=2, allow_nan=False)
+    publish(tmp, path)
+
+
+def publish(tmp, path):
+    os.link(tmp, path)  # atomic, refuses existing target
+    Path(tmp).unlink()
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(8 << 20), b''): h.update(block)
+    return h.hexdigest()
+
+
+def commit(root):
+    return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+
+
+def validated(path):
+    status = path.parent / 'status'
+    attempts = sorted(status.iterdir(), key=lambda p: p.stat().st_mtime_ns) if status.exists() else []
+    latest = attempts[-1] / 'final.tsv' if attempts else None
+    if latest is None or not latest.is_file() or latest.read_text().split('\t')[:2] != ['VALIDATED', '0']:
+        raise ValueError(f'Bad status: latest extraction must be VALIDATED/0: {path}')
+    return str(latest)
+
+
+def allocate(counts, total):
+    """Largest-remainder quotas, retaining the extractor's selected distribution."""
+    c = np.asarray(counts, dtype=np.int64)
+    if total > c.sum() or total < 0: raise ValueError('quota exceeds available rows')
+    exact = c * (total / int(c.sum()))
+    q = np.floor(exact).astype(np.int64)
+    order = np.argsort(-(exact-q), kind='stable')
+    q[order[:total-int(q.sum())]] += 1
+    return q
+
+
+def inspect(args):
+    records = []
+    for path in args.inputs:
+        if not path.is_file(): raise ValueError(f'Missing input: {path}')
+        marker = validated(path)
+        with h5py.File(path, 'r') as h:
+            attrs = plain(dict(h.attrs))
+            names = plain(h['names'][:])
+            expected = NAMES[:6] if args.allow_six_features else NAMES
+            if names != expected: raise ValueError(f'feature names differ: {path}: {names}')
+            if attrs.get('pipeline') != 'v2': raise ValueError(f'pipeline differs: {path}')
+            for key in ['b2_min', 's_v']:
+                if not np.isfinite(attrs.get(key, np.nan)) or attrs[key] <= 0:
+                    raise ValueError(f'missing or invalid {key}: {path}')
+            n = len(h['features'])
+            if not n or h['features'].shape != (n, len(names)): raise ValueError('bad feature shape')
+            for key in ['level', 'weight', 'weight_volume']:
+                if h[key].shape != (n,): raise ValueError(f'bad {key} shape')
+            counts = {}
+            for a in range(0, n, args.chunk):
+                lv, ct = np.unique(h['level'][a:a+args.chunk], return_counts=True)
+                for l, c in zip(lv, ct): counts[int(l)] = counts.get(int(l), 0) + int(c)
+            records.append(dict(path=str(path.resolve()), snapshot=str(attrs['iteration']),
+                                attrs=attrs, names=names, rows=n, counts=counts, status=marker,
+                                extraction_counts={k: plain(v[:]) for k,v in h['level_counts'].items()},
+                                sha256=digest(path)))
+    ids = [r['snapshot'] for r in records]
+    if len(set(ids)) != len(ids): raise ValueError('duplicate snapshot IDs')
+    if set(ids) & set(args.held_out): raise ValueError('held-out snapshot appears in training inputs')
+    if len(records) < 2: raise ValueError('pool needs at least two snapshots')
+    anchor = next((r for r in records if r['snapshot'] == args.anchor), None)
+    if anchor is None: raise ValueError('anchor must be a training input')
+    mismatches = []
+    # Matching names/pipeline are mandatory even in the legacy diagnostic override.
+    for r in records:
+        for key in ['b2_min', 's_v', 'accuracy', 'epsilon', 'exponent', 'gamma_K',
+                    'C_B_box', 'direction_norm', 'horizon_mask', 'zslab', 'hole_boxes', 'winsor_quantiles']:
+            if r['attrs'].get(key) != anchor['attrs'].get(key):
+                mismatches.append([r['snapshot'], key, r['attrs'].get(key), anchor['attrs'].get(key)])
+        origin = r['attrs'].get('thresholds_from')
+        if origin and Path(origin).name != Path(anchor['path']).name:
+            raise ValueError(f'thresholds_from names a different anchor: {origin}')
+        # Extractor index names include the segment, which changes across time.
+        def run_identity(record):
+            return re.sub(r'_\d{4}_som\.json$', '_som.json', str(record['attrs'].get('source')))
+        if run_identity(r) != run_identity(anchor):
+            raise ValueError('inputs must name one simulation source')
+    if mismatches and not args.allow_independent_thresholds:
+        raise ValueError(f'mismatched thresholds/settings: {mismatches}')
+    quota = min(r['rows'] for r in records) if args.rows_per_snapshot is None else args.rows_per_snapshot
+    if quota <= 0 or any(quota > r['rows'] for r in records): raise ValueError('invalid snapshot quota')
+    rows = quota * len(records)
+    epoch_rows = args.rows_per_epoch or rows
+    if epoch_rows < len(records) or epoch_rows > rows or epoch_rows % len(records):
+        raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
+    # Raw float32 + scaled float64 + three label vectors, distance scratch and margin.
+    need = max(args.min_free_gb*1e9, rows*(len(NAMES)*12 + 40) + 1e9)
+    free = shutil.disk_usage(args.out.parent).free
+    if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
+    return records, quota, dict(free_bytes=free, required_bytes=need), mismatches
+
+
+def quantiles(dataset, start=0, stop=None):
+    """One float64 feature column at a time; no second full float64 pool."""
+    stop = len(dataset) if stop is None else stop
+    return np.stack([np.percentile(np.asarray(dataset[start:stop, j], dtype=np.float64), [25,50,75])
+                     for j in range(dataset.shape[1])], axis=1)
+
+
+def pool(args, records, quota, out):
+    strata, order_hash = [], hashlib.sha256()
+    with h5py.File(out / 'pool.h5', 'x') as dst:
+        raw = dst.create_dataset('raw', (quota*len(records), len(records[0]['names'])), dtype='f4')
+        offset = 0
+        for rec in records:
+            levels = sorted(rec['counts'])
+            quotas = allocate([rec['counts'][l] for l in levels], quota)
+            rec['pool_quotas'] = dict(zip(levels, map(int, quotas)))
+            with h5py.File(rec['path'], 'r') as src:
+                for level, q in zip(levels, quotas):
+                    start, remaining, wanted = offset, rec['counts'][level], int(q)
+                    rng = np.random.default_rng([args.sample_seed, int(rec['snapshot']), level])
+                    wh = hashlib.sha256()
+                    weight_summary = {}
+                    for a in range(0, rec['rows'], args.chunk):
+                        ix = np.flatnonzero(src['level'][a:a+args.chunk] == level)
+                        take = int(rng.hypergeometric(len(ix), remaining-len(ix), wanted)) if remaining else 0
+                        remaining -= len(ix); wanted -= take
+                        chosen = np.sort(rng.choice(ix, take, replace=False))
+                        if take:
+                            block = src['features'][a:a+args.chunk][chosen]
+                            if not np.isfinite(block).all(): raise ValueError('non-finite pool features')
+                            raw[offset:offset+take] = block
+                            order_hash.update(np.asarray(chosen+a, dtype='<i8').tobytes())
+                            for key in ['weight', 'weight_volume']:
+                                values = src[key][a:a+args.chunk][chosen]
+                                wh.update(values.tobytes())
+                                entry = weight_summary.setdefault(key, dict(sum=0., min=float(values.min()), max=float(values.max())))
+                                entry['sum'] += float(values.sum(dtype=np.float64))
+                                entry['min'] = min(entry['min'], float(values.min()))
+                                entry['max'] = max(entry['max'], float(values.max()))
+                            offset += take
+                    assert wanted == 0 and offset-start == q
+                    if q: strata.append(dict(snapshot=rec['snapshot'], level=level, start=start, rows=int(q)))
+                    rec.setdefault('selected_weight_hashes', {})[str(level)] = wh.hexdigest()
+                    rec.setdefault('per_level_sampling', {})[str(level)] = dict(
+                        extracted_rows=rec['counts'][level], pooled_rows=int(q),
+                        pooling_probability=float(q / rec['counts'][level]),
+                        extraction_probability=1/weight_summary['weight']['min'] if q else UNAVAILABLE,
+                        selected_weights=weight_summary,
+                        effective_weight_multiplier=float(rec['counts'][level]/q) if q else UNAVAILABLE)
+        q = quantiles(raw); center, unweighted = q[1], q[2]-q[0]
+        from aweSOM.model import Scaler
+        feature_weights = np.array([args.bz_weight if n == 'bz_frac' else
+                                    args.pol_weight if n == 'pol_frac' else 1
+                                    for n in records[0]['names']])
+        scaler = Scaler('median-iqr', center, unweighted / feature_weights)
+        drift = []
+        for i, rec in enumerate(records):
+            sq = quantiles(raw, i*quota, (i+1)*quota)
+            # Median drift relative to |pooled median|, with pooled IQR as zero guard.
+            md = np.abs(sq[1]-center)/np.maximum(np.abs(center), np.maximum(unweighted, 1e-30)*1e-12)
+            iq = np.abs(sq[2]-sq[0]-unweighted)/np.maximum(unweighted, 1e-30)
+            drift.append(dict(snapshot=rec['snapshot'], median_relative=md, iqr_relative=iq,
+                              flagged_features=np.array(records[0]['names'])[np.maximum(md,iq)>.05].tolist(),
+                              quantiles=sq))
+        scaled = dst.create_dataset('scaled', raw.shape, dtype='f8')
+        for a in range(0, len(raw), args.chunk): scaled[a:a+args.chunk] = scaler.transform(raw[a:a+args.chunk])
+    return dict(center=center, scale=scaler.scale, scale_unweighted=unweighted,
+                feature_weights=feature_weights, kind='median-iqr', drift=drift,
+                strata=strata, row_order_sha256=order_hash.hexdigest())
+
+
+class EpochSource:
+    """Fresh cyclic windows per physical stratum; exact equal snapshot budgets."""
+    def __init__(self, data, strata, rows, seed, chunk):
+        self.data, self.strata, self.seed, self.chunk = data, strata, seed, chunk
+        self.calls = 0
+        snapshots = list(dict.fromkeys(s['snapshot'] for s in strata))
+        if rows > len(data) or rows < len(snapshots) or rows % len(snapshots):
+            raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
+        self.quotas = np.zeros(len(strata), dtype=int)
+        for snap in snapshots:
+            ix = [i for i,s in enumerate(strata) if s['snapshot'] == snap]
+            self.quotas[ix] = allocate([strata[i]['rows'] for i in ix], rows//len(snapshots))
+
+    def __call__(self):
+        rng = np.random.default_rng([self.seed, self.calls]); self.calls += 1
+        for s, q in zip(self.strata, self.quotas):
+            pos = int(rng.integers(s['rows']))
+            while q:
+                n = min(int(q), self.chunk, s['rows']-pos)
+                yield self.data[s['start']+pos:s['start']+pos+n]
+                q -= n; pos = (pos+n) % s['rows']
+
+
+def fit(args, shape, seed, scaling, out):
+    from aweSOM import Lattice, SOMModel, Scaler
+    from aweSOM.stream import train_batch_stream, peak_rss_bytes
+    from aweSOM.model import distance_quantiles_fast
+    from aweSOM.inference import best_match_nodes_patch
+    t = time.perf_counter()
+    tag = f'{shape[0]}x{shape[1]}-s{seed}'
+    scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
+    with h5py.File(out / 'pool.h5', 'r') as h:
+        raw, scaled = h['raw'], h['scaled']
+        source = EpochSource(scaled, scaling['strata'], args.rows_per_epoch or len(raw), args.sample_seed, args.chunk)
+        w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
+                                    bmu='patch', seed=seed, groups=args.groups, r_max=args.r_max,
+                                    r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
+                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True)
+        if w.dtype != np.float64 or not np.isfinite(w).all():
+            raise RuntimeError('training returned invalid float64 weights')
+        lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
+        nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost).ravel(order='F').astype(np.int32)
+        np.save(out / f'{tag}-umat.npy', lat.umat)
+        labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
+        nodes = np.empty(len(raw), np.int32); distances = np.empty(len(raw), np.float64)
+        for a in range(0, len(raw), args.chunk):
+            b = min(a+args.chunk, len(raw))
+            nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
+            labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
+        q, reject = distance_quantiles_fast(nodes, distances, len(w))
+        del nodes, distances
+        clusters, counts = np.unique(labels, return_counts=True)
+        order = np.argsort(labels, kind='stable')
+        edges = np.r_[0, np.cumsum(counts)]
+        medians = {int(c): [] for c in clusters}
+        for j in range(raw.shape[1]):
+            column = np.asarray(raw[:,j], dtype=np.float64)[order]
+            for i, c in enumerate(clusters):
+                medians[int(c)].append(float(np.median(column[edges[i]:edges[i+1]])))
+        del order, column
+        names = NAMES[:raw.shape[1]]
+        sheets = [c for c,m in medians.items() if m[2] > args.sheet_chi and m[0] < args.sheet_beta]
+        tubes = [c for c,m in medians.items() if m[5] > args.tube_bz and m[0] > args.tube_beta]
+        meta = dict(seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
+                    sheet_clusters=','.join(map(str,sheets)), sheet_rule_statistic='median',
+                    sheet_rule=f'median log_chi_B > {args.sheet_chi} and median log_beta_inv < {args.sheet_beta}',
+                    tube_clusters=','.join(map(str,tubes)), tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}',
+                    feature_settings=json.dumps(plain(args.anchor_attrs)),
+                    feature_weights=json.dumps(plain(scaling['feature_weights'])),
+                    b2_min=str(args.anchor_attrs['b2_min']), s_v=str(args.anchor_attrs['s_v']),
+                    pipeline='v2', freeze_manifest='freeze-manifest.json', aweSOM_commit=args.code_commit)
+        model = SOMModel(*shape,w,nc,names,scaler,q,reject,metadata=meta)
+        temp = out / f'{tag}.partial.h5'; model.save(temp); publish(temp,out / f'{tag}.h5')
+        loaded = SOMModel.load(out / f'{tag}.h5')
+        mismatch = parity = 0; scaler_error = 0.
+        for a in range(0,len(raw),args.chunk):
+            block = raw[a:a+args.chunk]
+            mismatch += int(np.count_nonzero(loaded.predict(block,backend='patch') != labels[a:a+len(block)]))
+            scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-scaled[a:a+len(block)]))))
+        probe = raw[np.unique(np.linspace(0,len(raw)-1,min(8192,len(raw)),dtype=int))]
+        parity = int(np.count_nonzero(loaded.predict(probe,backend='patch') != loaded.predict(probe,backend='screen')))
+        if mismatch or parity or scaler_error > 1e-4: raise RuntimeError('freeze verification failed')
+        labels.flush()
+    rec = dict(tag=tag, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
+               epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
+               chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
+               training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
+               weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
+               node_to_cluster=nc, merge_cost=args.merge_cost, cluster_medians=medians,
+               sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
+               tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
+               reject_distance=reject, umat_file=f'{tag}-umat.npy',
+               verification=dict(reload_mismatches=mismatch,patch_screen_mismatches=parity,
+                                 parity_rows=len(probe),scaler_max_abs_error=scaler_error))
+    dump(out / f'{tag}.json',rec)
+    return plain(rec)
+
+
+def worker(conn, *args):
+    try: conn.send(('ok',fit(*args)))
+    except BaseException: conn.send(('error',traceback.format_exc()))
+    finally: conn.close()
+
+
+def isolated(*args):
+    ctx = mp.get_context('spawn'); receive, send = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=worker,args=(send,*args)); process.start(); send.close()
+    try: status, result = receive.recv()
+    except EOFError: status, result = 'error', 'worker exited without result'
+    process.join(); receive.close()
+    if status != 'ok' or process.exitcode: raise RuntimeError(result)
+    return result
+
+
+def agreement(a,b,chunk=2**21):
+    """Optimal one-to-one cluster relabelling, divided by all pool rows."""
+    from scipy.optimize import linear_sum_assignment
+    matrix = np.zeros((int(a.max())+1,int(b.max())+1),np.int64)
+    for i in range(0,len(a),chunk): np.add.at(matrix,(a[i:i+chunk],b[i:i+chunk]),1)
+    x,y = linear_sum_assignment(matrix,maximize=True)
+    return float(matrix[x,y].sum()/len(a))
+
+
+def medoid(paths,chunk):
+    arrays = [np.load(p,mmap_mode='r') for p in paths]
+    matrix = np.eye(len(arrays))
+    for i in range(len(arrays)):
+        for j in range(i): matrix[i,j] = matrix[j,i] = agreement(arrays[i],arrays[j],chunk)
+    means = (matrix.sum(axis=1)-1)/max(1,len(arrays)-1)
+    return int(means.argmax()), dict(pairwise_agreement=matrix,mean_agreement=means,
+                                    band=[float(matrix[np.triu_indices(len(arrays),1)].min()),
+                                          float(matrix[np.triu_indices(len(arrays),1)].max())] if len(arrays)>1 else [1,1])
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--inputs',type=Path,nargs='+',required=True)
+    p.add_argument('--anchor',required=True); p.add_argument('--held-out',nargs='+',required=True)
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
+    p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43,44])
+    p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
+    p.add_argument('--sample-seed',type=int,default=42); p.add_argument('--groups',type=int,default=64)
+    p.add_argument('--merge-cost',type=float,default=.05); p.add_argument('--r-max',type=float); p.add_argument('--r-min',type=float)
+    p.add_argument('--bz-weight',type=float,default=2.); p.add_argument('--pol-weight',type=float,default=2.)
+    p.add_argument('--sheet-chi',type=float,default=1.); p.add_argument('--sheet-beta',type=float,default=.5)
+    p.add_argument('--tube-bz',type=float,default=.7); p.add_argument('--tube-beta',type=float,default=0.)
+    p.add_argument('--min-free-gb',type=float,default=10)
+    p.add_argument('--allow-independent-thresholds',action='store_true',help='diagnostic only; manifest cannot be production accepted')
+    p.add_argument('--allow-six-features',action='store_true',help='legacy local rehearsal only')
+    return p
+
+
+def main(argv=None):
+    started = time.perf_counter()
+    args = parser().parse_args(argv)
+    if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
+    if args.chunk < 1 or args.epochs < 1 or not args.seeds: raise ValueError('invalid training settings')
+    if not all(np.isfinite(v) and v > 0 for v in [args.bz_weight,args.pol_weight]):
+        raise ValueError('feature weights must be finite and positive')
+    shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
+    if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
+    if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
+    records,quota,disk,mismatches = inspect(args)
+    args.out.mkdir()
+    os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
+    os.environ['PYTHONDONTWRITEBYTECODE']='1'
+    args.code_commit=commit(Path(__file__).resolve().parents[2])
+    args.anchor_attrs=next(r['attrs'] for r in records if r['snapshot']==args.anchor)
+    out=args.out/'results.partial'; out.mkdir()
+    scaling=pool(args,records,quota,out)
+    fits=[]; choices=[]
+    for shape in shapes:
+        trio=[isolated(args,shape,seed,scaling,out) for seed in args.seeds]
+        idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
+        chosen=trio[idx]
+        os.link(out/f"{chosen['tag']}.h5",out/f'frozen-{shape[0]}x{shape[1]}.h5')
+        choices.append(dict(shape=shape,medoid_seed=chosen['seed'],model=f'frozen-{shape[0]}x{shape[1]}.h5',**band))
+        fits.extend(trio)
+    attrs=args.anchor_attrs
+    physics={k:attrs.get(k,UNAVAILABLE) for k in ['b2_min','s_v','accuracy','epsilon','exponent','gamma_K','C_B_box',
+                                               'direction_norm','horizon_mask','horizon_centres','horizon_radius','horizon_mass','horizon_spin']}
+    physics['winsor']='none'
+    extraction_commit=attrs.get('git_commit','unknown')
+    from aweSOM.stream import peak_rss_bytes
+    manifest=dict(schema_version=1,feature_names=records[0]['names'],pipeline='v2',
+                  end_to_end_wall_seconds=time.perf_counter()-started,
+                  parent_peak_rss_bytes=peak_rss_bytes(),
+                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+max(r['peak_rss_bytes'] for r in fits),
+                  implementation_sha256=digest(Path(__file__)),
+                  etk_analysis_commit=extraction_commit if extraction_commit!='unknown' else UNAVAILABLE,
+                  current_local_etk_checkout_commit=commit('/Volumes/ExternalNVMe/etk-analysis') if Path('/Volumes/ExternalNVMe/etk-analysis/.git').exists() else UNAVAILABLE,
+                  physics=physics,scaler=scaling,models=fits,selection=choices,
+                  sample_manifest=dict(snapshots=records,anchor_ID=args.anchor,held_out_IDs=args.held_out,
+                                       held_out_evaluation={'status':'not available','reason':'named snapshots reserved; no held-out feature inputs supplied'},
+                                       equal_snapshot_quota=quota,levels='extractor p_l=min(1,c*dx_l**2), then proportional quotas',
+                                       epoch_sampling='exact equal snapshot quotas; largest-remainder level quotas; fresh uniform cyclic window per stratum; callable setup consumes first two draws',
+                                       extraction_seeds=[r['attrs'].get('seed',UNAVAILABLE) for r in records],
+                                       volume_weights='input weight_volume; selected weight hashes recorded; effective inverse probability includes pool quota / extracted count',
+                                       row_order_sha256=scaling['row_order_sha256']),
+                  aweSOM_commit=args.code_commit,input_hashes={r['path']:r['sha256'] for r in records},disk=disk,
+                  diagnostic_only=bool(args.allow_independent_thresholds or args.allow_six_features),
+                  threshold_override_mismatches=mismatches,
+                  verification={r['tag']:r['verification'] for r in fits})
+    dump(out/'freeze-manifest.json',manifest)
+    os.rename(out,args.out/'results')
+    print(json.dumps(plain(choices)),flush=True)
+
+
+if __name__=='__main__': main()

@@ -13,7 +13,7 @@ The scaler is frozen from the training file. Two choices:
   float32, so these differ from what the lattice saw (by up to 0.04 in scaled
   units for the 10^7-row BBH file); use only for a sensitivity check.
 
-Sheet clusters are chosen by a rule on each cluster's mean features over the
+Sheet clusters are chosen by a rule on each cluster's median features over the
 training rows (default ``log_chi_B>0.3,log_beta_inv<0.5``, the criterion of
 ``etk-analysis/som_results/README.md`` section 9), or given with ``--sheet-clusters``.
 
@@ -56,6 +56,14 @@ def parse_rule(text):
         else:
             raise ValueError(f"cannot parse rule term {part!r}")
     return out
+
+
+def select_sheet_clusters(table, rule_text):
+    """Apply the physical rule to cluster medians, never cluster means."""
+    rule = parse_rule(rule_text)
+    return [c for c, row in table.items()
+            if all((row["median"][n] > v) if op == ">" else
+                   (row["median"][n] < v) for n, op, v in rule)]
 
 
 def main(argv=None):
@@ -143,14 +151,13 @@ def main(argv=None):
             "share_volume": float(weight_volume[m].sum() / weight_volume.sum()),
             "share_sample_per_level": {int(L): float(m[level == L].mean()) for L in np.unique(level)},
             "mean": {n: float(X[m, k].mean()) for k, n in enumerate(names)},
+            "median": {n: float(np.median(X[m, k])) for k, n in enumerate(names)},
         }
     if args.sheet_clusters:
         sheet = sorted(int(c) for c in args.sheet_clusters.split(","))
         rule_text = "given"
     else:
-        rule = parse_rule(args.sheet_rule)
-        sheet = [c for c, row in table.items()
-                 if all((row["mean"][n] > v) if op == ">" else (row["mean"][n] < v) for n, op, v in rule)]
+        sheet = select_sheet_clusters(table, args.sheet_rule)
         rule_text = args.sheet_rule
     print(f"sheet clusters ({rule_text}): {sheet}", flush=True)
     for c, row in table.items():
@@ -167,6 +174,7 @@ def main(argv=None):
         "umat_mode": args.umat,
         "sheet_clusters": ",".join(map(str, sheet)),
         "sheet_rule": rule_text,
+        "sheet_rule_statistic": "median",
     }
     from aweSOM.features_grmhd import FeatureThresholds
     meta.update(FeatureThresholds.from_h5(args.training_file).to_metadata())
