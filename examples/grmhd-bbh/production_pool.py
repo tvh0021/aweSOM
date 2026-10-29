@@ -5,6 +5,8 @@ The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import copy
 import argparse
 import hashlib
 import importlib.util
@@ -20,6 +22,9 @@ import time
 import traceback
 
 sys.dont_write_bytecode = True
+# Bound native libraries before NumPy is imported, including in spawned workers.
+for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
+    os.environ[_key] = '1'
 import h5py
 import numpy as np
 
@@ -364,12 +369,52 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
     return q, reject, medians
 
 
+class PhaseClock:
+    """Emit completed stages immediately, even if a later stage never finishes."""
+    def __init__(self, tag):
+        self.tag, self.records = tag, {}
+        self.wall, self.cpu = time.perf_counter(), time.process_time()
+
+    def finish(self, stage):
+        wall, cpu = time.perf_counter(), time.process_time()
+        self.records[stage] = dict(wall_seconds=wall-self.wall, cpu_seconds=cpu-self.cpu)
+        print(json.dumps(dict(tag=self.tag, stage=stage, **self.records[stage])), flush=True)
+        self.wall, self.cpu = wall, cpu
+
+
+def thread_budget(args):
+    """Split the allocation without exceeding Numba's startup thread ceiling."""
+    import numba
+    available = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    allocated = int(os.environ.get('SLURM_CPUS_PER_TASK', available))
+    workers = min(args.seed_workers, len(args.seeds))
+    threads = args.threads_per_seed
+    if threads is None:
+        threads = min(allocated // max(1, workers), numba.config.NUMBA_NUM_THREADS)
+    if args.seed_workers < 1 or workers < 1 or threads < 1 or workers*threads > allocated or threads > numba.config.NUMBA_NUM_THREADS:
+        raise ValueError('invalid seed thread budget or NUMBA_NUM_THREADS ceiling')
+    return dict(seed_workers=workers, threads_per_seed=threads, allocated_cpus=allocated)
+
+
+def execution_info():
+    import numba
+    return dict(numba_threads=numba.get_num_threads(), numba_thread_ceiling=numba.config.NUMBA_NUM_THREADS,
+                pid=os.getpid(), hostname=os.uname().nodename,
+                affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None,
+                thread_environment={k:os.environ.get(k) for k in ('NUMBA_NUM_THREADS', 'OMP_NUM_THREADS',
+                    'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS',
+                    'SLURM_CPUS_PER_TASK', 'SLURM_JOB_ID')})
+
+
 def fit(args, shape, seed, scaling, out):
     from aweSOM import Lattice, SOMModel, Scaler
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
     from aweSOM.inference import best_match_nodes_patch
     t = time.perf_counter()
     tag = f'{shape[0]}x{shape[1]}-s{seed}'
+    clock = PhaseClock(tag)
+    execution = execution_info()
+    print(json.dumps(dict(tag=tag, execution=execution)), flush=True)
     scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
     with h5py.File(out / 'pool.h5', 'r') as h:
         raw, scaled = h['raw'], h['scaled']
@@ -378,11 +423,13 @@ def fit(args, shape, seed, scaling, out):
                                     bmu='patch', seed=seed, groups=args.groups, r_max=args.r_max,
                                     r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
                                     final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True)
+        clock.finish('training')
         if w.dtype != np.float64 or not np.isfinite(w).all():
             raise RuntimeError('training returned invalid float64 weights')
         lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
         nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
         np.save(out / f'{tag}-umat.npy', lat.umat)
+        clock.finish('clustering')
         labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
         node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
         nodes = np.lib.format.open_memmap(node_path, mode='w+', dtype='i4', shape=(len(raw),))
@@ -391,7 +438,9 @@ def fit(args, shape, seed, scaling, out):
             b = min(a+args.chunk, len(raw))
             nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
+        clock.finish('labelling')
         q, reject, medians = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk)
+        clock.finish('statistics')
         del nodes, distances
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         chi, beta = names.index('log_chi_B'), names.index('log_beta_inv')
@@ -415,6 +464,7 @@ def fit(args, shape, seed, scaling, out):
         meta.update(thresholds.to_metadata())
         model = SOMModel(*shape,w,nc,names,scaler,q,reject,metadata=meta)
         temp = out / f'{tag}.partial.h5'; model.save(temp); publish(temp,out / f'{tag}.h5')
+        clock.finish('export')
         loaded = SOMModel.load(out / f'{tag}.h5')
         mismatch = parity = 0; scaler_error = 0.
         for a in range(0,len(raw),args.chunk):
@@ -438,10 +488,11 @@ def fit(args, shape, seed, scaling, out):
             raise RuntimeError('freeze verification failed')
         node_path.unlink(); distance_path.unlink()
         labels.flush()
+        clock.finish('verification')
     rec = dict(tag=tag, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
-               training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
+               execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
                node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, cluster_medians=medians,
                sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
@@ -456,7 +507,10 @@ def fit(args, shape, seed, scaling, out):
 
 
 def worker(conn, *args):
-    try: conn.send(('ok',fit(*args)))
+    try:
+        import numba
+        numba.set_num_threads(args[0].threads_per_seed)
+        conn.send(('ok',fit(*args)))
     except BaseException: conn.send(('error',traceback.format_exc()))
     finally: conn.close()
 
@@ -498,6 +552,8 @@ def parser():
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
     p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43,44])
+    p.add_argument('--seed-workers',type=int,default=1,help='concurrent spawned seeds within each lattice')
+    p.add_argument('--threads-per-seed',type=int,help='Numba threads for the entire worker, including export and verification')
     p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
     p.add_argument('--sample-seed',type=int,default=42); p.add_argument('--groups',type=int,default=64)
     p.add_argument('--target-clusters',type=int,default=10,help='merge to at most this count; ties may yield fewer')
@@ -551,6 +607,9 @@ def main(argv=None):
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
+    auto_threads = args.threads_per_seed is None
+    execution_plan = thread_budget(args)
+    args.threads_per_seed = execution_plan['threads_per_seed']
     args.code_commit = provenance()
     records,quota,disk,mismatches = inspect(args)
     args.out.mkdir()
@@ -561,7 +620,18 @@ def main(argv=None):
     scaling=pool(args,records,quota,out)
     fits=[]; choices=[]
     for shape in shapes:
-        trio=[isolated(args,shape,seed,scaling,out) for seed in args.seeds]
+        trio=[]
+        width=execution_plan['seed_workers']
+        for start in range(0,len(args.seeds),width):
+            seeds=args.seeds[start:start+width]
+            wave_args=copy.copy(args)
+            if auto_threads:
+                import numba
+                wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
+                                               numba.config.NUMBA_NUM_THREADS)
+            with ThreadPoolExecutor(max_workers=len(seeds)) as executor:
+                futures=[executor.submit(isolated,wave_args,shape,seed,scaling,out) for seed in seeds]
+                trio.extend(f.result() for f in futures)
         idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
         chosen=trio[idx]
         os.link(out/f"{chosen['tag']}.h5",out/f'frozen-{shape[0]}x{shape[1]}.h5')
@@ -573,10 +643,10 @@ def main(argv=None):
     physics['winsor']='none'
     extraction_commit=attrs.get('git_commit','unknown')
     from aweSOM.stream import peak_rss_bytes
-    manifest=dict(schema_version=1,feature_names=records[0]['names'],pipeline='v2',
+    manifest=dict(schema_version=1,execution_plan=dict(**execution_plan,auto_threads=auto_threads),feature_names=records[0]['names'],pipeline='v2',
                   end_to_end_wall_seconds=time.perf_counter()-started,
                   parent_peak_rss_bytes=peak_rss_bytes(),
-                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+max(r['peak_rss_bytes'] for r in fits),
+                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+execution_plan['seed_workers']*max(r['peak_rss_bytes'] for r in fits),
                   implementation_sha256=digest(Path(__file__)),
                   etk_analysis_commit=extraction_commit if extraction_commit!='unknown' else UNAVAILABLE,
                   current_local_etk_checkout_commit=commit('/Volumes/ExternalNVMe/etk-analysis') if Path('/Volumes/ExternalNVMe/etk-analysis/.git').exists() else UNAVAILABLE,

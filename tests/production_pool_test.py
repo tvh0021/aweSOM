@@ -102,7 +102,7 @@ def test_end_to_end(tmp_path):
     cmd=[sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),'--inputs',*map(str,paths),
          '--anchor','1','--held-out','3','--out',str(a.out),'--rows-per-snapshot','60',
          '--rows-per-epoch','60','--lattices','4x3','3x2','--epochs','2','--chunk','29','--min-free-gb','0',
-         '--target-clusters','1']
+         '--target-clusters','1','--threads-per-seed','1','--seed-workers','2']
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     m=json.loads((a.out/'results/freeze-manifest.json').read_text())
@@ -114,6 +114,9 @@ def test_end_to_end(tmp_path):
     for r in m['models']:
         saved = SOMModel.load(a.out/'results'/f"{r['tag']}.h5")
         sidecar = json.loads((a.out/'results'/f"{r['tag']}.json").read_text())
+        assert r['execution']['numba_threads'] == r['training_info']['n_threads'] == 1
+        assert set(r['phase_timings']) == {'training','clustering','labelling','statistics','export','verification'}
+        assert len(r['training_info']['epoch_time']) == 2
         assert r['target_clusters'] == 1
         assert r['merge_cost_used'] >= .05
         assert r['n_clusters'] == len(np.unique(saved.node_cluster)) == 1
@@ -236,3 +239,23 @@ def test_disk_scaler_quantiles(tmp_path):
         assert np.array_equal(pool.quantiles(raw),np.percentile(x.astype('f8'),[25,50,75],axis=0))
         assert np.array_equal(pool.quantiles(raw,13,752),np.percentile(x[13:752].astype('f8'),[25,50,75],axis=0))
     assert not (tmp_path/'scaler-column.npy').exists()
+
+
+def test_thread_budget(monkeypatch):
+    import numba
+    monkeypatch.setenv('SLURM_CPUS_PER_TASK', '2')
+    a = SimpleNamespace(threads_per_seed=2, seed_workers=1, seeds=[42,43])
+    assert pool.thread_budget(a) == dict(seed_workers=1, threads_per_seed=2, allocated_cpus=2)
+    a.seed_workers=2
+    with pytest.raises(ValueError, match='budget'):
+        pool.thread_budget(a)
+    a.threads_per_seed=0
+    with pytest.raises(ValueError): pool.thread_budget(a)
+
+
+def test_phase_clock(capsys):
+    clock = pool.PhaseClock('probe')
+    clock.finish('training')
+    assert clock.records['training']['wall_seconds'] >= 0
+    assert clock.records['training']['cpu_seconds'] >= 0
+    assert 'probe' in capsys.readouterr().out
