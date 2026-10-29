@@ -199,11 +199,40 @@ def test_stratified_sample_size_and_dtype():
     assert np.all(np.diff(s[:100, 0]) == 2)
 
 
+def scalar_bmu(w, x):
+    """Independent ascending scan in Python floats: acc = 0; acc += d * d; strict <."""
+    idx, dist2 = np.empty(len(x), np.int32), np.empty(len(x))
+    nodes = np.asarray(w, np.float64).tolist()
+    for p, row in enumerate(np.asarray(x).astype(np.float64).tolist()):
+        best, winner = float('inf'), 0
+        for i, node in enumerate(nodes):
+            acc = 0.0
+            for wf, xf in zip(node, row):
+                d = wf - xf
+                acc += d * d
+            if acc < best:
+                best, winner = acc, i
+        idx[p], dist2[p] = winner, best
+    return idx, dist2
+
+
+def first_epoch_bmu(w, x, xd, yd):
+    from aweSOM.stream import _BMU
+    bmu = _BMU(w, 'patch', xd, yd, first_epoch=True)
+    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+    bmu(x, idx, d2)
+    return idx, d2
+
+
+def assert_same_bmu(actual, expected):
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1], expected[1])
+
+
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
 @pytest.mark.parametrize('shape', [(19, 13), (7, 3), (1, 1)])
 def test_feature_grouped_bmu_exact(shape, dtype):
     """Repartitioning unordered nodes preserves reference arithmetic and ties."""
-    from aweSOM.stream import _BMU
     rng = np.random.default_rng(184)
     xd, yd = shape
     w = rng.normal(size=(xd * yd, 7))
@@ -214,43 +243,130 @@ def test_feature_grouped_bmu_exact(shape, dtype):
     x[-3, 0] = np.inf
     x[-2] = 1e30
     x[-1] = 0.5 * (w[0] + w[len(w)//2])
-    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
-    bmu = _BMU(w, 'patch', xd, yd)
-    bmu(x, idx, d2)
-    ref = best_match_nodes(w, x)
-    np.testing.assert_array_equal(idx, ref[0])
-    np.testing.assert_array_equal(d2, ref[1])
+    assert_same_bmu(first_epoch_bmu(w, x, xd, yd), best_match_nodes(w, x))
 
 
 def test_unordered_patch_pruning():
     """Unordered initialization must not force nearly a full node scan."""
     from aweSOM.stream import _BMU
-    from aweSOM.inference import _patch_kernel
+    from aweSOM.inference import _feature_patch_kernel
     rng = np.random.default_rng(184)
     # A thin, correlated distribution, with no lattice ordering.
     t = rng.uniform(-3, 3, (4096, 1))
     w = t + 0.05 * rng.normal(size=(4096, 7))
     x = rng.uniform(-3, 3, (512, 1)) + 0.05 * rng.normal(size=(512, 7))
-    bmu = _BMU(w, 'patch', 64, 64)
+    bmu = _BMU(w, 'patch', 64, 64, first_epoch=True)
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
-    evaluations = _patch_kernel(*bmu.patches, x, idx, d2)
+    evaluations = _feature_patch_kernel(*bmu.patches, x, idx, d2)
     assert evaluations / len(x) < len(w) / 2
-    ref = best_match_nodes(w, x)
-    np.testing.assert_array_equal(idx, ref[0])
-    np.testing.assert_array_equal(d2, ref[1])
+    assert_same_bmu((idx, d2), best_match_nodes(w, x))
 
 
-def test_feature_patches_partition_and_bounds():
+@pytest.mark.parametrize('scale', [1.0, 1e-162, 1e-300, 5e-324, 1e15])
+def test_feature_patches_partition_and_bounds(scale):
+    """Exact rational check that every ball contains its members, at any scale."""
+    from fractions import Fraction
     from aweSOM.inference import _feature_patches
-    w = np.random.default_rng(2).normal(size=(257, 7))
-    wp, perm, offs, cent, rad = _feature_patches(w)
+    rng = np.random.default_rng(2)
+    if scale == 5e-324:
+        w = rng.integers(-40, 40, (257, 7)) * scale  # subnormal multiples, exact
+    else:
+        w = rng.normal(size=(257, 7)) * scale
+    wp, perm, offs, cent, rad, _ = _feature_patches(w)
     np.testing.assert_array_equal(np.sort(perm), np.arange(len(w)))
     np.testing.assert_array_equal(wp.T, w[perm])
     assert offs[0] == 0 and offs[-1] == len(w)
     assert np.all((np.diff(offs) > 0) & (np.diff(offs) <= 16))
     for b in range(len(rad)):
-        members = w[perm[offs[b]:offs[b+1]]]
-        assert np.all(np.sqrt(((members - cent[:, b])**2).sum(axis=1)) <= rad[b])
+        c = [Fraction(float(v)) for v in cent[:, b]]
+        r2 = Fraction(float(rad[b])) ** 2
+        for j in perm[offs[b]:offs[b+1]]:
+            assert sum((Fraction(float(v)) - cf) ** 2 for v, cf in zip(w[j], c)) <= r2
+
+
+def test_feature_search_underflow_regression():
+    """Review case: squared deviations near 1e-162 underflow to zero."""
+    from aweSOM.inference import best_match_nodes_patch
+    rng = np.random.default_rng(1001)
+    w = rng.normal(size=(35, 1)) * 1e-162
+    x = rng.normal(size=(100, 1)) * 1e-162
+    assert x[14, 0] == -3.950961781815714e-163
+    actual = first_epoch_bmu(w, x, 7, 5)
+    assert_same_bmu(actual, scalar_bmu(w, x))
+    assert_same_bmu(actual, best_match_nodes(w, x))
+    assert actual[0][14] == 0 and actual[1][14] == 0.0
+    # The lattice-patch search has the same uncertified radius; it agrees on the
+    # review's row 14 but not on every row of this input.
+    lattice = best_match_nodes_patch(w, x[14:15], 7, 5)
+    assert_same_bmu((actual[0][14:15], actual[1][14:15]), lattice)
+
+
+def test_feature_search_underflow_sweep():
+    """The review's search loop, every trial, against the reference kernel."""
+    rng = np.random.default_rng(1001)
+    for scale in [1e-162, 2e-162, 1e-161, 1e-160]:
+        for _ in range(100):
+            w = rng.normal(size=(35, 1)) * scale
+            x = rng.normal(size=(100, 1)) * scale
+            assert_same_bmu(first_epoch_bmu(w, x, 7, 5), best_match_nodes(w, x))
+
+
+def test_feature_search_underflow_training_weights():
+    """One epoch on the review's query; final weights match the lattice baseline."""
+    rng = np.random.default_rng(1001)
+    w = rng.normal(size=(35, 1)) * 1e-162
+    x = (rng.normal(size=(100, 1)) * 1e-162)[14:15]
+    options = dict(xdim=7, ydim=5, epochs=1, initial_weights=w, r_max=0, r_min=0, final_pass='none')
+    actual, info = train_batch_stream(x, bmu='patch', **options)
+    expected = w.copy()
+    expected[0] = x[0]  # radius 0: only the BMU, node 0, moves to its single row
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(actual, train_batch_stream(x, bmu='numba', **options)[0])
+
+
+def adversarial_cases():
+    rng = np.random.default_rng(77)
+    cases = {}
+    # Subnormal grid: many exactly zero and tied rounded distances.
+    w = rng.integers(-3, 4, (35, 2)) * 5e-324
+    cases['subnormal'] = (w, np.concatenate([rng.integers(-4, 5, (80, 2)) * 5e-324, w]))
+    # Clusters at very different scales; queries near the tiny cluster and zero.
+    w = rng.normal(size=(35, 3))
+    w[::2] *= 1e-162
+    x = rng.normal(size=(120, 3)) * 1e-162
+    x[:10] = 0.0
+    cases['mixed'] = (w, x)
+    # Exact ties across groups: duplicated nodes at mirrored positions, queries on the
+    # mirror plane, at small, ordinary and large magnitudes.
+    for scale in (1e-170, 1.0, 1e100):
+        base = rng.normal(size=(7, 2))
+        w = np.concatenate([base, -base, base, -base, base])[:35] * scale
+        x = np.concatenate([np.zeros((5, 2)), base * scale, rng.normal(size=(40, 2)) * scale])
+        cases[f'ties-{scale:g}'] = (w, x)
+    # Overflow end: weights at the 1e15 limit, queries whose distances overflow to
+    # inf for some nodes or all, or for centroids but not for nodes.
+    w = rng.normal(size=(35, 2)) * 1e15
+    w[0] = 1e15
+    x = rng.normal(size=(60, 2)) * 1e15
+    x[:20] *= np.logspace(130, 160, 20)[:, None]
+    x[20] = [1.3407807929942596e154, 0.0]
+    x[21] = [-1.34e154, 1.34e154]
+    x[22] = [1.79e308, -1.79e308]
+    x[23] = [np.inf, 0.0]
+    x[24] = [-np.inf, np.nan]
+    cases['overflow'] = (w, x)
+    return cases
+
+
+@pytest.mark.parametrize('name', list(adversarial_cases()))
+def test_feature_search_adversarial(name):
+    from aweSOM.inference import best_match_nodes_patch
+    w, x = adversarial_cases()[name]
+    actual = first_epoch_bmu(w, x, 7, 5)
+    assert_same_bmu(actual, scalar_bmu(w, x))
+    assert_same_bmu(actual, best_match_nodes(w, x))
+    if np.all(np.isfinite(x)):
+        assert_same_bmu(actual, best_match_nodes_patch(w, x, 7, 5))
 
 
 @pytest.mark.parametrize('value', [np.nan, np.inf, 1e16])
@@ -259,23 +375,33 @@ def test_feature_search_preserves_weight_fallback(value):
     w = np.random.default_rng(2).normal(size=(35, 3))
     w[0, 0] = value
     x = np.zeros((4, 3))
-    bmu = _BMU(w, 'patch', 7, 5)
+    bmu = _BMU(w, 'patch', 7, 5, first_epoch=True)
     assert bmu.kind == 'numba'
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
     bmu(x, idx, d2)
-    ref = best_match_nodes(w, x)
-    np.testing.assert_array_equal(idx, ref[0])
-    np.testing.assert_array_equal(d2, ref[1])
+    assert_same_bmu((idx, d2), best_match_nodes(w, x))
 
 
-def test_feature_search_training_bitwise_against_lattice(monkeypatch):
+@pytest.mark.parametrize('bmu', ['patch', 'auto'])
+def test_feature_groups_only_in_first_epoch(monkeypatch, bmu):
+    """Later epochs and the final pass keep lattice groups and build no feature groups."""
     from aweSOM import stream
+    built = []
+    real = stream._feature_patches
+    monkeypatch.setattr(stream, '_feature_patches', lambda w: built.append(1) or real(w))
+    x = np.random.default_rng(3).normal(size=(3000, 5))
+    train_batch_stream(x, 11, 7, epochs=3, chunk=700, bmu=bmu)
+    assert len(built) == 1
+    later = stream._BMU(x[:77], 'patch', 11, 7)
+    assert not later.feature and len(later.patches) == 5
+
+
+def test_feature_search_training_bitwise_against_reference():
     rng = np.random.default_rng(3)
     x = rng.normal(size=(4000, 7))
-    options = dict(xdim=19, ydim=13, epochs=4, chunk=700, bmu='patch')
-    actual, info = train_batch_stream(x, **options)
-    monkeypatch.setattr(stream, '_feature_patches', lambda w: stream.lattice_patches(w, 19, 13))
-    expected, old_info = train_batch_stream(x, **options)
+    options = dict(xdim=19, ydim=13, epochs=4, chunk=700)
+    actual, info = train_batch_stream(x, bmu='patch', **options)
+    expected, old_info = train_batch_stream(x, bmu='numba', **options)
     np.testing.assert_array_equal(actual, expected)
     for key in ('hits', 'qe', 'qe_initial'):
         np.testing.assert_array_equal(info[key], old_info[key])

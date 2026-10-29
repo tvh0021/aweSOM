@@ -642,11 +642,33 @@ def default_patch_side(n_nodes: int) -> int:
     return 4 if n_nodes <= 8000 else 5
 
 
+# Absolute allowance of the feature-group certificate. It exceeds every
+# underflow error of a squared distance (at most F * 2**-1074), and keeps every
+# bound quantity normal, so that only relative rounding errors remain.
+FEATURE_ETA = 2.0**-1000
+
+
+def _feature_slack(n_feat: int) -> float:
+    """Relative error allowance of a computed squared distance over ``n_feat`` features.
+
+    A computed ``sum((a - b)**2)`` has relative error at most ``(F + 2) * 2**-53``
+    plus ``F * 2**-1074`` from underflow (in any summation order, with or without
+    fused multiply-add); this is 512 times the relative part.
+    """
+    return (n_feat + 2) * 2.0**-44
+
+
 def _feature_patches(weights: np.ndarray, leaf_size: int = 16) -> tuple:
     """Bounding balls for balanced feature-space groups, retaining original IDs.
 
     Split each group at the median of its widest feature. This only changes
-    the search index, never the weights or their lattice positions.
+    the search index, never the weights or their lattice positions. The radii
+    are certified upper bounds: with ``e = _feature_slack(F)`` and computed
+    squared radius ``r2``, the true squared radius is at most
+    ``(r2 + FEATURE_ETA) / (1 - e)``, and ``rad`` is rounded above
+    ``sqrt((r2 + FEATURE_ETA) * (1 + 2e))``, which exceeds it.
+
+    Returns ``(wpT, perm, offs, centT, rad, w)`` for :func:`_feature_patch_kernel`.
     """
     w = np.ascontiguousarray(weights, dtype=np.float64)
     leaves = []
@@ -666,13 +688,126 @@ def _feature_patches(weights: np.ndarray, leaf_size: int = 16) -> tuple:
     perm = np.concatenate(leaves)
     offs = np.concatenate(([0], np.cumsum([len(ids) for ids in leaves])))
     cent = np.empty((len(leaves), w.shape[1]))
-    rad = np.empty(len(leaves))
+    r2 = np.empty(len(leaves))
     for b, ids in enumerate(leaves):
         members = w[ids]
         cent[b] = members.mean(axis=0)
-        rad[b] = np.sqrt(((members - cent[b]) ** 2).sum(axis=1)).max()
-    rad = rad * (1.0 + 1e-9) + 1e-300
-    return np.ascontiguousarray(w[perm].T), perm, offs, np.ascontiguousarray(cent.T), rad
+        r2[b] = ((members - cent[b]) ** 2).sum(axis=1).max()
+    eps = _feature_slack(w.shape[1])
+    rad = np.nextafter(np.sqrt((r2 + FEATURE_ETA) * (1.0 + 2.0 * eps)), np.inf)
+    return np.ascontiguousarray(w[perm].T), perm, offs, np.ascontiguousarray(cent.T), rad, w
+
+
+@njit(parallel=True, nogil=True, cache=True)
+def _feature_patch_kernel(wpT, perm, offs, centT, rad, w, data, out_idx, out_dist2) -> int:
+    """Exact BMU search pruned by the certified balls of :func:`_feature_patches`.
+
+    Bitwise equal to :func:`_bmu_kernel` for every input. A group is skipped
+    only if every member's computed squared distance is provably larger than
+    the current best, so neither a smaller distance nor an equal one with a
+    lower index can be lost. With ``e = _feature_slack(F)`` and
+    ``h = FEATURE_ETA``, a computed squared distance ``a`` to a point at true
+    squared distance ``D`` satisfies ``D (1 - e) - h <= a <= D (1 + e) + h``.
+    The group is skipped when ``(dc2 - h)(1 - e) > (rad + s)**2 (1 + 2**-48)``
+    with ``s = sqrt((best + h)(1 + 2e))``; this implies ``|x - c| > R + s'``
+    for the true distance to the centroid and the true radius ``R``, with
+    ``s' = sqrt((best + h) / (1 - e))``, hence ``a > best`` for every member.
+    Rows with a non-finite centroid distance (non-finite or huge queries)
+    cannot be certified and are scanned in full with the reference arithmetic.
+    Returns node evaluations.
+    """
+    n = data.shape[0]
+    F, n_patch = centT.shape
+    n_nodes = w.shape[0]
+    eta = FEATURE_ETA
+    eps = (F + 2) * 2.0**-44
+    lo_scale = 1.0 - eps
+    hi_scale = 1.0 + 2.0 * eps
+    kappa = 1.0 + 2.0**-48
+    max_size = 0
+    for b in range(n_patch):
+        max_size = max(max_size, offs[b + 1] - offs[b])
+    ntiles = (n + PATCH_TILE - 1) // PATCH_TILE
+    evals = np.zeros(ntiles, dtype=np.int64)
+    for t in prange(ntiles):
+        x = np.empty(F)
+        dc2 = np.empty(n_patch)
+        acc = np.empty(max_size)
+        ev = 0
+        for p in range(t * PATCH_TILE, min(n, (t + 1) * PATCH_TILE)):
+            for f in range(F):
+                x[f] = np.float64(data[p, f])
+            for b in range(n_patch):
+                d = centT[0, b] - x[0]
+                dc2[b] = d * d
+            for f in range(1, F):
+                xf = x[f]
+                for b in range(n_patch):
+                    d = centT[f, b] - xf
+                    dc2[b] += d * d
+            first = 0
+            dfirst = np.inf
+            certified = True
+            for b in range(n_patch):
+                if not dc2[b] < np.inf:
+                    certified = False
+                if dc2[b] < dfirst:
+                    dfirst = dc2[b]
+                    first = b
+            best = np.inf
+            best_idx = 0
+            if not certified:
+                # reference scan of _bmu_kernel, ascending node order
+                for i in range(n_nodes):
+                    a = 0.0
+                    for f in range(F):
+                        d = w[i, f] - x[f]
+                        a += d * d
+                    if a < best:
+                        best = a
+                        best_idx = i
+                ev += n_nodes
+                out_idx[p] = best_idx
+                out_dist2[p] = best
+                continue
+            sb = np.inf  # sqrt((best + eta) * (1 + 2 eps)), an upper bound
+            for step in range(n_patch + 1):
+                if step == 0:
+                    b = first
+                else:
+                    b = step - 1
+                    if b == first:
+                        continue
+                    lim = rad[b] + sb
+                    if (dc2[b] - eta) * lo_scale > lim * lim * kappa:
+                        continue
+                lo = offs[b]
+                s = offs[b + 1] - lo
+                # reference arithmetic of _bmu_kernel per node: acc = 0; acc += d * d
+                for k in range(s):
+                    d = wpT[0, lo + k] - x[0]
+                    acc[k] = d * d
+                for f in range(1, F):
+                    xf = x[f]
+                    for k in range(s):
+                        d = wpT[f, lo + k] - xf
+                        acc[k] += d * d
+                improved = False
+                for k in range(s):
+                    a = acc[k]
+                    i = perm[lo + k]
+                    # lexicographic (distance, index) minimum = strict ascending scan
+                    if a < best or (a == best and i < best_idx):
+                        best = a
+                        best_idx = i
+                        improved = True
+                if improved:
+                    sb = np.sqrt((best + eta) * hi_scale)
+                ev += s
+            out_idx[p] = best_idx
+            out_dist2[p] = best
+        evals[t] = ev
+    return evals.sum()
 
 
 @njit(parallel=True, nogil=True, cache=True)
