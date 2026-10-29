@@ -83,6 +83,8 @@ from ._batch_core import radius_schedule
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
+    _feature_patch_kernel,
+    _feature_patches,
     _patch_kernel,
     _screen_kernel,
     lattice_patches,
@@ -386,6 +388,13 @@ def neighbourhood_update(
 class _BMU:
     """Exact BMU search of one chunk against fixed weights.
 
+    Patch search uses lattice groups, except in the first training epoch
+    (``first_epoch``): sampled initialization has no lattice locality, so
+    feature-space groups with certified bounds
+    (:func:`aweSOM.inference._feature_patch_kernel`) are used there. Both retain
+    original node IDs and reference arithmetic, including the lowest-index tie
+    rule.
+
     ``"auto"`` times the screen and patch searches on the first rows of the
     first chunk and keeps the faster one for the pass (both are exact, with
     bitwise-equal results, so the choice only affects speed).
@@ -393,9 +402,11 @@ class _BMU:
 
     PROBE = 16384
 
-    def __init__(self, weights: np.ndarray, kind: str, xdim: int, ydim: int):
+    def __init__(self, weights: np.ndarray, kind: str, xdim: int, ydim: int,
+                 first_epoch: bool = False):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
+        self.feature = first_epoch
         if kind in ("screen", "patch", "auto") and (
             not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15
         ):
@@ -404,13 +415,17 @@ class _BMU:
             self.w32 = self.w.astype(np.float32)
             self.wmax = float(np.sqrt((self.w * self.w).sum(axis=1)).max())
         if self.kind in ("patch", "auto"):
-            self.patches = lattice_patches(self.w, xdim, ydim)
+            if self.feature:
+                self.patches = _feature_patches(self.w)
+            else:
+                self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
         if kind == "patch":
-            _patch_kernel(*self.patches, block, idx, d2)
+            kernel = _feature_patch_kernel if self.feature else _patch_kernel
+            kernel(*self.patches, block, idx, d2)
             return 0
         _bmu_kernel(self.w, block, idx, d2)
         return 0
@@ -526,8 +541,9 @@ def train_batch_stream(
         initial_weights: Optional ``(xdim * ydim, F)`` starting lattice.
         bmu: ``"auto"`` (default: per pass, the faster of screen and patch on
             the first 16384 rows), ``"screen"`` (float32 screen certified in
-            float64), ``"patch"`` (lattice-patch pruned search,
-            :func:`aweSOM.inference.best_match_nodes_patch`) or ``"numba"``
+            float64), ``"patch"`` (bounding-ball pruned search over lattice
+            patches, :func:`aweSOM.inference.best_match_nodes_patch`; the first
+            epoch uses feature-space groups with certified bounds) or ``"numba"``
             (float64 brute force). All four give the exact float64 BMU
             (bitwise-equal labels), so the weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified
@@ -607,7 +623,7 @@ def train_batch_stream(
 
         for e, r in enumerate(radii):
             t0 = time.perf_counter()
-            searcher = _BMU(w, bmu, xdim, ydim)
+            searcher = _BMU(w, bmu, xdim, ydim, first_epoch=e == 0)
             st = _pass(source, searcher, n_nodes, n_feat, chunk, sample_fraction,
                        sample_block, epoch_rng(e), groups, prefetch)
             bmu_kinds.append(searcher.kind)
