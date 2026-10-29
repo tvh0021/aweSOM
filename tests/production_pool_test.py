@@ -262,11 +262,14 @@ def test_phase_clock(capsys):
 
 
 PROBE = '''
-import os, time
+import os, struct, time
 def probe(conn, mode):
-    if mode == 'die': os._exit(19)
+    if mode == 'die': time.sleep(.5); os._exit(19)
     if mode == 'block': time.sleep(120)
-    conn.send(('ok', mode)); conn.close()
+    if mode == 'partial':  # a framed message cut off mid-payload
+        os.write(conn.fileno(), struct.pack('!i', 100) + b'1234567'); time.sleep(120)
+    conn.send(('ok', mode if mode != 'linger' else b'x' * 2**23)); conn.close()
+    if mode == 'linger': time.sleep(120)  # result sent, process never exits
 '''
 
 
@@ -280,4 +283,28 @@ def test_wave_failure_stops_siblings(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match='exited without result'):
         pool.run_wave([('block',), ('die',)], target=probe)
     assert time.monotonic()-start < 60
+    assert not mp.active_children()
+
+
+@pytest.mark.parametrize('stall', ['linger', 'partial'])
+def test_wave_failure_seen_while_sibling_stalls(tmp_path, monkeypatch, stall):
+    import multiprocessing as mp, time
+    (tmp_path/'wave_probe.py').write_text(PROBE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from wave_probe import probe
+    start = time.monotonic()
+    with pytest.raises(RuntimeError):
+        pool.run_wave([(stall,), ('die',)], target=probe)
+    assert time.monotonic()-start < 60
+    assert not mp.active_children()
+
+
+def test_wave_keeps_result_of_worker_that_hangs_on_exit(tmp_path, monkeypatch):
+    import multiprocessing as mp, time
+    (tmp_path/'wave_probe.py').write_text(PROBE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from wave_probe import probe
+    start = time.monotonic()
+    out = pool.run_wave([('linger',), ('a',)], target=probe, exit_grace=1)
+    assert out == [b'x' * 2**23, 'a'] and time.monotonic()-start < 60
     assert not mp.active_children()

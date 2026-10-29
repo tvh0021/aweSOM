@@ -514,35 +514,51 @@ def worker(conn, *args):
     finally: conn.close()
 
 
-def run_wave(jobs, target=worker):
+def run_wave(jobs, target=worker, exit_grace=60):
     """Run one wave of fits in spawned workers; results come back in job order.
 
-    Results are read as workers finish, and the first failure terminates the
-    siblings before raising, so a dead seed cannot hold the allocation while
-    the others run for hours."""
-    from multiprocessing.connection import wait
-    ctx = mp.get_context('spawn'); running = []
+    Each result pipe is drained by its own reader thread, so the supervising
+    loop never blocks on one worker: it sees the first error message or abnormal
+    exit within a second and terminates the siblings before raising. A worker
+    that delivered its result but does not exit within exit_grace seconds is
+    terminated and its result kept."""
+    import queue, threading
+    ctx = mp.get_context('spawn'); running = []; readers = []; inbox = queue.Queue()
+
+    def read(i, receive):
+        try: inbox.put((i, *receive.recv()))
+        except (EOFError, OSError) as error:
+            inbox.put((i, 'error', f'worker {i} exited without result ({error!r})'))
+
     try:
-        for job in jobs:
+        for i, job in enumerate(jobs):
             receive, send = ctx.Pipe(duplex=False)
             process = ctx.Process(target=target, args=(send, *job)); process.start(); send.close()
             running.append((receive, process))
-        results = [None]*len(running); pending = {r: i for i, (r, _) in enumerate(running)}
-        while pending:
-            for receive in wait(list(pending)):
-                i = pending.pop(receive); process = running[i][1]
-                try: status, result = receive.recv()
-                except EOFError: status, result = 'error', f'worker {i} exited without result'
-                process.join()
-                if status != 'ok' or process.exitcode: raise RuntimeError(result)
-                results[i] = result
+            readers.append(threading.Thread(target=read, args=(i, receive), daemon=True)); readers[-1].start()
+        results = [None]*len(running); waiting = set(range(len(running)))
+        while waiting:
+            try:
+                i, status, result = inbox.get(timeout=1)
+                if status != 'ok': raise RuntimeError(result)
+                results[i] = result; waiting.discard(i)
+            except queue.Empty: pass
+            for j, (_, process) in enumerate(running):
+                if process.exitcode:
+                    raise RuntimeError(f'worker {j} exited without result (exit code {process.exitcode})')
+        for j, (_, process) in enumerate(running):
+            process.join(exit_grace)
+            if process.exitcode: raise RuntimeError(f'worker {j} exit code {process.exitcode} after its result')
+            if process.exitcode is None:
+                print(f'warning: worker {j} sent its result but did not exit within {exit_grace} s; terminating', flush=True)
         return results
     finally:
-        for receive, process in running:
+        for _, process in running:
             if process.is_alive():
                 process.terminate(); process.join(10)
                 if process.is_alive(): process.kill(); process.join()
-            receive.close()
+        for reader in readers: reader.join(5)
+        for receive, _ in running: receive.close()
 
 
 def agreement(a,b,chunk=2**21):
