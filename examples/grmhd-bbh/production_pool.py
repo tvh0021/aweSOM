@@ -510,9 +510,12 @@ APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattice
 # files is operational; a different selection, count or order is a different training set.
 APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=['405504'])
 # SHA256 of each approved training file. The iteration alone does not identify the data: another
-# extraction or simulation can reuse it. Pinned once the reviewed extractions exist; until then
-# every run is diagnostic.
-APPROVED_INPUT_SHA256 = {}
+# extraction or simulation can reuse it.
+APPROVED_INPUT_SHA256 = {
+    # HHR_flux region7 extractions, seven features, pipeline v2; 98304 uses the 94208 thresholds
+    '94208': '24ed3e72e428fc6874d334e6227c2a4dee0a3423f7e3dc34d364be31567b5fc5',  # job 8004
+    '98304': '8570765e401d3a1796c182d670d88d15cf9b6e63d2c6a18704c992df044ee680',  # job 8010
+}
 
 
 def diagnostic_reasons(args, records=()):
