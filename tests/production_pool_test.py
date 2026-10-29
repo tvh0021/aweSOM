@@ -117,18 +117,26 @@ def test_end_to_end(tmp_path):
     assert m['diagnostic_only'] and any(r.startswith('epochs=2') for r in m['diagnostic_reasons'])
 
 
-def test_diagnostic_reasons(tmp_path):
+def test_diagnostic_reasons(tmp_path,monkeypatch):
     base=['--inputs','x.h5','--anchor','94208','--held-out','405504','--out',str(tmp_path/'o'),
           '--rows-per-snapshot','10000000','--rows-per-epoch','20000000']
-    ids=['94208','98304']
-    assert pool.diagnostic_reasons(pool.parser().parse_args(base),ids)==[]
+    monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{'94208':'a'*64,'98304':'b'*64})
+    rec=lambda *ids: [dict(snapshot=i,sha256=pool.APPROVED_INPUT_SHA256.get(i,'c'*64)) for i in ids]
+    reasons=lambda extra=(),records=rec('94208','98304'): pool.diagnostic_reasons(pool.parser().parse_args(base+list(extra)),records)
+    assert reasons()==[]
     for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
                       (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features'),
                       (['--anchor','98304'],'anchor'),(['--held-out','405504','110592'],'held_out')]:
-        assert any(r.startswith(key) for r in pool.diagnostic_reasons(pool.parser().parse_args(base+extra),ids)),key
+        assert any(r.startswith(key) for r in reasons(extra)),key
     # a different training set: reordered, added or swapped snapshots
-    for other in (['98304','94208'],['94208','98304','110592'],['94208','110592']):
-        assert any(r.startswith('snapshots') for r in pool.diagnostic_reasons(pool.parser().parse_args(base),other))
+    for other in (rec('98304','94208'),rec('94208','98304','110592'),rec('94208','110592')):
+        assert any(r.startswith('snapshots') for r in reasons(records=other))
+    # the approved iterations from another extraction or simulation
+    other=rec('94208','98304'); other[1]['sha256']='d'*64
+    assert [r for r in reasons(records=other) if r.startswith('input 98304')]
+    # nothing is production before the inputs are pinned
+    monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{})
+    assert len([r for r in reasons(records=other) if r.startswith('input')])==2
 
 
 def test_rare_levels():
