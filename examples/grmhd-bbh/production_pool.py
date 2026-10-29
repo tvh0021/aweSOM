@@ -509,12 +509,19 @@ APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattice
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.
 APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=['405504'])
+# SHA256 of each approved training file. The iteration alone does not identify the data: another
+# extraction or simulation can reuse it. Pinned once the reviewed extractions exist; until then
+# every run is diagnostic.
+APPROVED_INPUT_SHA256 = {}
 
 
-def diagnostic_reasons(args, snapshots=None):
+def diagnostic_reasons(args, records=()):
+    """Departures from the approved production run; ``records`` are inspect()'s, with snapshot and sha256."""
     reasons=[f'{k}={getattr(args,k)!r}, approved {v!r}' for k,v in APPROVED.items() if getattr(args,k)!=v]
-    used=dict(snapshots=snapshots, anchor=args.anchor, held_out=list(args.held_out))
+    used=dict(snapshots=[r['snapshot'] for r in records], anchor=args.anchor, held_out=list(args.held_out))
     reasons+=[f'{k}={used[k]!r}, approved {v!r}' for k,v in APPROVED_SNAPSHOTS.items() if used[k]!=v]
+    reasons+=[f"input {r['snapshot']} sha256={r['sha256']}, approved {APPROVED_INPUT_SHA256.get(r['snapshot'])}"
+              for r in records if APPROVED_INPUT_SHA256.get(r['snapshot'])!=r['sha256']]
     if args.allow_independent_thresholds: reasons.append('allow_independent_thresholds')
     if args.allow_six_features: reasons.append('allow_six_features')
     return reasons
@@ -532,7 +539,6 @@ def main(argv=None):
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
     args.code_commit = provenance()
     records,quota,disk,mismatches = inspect(args)
-    ids=[r['snapshot'] for r in records]
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
@@ -569,7 +575,7 @@ def main(argv=None):
                                        volume_weights='input weight_volume; selected weight hashes recorded; effective inverse probability includes pool quota / extracted count',
                                        row_order_sha256=scaling['row_order_sha256']),
                   aweSOM_commit=args.code_commit,input_hashes={r['path']:r['sha256'] for r in records},disk=disk,
-                  diagnostic_only=bool(diagnostic_reasons(args,ids)),diagnostic_reasons=diagnostic_reasons(args,ids),
+                  diagnostic_only=bool(diagnostic_reasons(args,records)),diagnostic_reasons=diagnostic_reasons(args,records),
                   threshold_override_mismatches=mismatches,
                   verification={r['tag']:r['verification'] for r in fits})
     dump(out/'freeze-manifest.json',manifest)
