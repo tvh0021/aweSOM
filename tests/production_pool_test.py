@@ -101,14 +101,24 @@ def test_end_to_end(tmp_path):
              NUMBA_NUM_THREADS='2',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',PYTHONPATH=str(ROOT/'src'))
     cmd=[sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),'--inputs',*map(str,paths),
          '--anchor','1','--held-out','3','--out',str(a.out),'--rows-per-snapshot','60',
-         '--rows-per-epoch','60','--lattices','4x3','3x2','--epochs','2','--chunk','29','--min-free-gb','0']
+         '--rows-per-epoch','60','--lattices','4x3','3x2','--epochs','2','--chunk','29','--min-free-gb','0',
+         '--target-clusters','1']
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     m=json.loads((a.out/'results/freeze-manifest.json').read_text())
     assert len(m['models'])==6 and len(m['selection'])==2
     assert set(m)>={'feature_names','pipeline','etk_analysis_commit','physics','scaler','models',
                     'selection','sample_manifest','aweSOM_commit','input_hashes','verification'}
+    assert pool.APPROVED['target_clusters'] == 10
+    from aweSOM import SOMModel
     for r in m['models']:
+        saved = SOMModel.load(a.out/'results'/f"{r['tag']}.h5")
+        sidecar = json.loads((a.out/'results'/f"{r['tag']}.json").read_text())
+        assert r['target_clusters'] == 1
+        assert r['merge_cost_used'] >= .05
+        assert r['n_clusters'] == len(np.unique(saved.node_cluster)) == 1
+        for key in ('target_clusters', 'merge_cost_used', 'n_clusters'):
+            assert float(saved.metadata[key]) == r[key] == sidecar[key]
         assert r['verification']['reload_mismatches']==r['verification']['cluster_label_patch_screen_mismatches']==0
         assert r['verification']['scaler_max_abs_error']==0
         assert r['weights_dtype']=='float64'

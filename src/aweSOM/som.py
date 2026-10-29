@@ -359,26 +359,52 @@ class Lattice:
 
         return projection_2d
 
-    def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.0):
+    def assign_cluster_to_lattice(
+        self, smoothing=None, merge_cost=0.0, target_clusters=None, merge_cost_floor=0.05
+    ):
         """
         Assigns clusters to the lattice based on the computed centroids.
 
         Args:
                 smoothing (float, optional): Smoothing parameter for computing Umatrix. Defaults to None.
                 merge_cost (float, optional): Cost threshold for merging similar centroids. Defaults to 0.0.
+                target_clusters (int, optional): Reach at most this many clusters. Walks
+                    the historical greedy merge path, raising the threshold only when
+                    needed. The smallest float64 threshold is used because merging
+                    compares costs strictly. Ties can undershoot the target.
+                merge_cost_floor (float, optional): Lower bound in target mode, 0.05.
+                    Ignored without a target. The larger of this and merge_cost wins.
+
+        Stores:
+                merge_cost_used, target_clusters, n_clusters: Actual assignment settings.
+                    Reuse the chosen cost for later models; do not lower it to recover detail.
 
         Returns:
                 numpy.ndarray: Array representing the assigned clusters for each lattice point.
         """
+
+        if target_clusters is not None:
+            if (isinstance(target_clusters, (bool, np.bool_))
+                    or not isinstance(target_clusters, (int, np.integer))
+                    or target_clusters < 1):
+                raise ValueError("target_clusters must be a positive integer")
+            if not np.isfinite(merge_cost_floor) or not np.isfinite(merge_cost):
+                raise ValueError("merge costs must be finite")
+            merge_cost = max(merge_cost, merge_cost_floor)
+            if merge_cost < 0:
+                raise ValueError("merge cost floor must be non-negative")
 
         if smoothing is not None:  # smooth the Umatrix before computing the centroids
             self.umat = self.compute_umat(smoothing)
         naive_centroids = self.compute_centroids(
             False
         )  # all local minima are centroids
-        centroids = self.merge_similar_centroids(
-            naive_centroids, merge_cost
-        )  # merge similar centroids
+        if target_clusters is None:
+            centroids = self.merge_similar_centroids(naive_centroids, merge_cost)
+        else:
+            centroids = self.merge_similar_centroids(
+                naive_centroids, merge_cost, target_clusters=target_clusters
+            )
 
         x = self.xdim
         y = self.ydim
@@ -410,6 +436,8 @@ class Lattice:
                         clusters[ix, iy] = i
 
         self.lattice_assigned_clusters = clusters
+        self.n_clusters = n_clusters
+        self.target_clusters = target_clusters
         return clusters
 
     @staticmethod
@@ -965,19 +993,30 @@ class Lattice:
 
         return centroids
 
-    def merge_similar_centroids(self, naive_centroids: np.ndarray, threshold=0.3):
+    def merge_similar_centroids(self, naive_centroids: np.ndarray, threshold=0.3, target_clusters=None):
         """
         Merge centroids that are close enough together.
 
         Args:
                 naive_centroids (np.ndarray): original centroids before merging
                 threshold (float, optional): Any centroids with pairwise cost less than this threshold is merged. Defaults to 0.3.
+                target_clusters (int, optional): Raise threshold along the greedy path
+                    until at most this many centroids remain. Saves merge_cost_used.
+                    The merge choices do not depend on threshold, so increasing it
+                    only extends the same path and cannot increase the cluster count.
 
         Returns:
                 np.ndarray: new node map with combined centroids
         """
 
         heat = self.umat
+        if target_clusters is not None and np.asarray(heat).dtype != np.float64:
+            # float32 costs would make the next float64 above a barrier not the smallest
+            # replayable threshold, so the recorded cost would overshoot.
+            raise ValueError(
+                "target_clusters needs a float64 U-matrix; "
+                "cast it with lattice.umat = lattice.umat.astype(np.float64)"
+            )
         heat_squared = heat**2
         centroids = naive_centroids.copy()
 
@@ -986,6 +1025,7 @@ class Lattice:
         # merges the cheapest pair, then re-ranks the surviving centroids against the new
         # largest cost; this loop is the non-recursive form of the original recursion.
         cost_cache = {}
+        self.merge_cost_used = float(threshold)
 
         while True:
             # same centroid list, unique order and counts as get_unique_centroids, in
@@ -1032,7 +1072,15 @@ class Lattice:
                 cost_between_centroids, key=lambda x: x[2]
             )  # this ranks all pairwise cost in ascending order
             # normalize the cost such that the largest cost at each step is always one
-            sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+            if target_clusters is not None and sorted_cost[-1][2] == 0:
+                # A flat U-matrix has zero barriers. Keep the legacy path unchanged.
+                sorted_cost = [[a, b, 0.0] for a, b, c in sorted_cost]
+            else:
+                sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+
+            if target_clusters is not None and len(position_x) > target_clusters:
+                threshold = max(threshold, float(np.nextafter(sorted_cost[0][2], np.inf)))
+                self.merge_cost_used = float(threshold)
 
             # stop once the cheapest remaining pair is above the threshold
             if not sorted_cost[0][2] < threshold:

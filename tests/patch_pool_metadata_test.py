@@ -66,7 +66,14 @@ def test_patch_matches_dev_and_preserves_frozen_model(historical, tmp_path):
     patched = SOMModel.load(output)
     assert FeatureThresholds.from_model(patched).feature_names == SEVEN_FEATURE_NAMES
     expected = SOMModel.load(dev)
-    ignored = {'aweSOM_commit', 'metadata_patched_by'}
+    # Historical models predate target merging. The metadata patch must not
+    # invent assignment provenance for them; the current driver records it.
+    merge_keys = {'merge_cost_used', 'target_clusters', 'n_clusters'}
+    assert not merge_keys & patched.metadata.keys()
+    assert int(expected.metadata['target_clusters']) == 10
+    assert float(expected.metadata['merge_cost_used']) >= .05
+    assert int(expected.metadata['n_clusters']) == len(np.unique(expected.node_cluster))
+    ignored = {'aweSOM_commit', 'metadata_patched_by'} | merge_keys
     assert {k: v for k, v in patched.metadata.items() if k not in ignored} == {
         k: v for k, v in expected.metadata.items() if k not in ignored}
     assert {k for k in patched.metadata.keys() | expected.metadata.keys()

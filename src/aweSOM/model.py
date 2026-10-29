@@ -451,6 +451,10 @@ class SOMModel:
                 meta[key] = str(getattr(lattice, key))
         if merge_cost is not None:
             meta["merge_cost"] = str(merge_cost)
+        for key in ("merge_cost_used", "target_clusters", "n_clusters"):
+            value = getattr(lattice, key, None)
+            if value is not None:
+                meta[key] = str(value)
         meta["n_training_points"] = str(len(dist2))
         if metadata:
             meta.update({str(k): str(v) for k, v in metadata.items()})
