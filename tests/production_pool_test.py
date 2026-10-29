@@ -4,8 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 
 import h5py
 import numpy as np
@@ -263,48 +265,127 @@ def test_phase_clock(capsys):
 
 PROBE = '''
 import os, struct, time
+class Unreadable:  # pickles in the sender, cannot be rebuilt in the parent
+    def __reduce__(self): return (unreadable, ())
+def unreadable(): raise MemoryError('SIMULATED_RECEIVER_ALLOCATION_FAILURE')
+class Slow:  # takes two seconds to rebuild in the parent
+    def __init__(self, text): self.text = text
+    def __reduce__(self): return (slow, (self.text,))
+def slow(text): time.sleep(2); return text
 def probe(conn, mode):
     if mode == 'die': time.sleep(.5); os._exit(19)
     if mode == 'block': time.sleep(120)
+    if mode == 'pid-block':
+        with open(os.environ['PROBE_PIDS'], 'a') as f: f.write(f'{os.getpid()}\\n')
+        time.sleep(120)
     if mode == 'partial':  # a framed message cut off mid-payload
         os.write(conn.fileno(), struct.pack('!i', 100) + b'1234567'); time.sleep(120)
+    if mode == 'unreadable': conn.send(('ok', Unreadable())); conn.close(); return  # exits 0
+    if mode == 'slow-error-die': conn.send(('error', Slow('TRACEBACK_SENTINEL'))); conn.close(); os._exit(19)
+    if mode == 'garbled': conn.send('not a tuple'); conn.close(); return
+    if mode == 'bad-status': conn.send(('weird', 1)); conn.close(); return
+    if mode == 'double': conn.send(('ok', 'first')); conn.send(('ok', 'second')); conn.close(); return
+    if mode == 'ok-die': conn.send(('ok', 'x')); conn.close(); os._exit(19)
     conn.send(('ok', mode if mode != 'linger' else b'x' * 2**23)); conn.close()
     if mode == 'linger': time.sleep(120)  # result sent, process never exits
 '''
 
 
-def test_wave_failure_stops_siblings(tmp_path, monkeypatch):
-    import multiprocessing as mp, time
+@pytest.fixture
+def probe(tmp_path, monkeypatch):
     (tmp_path/'wave_probe.py').write_text(PROBE)
     monkeypatch.syspath_prepend(str(tmp_path))
     from wave_probe import probe
-    assert pool.run_wave([('a',), ('b',)], target=probe) == ['a', 'b']
+    return probe
+
+
+def bounded(seconds, fn, *args, **kw):
+    import multiprocessing as mp
     start = time.monotonic()
+    try: return fn(*args, **kw)
+    finally:
+        assert time.monotonic()-start < seconds
+        assert not mp.active_children()
+
+
+def test_wave_failure_stops_siblings(probe):
+    assert bounded(60, pool.run_wave, [('a',), ('b',)], target=probe) == ['a', 'b']
     with pytest.raises(RuntimeError, match='exited without result'):
-        pool.run_wave([('block',), ('die',)], target=probe)
-    assert time.monotonic()-start < 60
-    assert not mp.active_children()
+        bounded(60, pool.run_wave, [('block',), ('die',)], target=probe)
 
 
 @pytest.mark.parametrize('stall', ['linger', 'partial'])
-def test_wave_failure_seen_while_sibling_stalls(tmp_path, monkeypatch, stall):
-    import multiprocessing as mp, time
-    (tmp_path/'wave_probe.py').write_text(PROBE)
-    monkeypatch.syspath_prepend(str(tmp_path))
-    from wave_probe import probe
-    start = time.monotonic()
+def test_wave_failure_seen_while_sibling_stalls(probe, stall):
     with pytest.raises(RuntimeError):
-        pool.run_wave([(stall,), ('die',)], target=probe)
-    assert time.monotonic()-start < 60
-    assert not mp.active_children()
+        bounded(60, pool.run_wave, [(stall,), ('die',)], target=probe)
 
 
-def test_wave_keeps_result_of_worker_that_hangs_on_exit(tmp_path, monkeypatch):
-    import multiprocessing as mp, time
-    (tmp_path/'wave_probe.py').write_text(PROBE)
-    monkeypatch.syspath_prepend(str(tmp_path))
-    from wave_probe import probe
-    start = time.monotonic()
-    out = pool.run_wave([('linger',), ('a',)], target=probe, exit_grace=1)
-    assert out == [b'x' * 2**23, 'a'] and time.monotonic()-start < 60
-    assert not mp.active_children()
+def test_wave_keeps_result_of_worker_that_hangs_on_exit(probe):
+    out = bounded(60, pool.run_wave, [('linger',), ('a',)], target=probe, exit_grace=1)
+    assert out == [b'x' * 2**23, 'a']
+
+
+def test_wave_reader_exception_with_clean_exit_fails_fast(probe):
+    with pytest.raises(RuntimeError, match='could not be read.*SIMULATED_RECEIVER_ALLOCATION_FAILURE'):
+        bounded(30, pool.run_wave, [('unreadable',), ('block',)], target=probe)
+
+
+def test_wave_keeps_traceback_sent_before_abnormal_exit(probe):
+    with pytest.raises(RuntimeError, match='TRACEBACK_SENTINEL') as info:
+        bounded(30, pool.run_wave, [('slow-error-die',), ('a',)], target=probe)
+    assert 'exit code 19' in str(info.value)
+
+
+@pytest.mark.parametrize('mode', ['garbled', 'bad-status'])
+def test_wave_rejects_malformed_message(probe, mode):
+    with pytest.raises(RuntimeError, match='could not be read'):
+        bounded(30, pool.run_wave, [(mode,), ('block',)], target=probe)
+
+
+def test_wave_reads_one_message_per_worker(probe):
+    assert bounded(30, pool.run_wave, [('double',), ('a',)], target=probe) == ['first', 'a']
+
+
+def test_wave_rejects_abnormal_exit_after_result(probe):
+    with pytest.raises(RuntimeError, match='exit code 19 after its result'):
+        bounded(30, pool.run_wave, [('ok-die',), ('a',)], target=probe)
+
+
+def test_wave_leaks_no_descriptors(probe):
+    fds = lambda: len(os.listdir('/proc/self/fd' if os.path.exists('/proc/self/fd') else '/dev/fd'))
+    pool.run_wave([('a',)], target=probe)  # warm multiprocessing's own helpers
+    before = fds()
+    for _ in range(3):
+        pool.run_wave([('a',), ('b',)], target=probe)
+        with pytest.raises(RuntimeError): pool.run_wave([('block',), ('die',)], target=probe)
+        pool.run_wave([('linger',)], target=probe, exit_grace=.5)
+    assert fds() == before
+
+
+@pytest.mark.parametrize('sig, codes', [(signal.SIGTERM, {143}), (signal.SIGINT, {-signal.SIGINT, 1, 130})])
+def test_wave_parent_signal_cleans_up_children(probe, tmp_path, sig, codes):
+    pids = tmp_path/'pids'; script = tmp_path/'driver.py'
+    script.write_text(f'''
+import importlib.util, sys
+sys.path.insert(0, {str(tmp_path)!r})
+spec = importlib.util.spec_from_file_location('production_pool', {pool.__file__!r})
+pool = importlib.util.module_from_spec(spec); spec.loader.exec_module(pool)
+from wave_probe import probe
+if __name__ == '__main__': pool.run_wave([('pid-block',), ('pid-block',)], target=probe)
+''')
+    env = dict(os.environ, PROBE_PIDS=str(pids))
+    proc = subprocess.Popen([sys.executable, str(script)], env=env)
+    deadline = time.monotonic()+30
+    while time.monotonic() < deadline and (not pids.exists() or len(pids.read_text().split()) < 2): time.sleep(.1)
+    children = [int(p) for p in pids.read_text().split()]; assert len(children) == 2
+    proc.send_signal(sig); assert proc.wait(timeout=30) in codes
+    for _ in range(50):
+        if all(not alive(pid) for pid in children): break
+        time.sleep(.1)
+    assert all(not alive(pid) for pid in children)
+
+
+def alive(pid):
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return False
+    return True

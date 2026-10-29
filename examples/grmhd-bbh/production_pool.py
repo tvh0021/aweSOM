@@ -517,46 +517,69 @@ def worker(conn, *args):
 def run_wave(jobs, target=worker, exit_grace=60):
     """Run one wave of fits in spawned workers; results come back in job order.
 
-    Each result pipe is drained by its own reader thread, so the supervising
-    loop never blocks on one worker: it sees the first error message or abnormal
-    exit within a second and terminates the siblings before raising. A worker
-    that delivered its result but does not exit within exit_grace seconds is
-    terminated and its result kept."""
-    import queue, threading
-    ctx = mp.get_context('spawn'); running = []; readers = []; inbox = queue.Queue()
+    One daemon reader thread per pipe posts exactly one terminal event; the
+    supervisor only ever waits one second at a time, so the first error message,
+    abnormal exit or dead reader stops the siblings and raises with whatever
+    detail arrived. A worker that delivered its result but does not exit within
+    exit_grace seconds is terminated and its result kept. Every wait is bounded;
+    SIGTERM to the parent runs the same cleanup."""
+    import queue, signal, threading
+    jobs = list(jobs); ctx = mp.get_context('spawn'); running = []; readers = []; inbox = queue.Queue()
+    results = [None]*len(jobs); waiting = set(range(len(jobs)))
 
-    def read(i, receive):
-        try: inbox.put((i, *receive.recv()))
-        except (EOFError, OSError) as error:
-            inbox.put((i, 'error', f'worker {i} exited without result ({error!r})'))
+    def read(i, receive):  # one recv, one event, whatever happens
+        try:
+            status, payload = receive.recv()
+            if status not in ('ok', 'error'): raise ValueError(f'unknown status {status!r}')
+        except (EOFError, OSError) as error: status, payload = 'error', f'worker {i} exited without result ({error!r})'
+        except BaseException as error: status, payload = 'error', f'worker {i} result could not be read ({error!r})'
+        inbox.put((i, status, payload))
 
+    def pump(timeout):  # apply every queued event, waiting at most timeout for the first
+        while True:
+            try: i, status, payload = inbox.get(timeout=timeout)
+            except queue.Empty: return
+            timeout = 0
+            if i not in waiting: continue
+            if status != 'ok':
+                process = running[i][1]; process.join(5)
+                raise RuntimeError(payload if not process.exitcode else f'{payload}\nworker {i} exit code {process.exitcode}')
+            results[i] = payload; waiting.discard(i)
+
+    def on_term(signum, frame): raise SystemExit(128+signum)
+    main = threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGTERM, on_term) if main else None
     try:
-        for i, job in enumerate(jobs):
+        for job in jobs:
             receive, send = ctx.Pipe(duplex=False)
-            process = ctx.Process(target=target, args=(send, *job)); process.start(); send.close()
-            running.append((receive, process))
-            readers.append(threading.Thread(target=read, args=(i, receive), daemon=True)); readers[-1].start()
-        results = [None]*len(running); waiting = set(range(len(running)))
+            with send:  # closed even if start() fails; receive is closed in finally
+                process = ctx.Process(target=target, args=(send, *job)); running.append((receive, process)); process.start()
+            readers.append(threading.Thread(target=read, args=(len(readers), receive), daemon=True)); readers[-1].start()
         while waiting:
-            try:
-                i, status, result = inbox.get(timeout=1)
-                if status != 'ok': raise RuntimeError(result)
-                results[i] = result; waiting.discard(i)
-            except queue.Empty: pass
+            dead = [j for j in waiting if not readers[j].is_alive()]  # checked before pump: a finished reader's event is already queued
+            pump(1)
+            for j in dead:
+                if j in waiting: raise RuntimeError(f'worker {j} result reader died without reporting')
             for j, (_, process) in enumerate(running):
-                if process.exitcode:
-                    raise RuntimeError(f'worker {j} exited without result (exit code {process.exitcode})')
+                if process.exitcode and j in waiting:  # pipe is closed now, so its message or EOF is at most a decode away
+                    readers[j].join(5); pump(0)
+                    if j in waiting: raise RuntimeError(f'worker {j} exited without result (exit code {process.exitcode})')
+                if process.exitcode: raise RuntimeError(f'worker {j} exit code {process.exitcode} after its result')
+        deadline = time.monotonic()+exit_grace
         for j, (_, process) in enumerate(running):
-            process.join(exit_grace)
+            process.join(max(0, deadline-time.monotonic()))
             if process.exitcode: raise RuntimeError(f'worker {j} exit code {process.exitcode} after its result')
             if process.exitcode is None:
                 print(f'warning: worker {j} sent its result but did not exit within {exit_grace} s; terminating', flush=True)
         return results
     finally:
+        if main: signal.signal(signal.SIGTERM, previous)
         for _, process in running:
-            if process.is_alive():
-                process.terminate(); process.join(10)
-                if process.is_alive(): process.kill(); process.join()
+            if process.is_alive(): process.terminate()
+        for _, process in running:  # is_alive() is False for a process that never started
+            if process.is_alive(): process.join(10)
+            if process.is_alive(): process.kill(); process.join(10)
+            if process.is_alive(): print(f'warning: worker {process.pid} survived SIGKILL (uninterruptible?)', flush=True)
         for reader in readers: reader.join(5)
         for receive, _ in running: receive.close()
 
