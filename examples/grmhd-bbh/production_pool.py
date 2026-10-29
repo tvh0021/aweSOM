@@ -500,6 +500,21 @@ def parser():
     return p
 
 
+# The approved production training settings (production_pool.sbatch defaults). A run that departs
+# from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
+APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
+                seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
+                r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
+                tube_bz=.7, tube_beta=0.)
+
+
+def diagnostic_reasons(args):
+    reasons=[f'{k}={getattr(args,k)!r}, approved {v!r}' for k,v in APPROVED.items() if getattr(args,k)!=v]
+    if args.allow_independent_thresholds: reasons.append('allow_independent_thresholds')
+    if args.allow_six_features: reasons.append('allow_six_features')
+    return reasons
+
+
 def main(argv=None):
     started = time.perf_counter()
     args = parser().parse_args(argv)
@@ -548,7 +563,7 @@ def main(argv=None):
                                        volume_weights='input weight_volume; selected weight hashes recorded; effective inverse probability includes pool quota / extracted count',
                                        row_order_sha256=scaling['row_order_sha256']),
                   aweSOM_commit=args.code_commit,input_hashes={r['path']:r['sha256'] for r in records},disk=disk,
-                  diagnostic_only=bool(args.allow_independent_thresholds or args.allow_six_features),
+                  diagnostic_only=bool(diagnostic_reasons(args)),diagnostic_reasons=diagnostic_reasons(args),
                   threshold_override_mismatches=mismatches,
                   verification={r['tag']:r['verification'] for r in fits})
     dump(out/'freeze-manifest.json',manifest)

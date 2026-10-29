@@ -113,6 +113,17 @@ def test_end_to_end(tmp_path):
         assert r['verification']['scaler_max_abs_error']==0
         assert r['weights_dtype']=='float64'
     assert m['sample_manifest']['held_out_IDs']==['3']
+    # reduced training settings are a rehearsal, never a production manifest
+    assert m['diagnostic_only'] and any(r.startswith('epochs=2') for r in m['diagnostic_reasons'])
+
+
+def test_diagnostic_reasons(tmp_path):
+    base=['--inputs','x.h5','--anchor','1','--held-out','3','--out',str(tmp_path/'o'),'--rows-per-snapshot','10000000',
+          '--rows-per-epoch','20000000']
+    assert pool.diagnostic_reasons(pool.parser().parse_args(base))==[]
+    for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
+                      (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features')]:
+        assert any(r.startswith(key) for r in pool.diagnostic_reasons(pool.parser().parse_args(base+extra))),key
 
 
 def test_rare_levels():
