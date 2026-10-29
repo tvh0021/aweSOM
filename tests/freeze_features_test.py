@@ -193,3 +193,67 @@ def test_zero_iqr_provenance_is_preserved(tmp_path):
     script('freeze_model').main(['--training', str(path), '--lattice', str(pkl),
         '--merge-cost', '.1', '-o', str(out)])
     assert json.loads(SOMModel.load(out).metadata['scale_unweighted'])[0] == 0.
+
+
+@pytest.mark.parametrize('consumer', ['freeze_model', 'stack_ensemble'])
+@pytest.mark.parametrize('damage', [
+    'missing-v2-scaler', 'manual-v2-scaler', 'unapplied-weights',
+    'conflicting-weights', 'unknown-weight-name',
+])
+def test_reject_inconsistent_scaling_before_export_or_training(tmp_path, monkeypatch, consumer, damage):
+    path, pkl, raw, _ = training_case(tmp_path)
+    with h5py.File(path, 'r+') as h:
+        if damage == 'missing-v2-scaler':
+            del h['scaler']
+        elif damage == 'manual-v2-scaler':
+            del h['scaler']
+            g = h.create_group('scaler')
+            g.attrs['kind'] = 'manual'
+            g['mean'] = raw.mean(0)
+            g['sigma'] = raw.std(0)
+        elif damage == 'unapplied-weights':
+            h['scaler/scale'][:] = h['scaler/scale_unweighted'][:]
+        elif damage == 'conflicting-weights':
+            h.attrs['feature_weights'] = json.dumps([1.] * 7)
+        else:
+            del h['scaler/feature_weights']
+            h['scaler'].attrs['feature_weights'] = json.dumps({'bz_fracc': 2., 'pol_frac': 2.})
+    # The training array is optional; provenance must catch these errors itself.
+    with pkl.open('rb') as f:
+        lat = pickle.load(f)
+    lat.data_array = None
+    with pkl.open('wb') as f:
+        pickle.dump(lat, f)
+    mod = script(consumer)
+    if consumer == 'stack_ensemble':
+        def unexpected_training(*args, **kwargs):
+            pytest.fail('invalid scaling reached ensemble training')
+        monkeypatch.setattr(mod, 'train_realization', unexpected_training)
+    message = ('median-iqr' if damage in ('missing-v2-scaler', 'manual-v2-scaler')
+               else 'scale' if damage == 'unapplied-weights' else 'feature_weights')
+    with pytest.raises(ValueError, match=message):
+        if consumer == 'freeze_model':
+            mod.main(['--training', str(path), '--lattice', str(pkl),
+                      '--merge-cost', '.1', '-o', str(tmp_path / 'rejected.h5')])
+        else:
+            mod.run_realization(dict(input=str(path), N=80, train=20, ratio=.7,
+                scale=4., alpha_0=.5, seed=42, name='tiny', output_dir=str(tmp_path), merge_cost=.1))
+    assert not (tmp_path / 'rejected.h5').exists()
+    assert not list(tmp_path.glob('realizations/som_object.*.pkl'))
+
+
+@pytest.mark.parametrize('declaration', ['pipeline', 'scaler_kind'])
+@pytest.mark.parametrize('kind', ['missing', 'manual'])
+def test_ensemble_requires_robust_scaler_for_either_declaration(tmp_path, declaration, kind):
+    path, _, raw, _ = training_case(tmp_path)
+    with h5py.File(path, 'r+') as h:
+        del h.attrs['scaler_kind' if declaration == 'pipeline' else 'pipeline']
+        del h['scaler']
+        if kind == 'manual':
+            g = h.create_group('scaler')
+            g.attrs['kind'] = 'manual'
+            g['mean'] = raw.mean(0)
+            g['sigma'] = raw.std(0)
+    with pytest.raises(ValueError, match='median-iqr'):
+        script('stack_ensemble').run_realization(dict(input=str(path), N=80, train=20,
+            ratio=.7, scale=4., alpha_0=.5, seed=42, name='tiny', output_dir=str(tmp_path), merge_cost=.1))
