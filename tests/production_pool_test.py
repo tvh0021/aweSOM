@@ -259,3 +259,25 @@ def test_phase_clock(capsys):
     assert clock.records['training']['wall_seconds'] >= 0
     assert clock.records['training']['cpu_seconds'] >= 0
     assert 'probe' in capsys.readouterr().out
+
+
+PROBE = '''
+import os, time
+def probe(conn, mode):
+    if mode == 'die': os._exit(19)
+    if mode == 'block': time.sleep(120)
+    conn.send(('ok', mode)); conn.close()
+'''
+
+
+def test_wave_failure_stops_siblings(tmp_path, monkeypatch):
+    import multiprocessing as mp, time
+    (tmp_path/'wave_probe.py').write_text(PROBE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from wave_probe import probe
+    assert pool.run_wave([('a',), ('b',)], target=probe) == ['a', 'b']
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match='exited without result'):
+        pool.run_wave([('block',), ('die',)], target=probe)
+    assert time.monotonic()-start < 60
+    assert not mp.active_children()

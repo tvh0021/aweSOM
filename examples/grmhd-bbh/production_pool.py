@@ -5,7 +5,6 @@ The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import copy
 import argparse
 import hashlib
@@ -515,14 +514,35 @@ def worker(conn, *args):
     finally: conn.close()
 
 
-def isolated(*args):
-    ctx = mp.get_context('spawn'); receive, send = ctx.Pipe(duplex=False)
-    process = ctx.Process(target=worker,args=(send,*args)); process.start(); send.close()
-    try: status, result = receive.recv()
-    except EOFError: status, result = 'error', 'worker exited without result'
-    process.join(); receive.close()
-    if status != 'ok' or process.exitcode: raise RuntimeError(result)
-    return result
+def run_wave(jobs, target=worker):
+    """Run one wave of fits in spawned workers; results come back in job order.
+
+    Results are read as workers finish, and the first failure terminates the
+    siblings before raising, so a dead seed cannot hold the allocation while
+    the others run for hours."""
+    from multiprocessing.connection import wait
+    ctx = mp.get_context('spawn'); running = []
+    try:
+        for job in jobs:
+            receive, send = ctx.Pipe(duplex=False)
+            process = ctx.Process(target=target, args=(send, *job)); process.start(); send.close()
+            running.append((receive, process))
+        results = [None]*len(running); pending = {r: i for i, (r, _) in enumerate(running)}
+        while pending:
+            for receive in wait(list(pending)):
+                i = pending.pop(receive); process = running[i][1]
+                try: status, result = receive.recv()
+                except EOFError: status, result = 'error', f'worker {i} exited without result'
+                process.join()
+                if status != 'ok' or process.exitcode: raise RuntimeError(result)
+                results[i] = result
+        return results
+    finally:
+        for receive, process in running:
+            if process.is_alive():
+                process.terminate(); process.join(10)
+                if process.is_alive(): process.kill(); process.join()
+            receive.close()
 
 
 def agreement(a,b,chunk=2**21):
@@ -629,9 +649,7 @@ def main(argv=None):
                 import numba
                 wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
                                                numba.config.NUMBA_NUM_THREADS)
-            with ThreadPoolExecutor(max_workers=len(seeds)) as executor:
-                futures=[executor.submit(isolated,wave_args,shape,seed,scaling,out) for seed in seeds]
-                trio.extend(f.result() for f in futures)
+            trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
         idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
         chosen=trio[idx]
         os.link(out/f"{chosen['tag']}.h5",out/f'frozen-{shape[0]}x{shape[1]}.h5')
