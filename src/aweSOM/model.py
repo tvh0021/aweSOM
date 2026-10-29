@@ -484,7 +484,7 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
-            backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"`` or
+            backend (str, optional): ``"screen"``, ``"patch"``, ``"numba"``, ``"kdtree"`` or
                 ``"jax"``; see :func:`aweSOM.inference.predict`. The JAX path picks
                 its own device tile size inside each chunk. Defaults to ``"screen"``.
 
@@ -512,6 +512,7 @@ class SOMModel:
                 chunk=None if backend == "jax" else chunk,
                 return_distance=return_distance,
                 backend=backend,
+                lattice_shape=(self.xdim, self.ydim),
             )
             if return_distance:
                 labels[start:stop], dist[start:stop] = out

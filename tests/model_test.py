@@ -166,3 +166,24 @@ def test_committed_fixture_formats_agree():
     _assert_models_equal(
         SOMModel.load(FIXTURES / "iris_like_model.txt"), SOMModel.load(FIXTURES / "iris_like_model.h5")
     )
+
+
+def test_predict_patch_rectangular_lattice_roundtrip(tmp_path):
+    """Frozen patch inference uses the saved rectangular topology in every chunk."""
+    rng = np.random.default_rng(7)
+    model = SOMModel(
+        5, 3, rng.normal(size=(15, 4)), np.arange(15) % 4,
+        ["a", "b", "c", "d"],
+        Scaler("median-iqr", np.arange(4), np.arange(4) + 1),
+        np.ones(15), 10.,
+    )
+    path = tmp_path / "model.h5"
+    model.save(path)
+    loaded = SOMModel.load(path)
+    data = rng.normal(size=(53, 4))
+    expected, distance = model.predict(data, chunk=11, return_distance=True, backend="screen")
+    actual, patch_distance = loaded.predict(data, chunk=7, return_distance=True, backend="patch")
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_allclose(patch_distance, distance, rtol=1e-14, atol=1e-14)
+    np.testing.assert_array_equal(loaded.predict(data[0], backend="patch"), expected[:1])
+    assert loaded.predict(data[:0], backend="patch").shape == (0,)
