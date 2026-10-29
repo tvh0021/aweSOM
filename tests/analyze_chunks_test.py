@@ -237,3 +237,44 @@ def test_six_feature_chunk_pipeline(carpet_run, model_path, tmp_path):
     np.testing.assert_array_equal(rows['features'], np.concatenate(want))
     stats = json.loads((out / 'it00000000_stats.json').read_text())
     assert 'bz_frac' in stats['total']['feature_median']
+
+
+@pytest.mark.parametrize('kind', ['carpet', 'silo'])
+def test_v2_seven_native_reader_parity(kind, carpet_run, silo_run, tmp_path):
+    """Native chunk coordinates and explicit centres match etkplot, across slabs."""
+    from features_grmhd_test import ETKPLOT
+    from aweSOM.features_grmhd import SEVEN_FEATURE_NAMES
+    from aweSOM.io import CarpetXReader
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ETKPLOT))
+    try:
+        etkf = pytest.importorskip('etkplot.features')
+    finally:
+        sys.path.remove(str(ETKPLOT))
+    names = SEVEN_FEATURE_NAMES
+    thr = FeatureThresholds(.5, .7, pipeline='v2', feature_names=names)
+    model = SOMModel(xdim=2, ydim=2, weights=np.ones((4,7)), node_cluster=np.arange(4),
+        feature_names=list(names), scaler=Scaler('median-iqr',np.zeros(7),np.ones(7)),
+        node_dist_q99=np.ones(4),reject_distance=10.,metadata=thr.to_metadata())
+    mp = tmp_path/'seven.h5'
+    model.save(mp)
+    source = carpet_run if kind == 'carpet' else silo_run
+    reader = CarpetHDF5Reader(source,backend='native') if kind == 'carpet' else CarpetXReader(source)
+    out = tmp_path/'out'
+    extra = ['--reader', 'carpet' if kind == 'carpet' else 'carpetx','--iterations','0']
+    with pytest.raises(SystemExit): _run(source,mp,out,*extra)
+    centres = [[-1.,0.,0.],[1.,0.,.5]]
+    bh = ['--bh', *map(str,np.ravel(centres))]
+    assert _run(source,mp,out,*extra,*bh) == 0
+    rows,_ = _read(out/'it00000000.h5')
+    want=[]
+    for b in reader.iter_level_blocks(INPUTS,0,halo=thr.halo,slab=4):
+        # Reconstruct axes using the reader's integer lattice, including halo.
+        axes=tuple(b.xyz_base[k]+(b.xyz_offset[k]+np.arange(b.shape[k])-b.halo[k])*b.spacing[k] for k in range(3))
+        opts=SimpleNamespace(pipeline='v2',b2_min=.5,s_v=.7,accuracy=4,hole_centres=centres)
+        ref=etkf.compute(names,b.data,b.spacing,opts,xyz=axes)
+        want.append(np.column_stack([ref[n][b.full_mask()] for n in names]).astype('f4'))
+    np.testing.assert_array_equal(rows['features'],np.concatenate(want))
+    # Resume must reject a different coordinate frame.
+    with pytest.raises(SystemExit,match='different configuration'):
+        _run(source,mp,out,*extra,'--bh','-2','0','0','2','0','0')

@@ -60,6 +60,7 @@ from aweSOM.model import SOMModel
 # fixed histogram bins for the medians: (lo, hi) per feature, 0.005 wide
 HIST_RANGE = {
     "bz_frac": (0.0, 1.0),
+    "pol_frac": (0.0, 1.0),
     "log_beta_inv": (-12.0, 12.0),
     "log_theta": (-12.0, 12.0),
     "log_chi_B": (-3.5, 3.5),
@@ -321,6 +322,7 @@ def run_config(args, thr: FeatureThresholds) -> dict:
         "halo": int(thr.halo), "save_features": bool(args.save_features), "midplane_z": float(args.midplane_z),
         "reader": args.reader, "carpet_backend": args.carpet_backend, "fill": args.fill,
         "source": Path(args.source).name, "model": Path(args.model).name,
+        "hole_centres": getattr(args, "bh", None),
     }
 
 
@@ -349,6 +351,11 @@ def source_layout(reader, it: int, levels=None) -> str:
 def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, args, sheets: List[int],
                       layout: Optional[str] = None) -> dict:
     names = tuple(model.feature_names)
+    centres = getattr(args, "bh", None)
+    if "pol_frac" in names:
+        if centres is None or not np.all(np.isfinite(centres)):
+            raise ValueError("pol_frac requires --bh with six finite coordinates for this iteration")
+        centres = np.asarray(centres, dtype=float).reshape(2, 3)
     out = Path(args.out)
     if layout is None:
         layout = source_layout(reader, it, args.levels)
@@ -381,7 +388,13 @@ def process_iteration(reader, model: SOMModel, thr: FeatureThresholds, it: int, 
             if last_level is not None and block.level != last_level:
                 _flush_outputs(itf, model, sheets, out, it, title)
             last_level = block.level
-            raw = raw_features(block.data, block.spacing, thr.accuracy, names, thr.pipeline)
+            axes = None
+            if "pol_frac" in names:
+                axes = tuple(block.xyz_base[d] +
+                             (block.xyz_offset[d] + np.arange(block.shape[d]) - block.halo[d]) * block.spacing[d]
+                             for d in range(3))
+            raw = raw_features(block.data, block.spacing, thr.accuracy, names, thr.pipeline,
+                               xyz=axes, hole_centres=centres)
             inner = block.interior
             owned = block.owned_mask
             picked = {n: v[inner][owned] for n, v in raw.items()}
@@ -489,6 +502,7 @@ def main(argv=None):
     ap.add_argument("--carpet-backend", choices=("auto", "etkplot", "native"), default="native")
     ap.add_argument("--etkplot-path", help="directory holding the etkplot package")
     ap.add_argument("--parfile", help="Carpet: horizons from this parfile's trajectory (etkplot backend)")
+    ap.add_argument("--bh", type=float, nargs=6, help="explicit hole centres x1 y1 z1 x2 y2 z2 for pol_frac; fixed for the requested iterations")
     ap.add_argument("--spheres-from", help="HDF5 file with horizon_centres/horizon_radius attributes")
     ap.add_argument("--fill", choices=("coarse", "nan"), default="coarse", help="CarpetX: halo cells outside the level")
     ap.add_argument("--cache-gb", type=float, default=1.0, help="reader cache budget")
@@ -500,6 +514,8 @@ def main(argv=None):
 
     model = SOMModel.load(args.model)
     thr = FeatureThresholds.from_model(model)
+    if "pol_frac" in model.feature_names and (args.bh is None or not np.all(np.isfinite(args.bh))):
+        ap.error("pol_frac requires --bh with six finite coordinates")
     sheets = [int(s) for s in model.metadata.get("sheet_clusters", "").split() if s.lstrip("-").isdigit()]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
