@@ -599,7 +599,8 @@ def lattice_patches(weights: np.ndarray, xdim: int, ydim: int, side: int | None 
     transposed to ``(F, nodes)``; ``perm`` maps that order to node indices
     (ascending within a patch); ``offs`` the patch boundaries; ``centT`` the
     ``(F, patches)`` centroids; ``rad`` the radii of the balls around them, inflated
-    by a relative 1e-9 (plus 1e-300) so that rounding cannot make a bound too tight.
+    by a relative 1e-9 (plus 1e-300). Near squared-distance underflow these
+    radii can lose containment; the search restarts unsafe rows without pruning.
     """
     w = np.ascontiguousarray(weights, dtype=np.float64)
     n_nodes = w.shape[0]
@@ -815,6 +816,10 @@ def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
     """Exact BMU search pruned by patch balls; see best_match_nodes_patch. Returns node evaluations."""
     n = data.shape[0]
     F, n_patch = centT.shape
+    # Original node order is needed if a row must restart after pruning.
+    order = np.empty(len(perm), dtype=np.int64)
+    for k in range(len(perm)):
+        order[perm[k]] = k
     max_size = 0
     for b in range(n_patch):
         max_size = max(max_size, offs[b + 1] - offs[b])
@@ -839,7 +844,10 @@ def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
                     dc2[b] += d * d
             first = 0
             dfirst = np.inf
+            unsafe = False
             for b in range(n_patch):
+                if not dc2[b] < np.inf:
+                    unsafe = True
                 if dc2[b] < dfirst:
                     dfirst = dc2[b]
                     first = b
@@ -848,7 +856,8 @@ def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
             sb = np.inf  # sqrt(best), inflated
             # the patch with the nearest centroid first, then every patch whose
             # ball can still hold a node at distance <= sqrt(best)
-            for step in range(n_patch + 1):
+            steps = 0 if unsafe else n_patch + 1
+            for step in range(steps):
                 if step == 0:
                     b = first
                 else:
@@ -878,9 +887,27 @@ def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
                         best = a
                         best_idx = i
                         improved = True
+                ev += s
                 if improved:
                     sb = np.sqrt(best) * (1.0 + 1e-10)
-                ev += s
+                    # Relative margins cannot protect rounded-distance ties here.
+                    # Restart the WHOLE row: an earlier patch may already be pruned.
+                    if best <= FEATURE_ETA:
+                        unsafe = True
+                        break
+            if unsafe:
+                best = np.inf
+                best_idx = 0
+                for i in range(len(order)):
+                    k = order[i]
+                    a = 0.0
+                    for f in range(F):
+                        d = wpT[f, k] - x[f]
+                        a += d * d
+                    if a < best:
+                        best = a
+                        best_idx = i
+                ev += len(order)
             out_idx[p] = best_idx
             out_dist2[p] = best
         evals[t] = ev
@@ -904,7 +931,10 @@ def best_match_nodes_patch(
     with the nearest centroid is scanned first, and every other patch is
     scanned only if its ball can still hold a node at least as close as the
     best found so far (``|x - c| - r <= best``, checked with a relative margin
-    of 1e-10, far above float64 rounding). The nodes of a scanned patch use the
+    of 1e-10, far above float64 rounding). Rows with a non-finite centroid
+    distance or a current best squared distance <= 2**-1000 restart with a full
+    ascending reference scan, since relative margins do not cover underflow.
+    The nodes of a scanned patch use the
     reference float64 arithmetic of :func:`best_match_nodes`, and a node wins if
     its distance is smaller, or equal with a lower index, so the result is the
     lexicographic (distance, index) minimum: labels and distances are bitwise

@@ -295,8 +295,7 @@ def test_feature_search_underflow_regression():
     assert_same_bmu(actual, scalar_bmu(w, x))
     assert_same_bmu(actual, best_match_nodes(w, x))
     assert actual[0][14] == 0 and actual[1][14] == 0.0
-    # The lattice-patch search has the same uncertified radius; it agrees on the
-    # review's row 14 but not on every row of this input.
+    # The lattice search also retains the review's row-14 result.
     lattice = best_match_nodes_patch(w, x[14:15], 7, 5)
     assert_same_bmu((actual[0][14:15], actual[1][14:15]), lattice)
 
@@ -405,3 +404,78 @@ def test_feature_search_training_bitwise_against_reference():
     np.testing.assert_array_equal(actual, expected)
     for key in ('hits', 'qe', 'qe_initial'):
         np.testing.assert_array_equal(info[key], old_info[key])
+
+
+@pytest.fixture
+def lattice_underflow_case():
+    # Reproduces review-work/underflow-case.npz exactly, without an external fixture.
+    rng = np.random.default_rng(1001)
+    return rng.normal(size=(35, 1)) * 1e-162, rng.normal(size=(100, 1)) * 1e-162
+
+
+@pytest.mark.parametrize('row', [0, 82, 83, 85, 95])
+def test_lattice_underflow_saved_rows(lattice_underflow_case, row):
+    from aweSOM.inference import best_match_nodes_patch
+    w, x = lattice_underflow_case
+    expected = scalar_bmu(w, x[row:row+1])
+    actual = best_match_nodes_patch(w, x[row:row+1], 7, 5)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
+
+
+@pytest.mark.parametrize('streamed', [False, True])
+def test_lattice_underflow_frozen_prediction(lattice_underflow_case, streamed):
+    w, x = lattice_underflow_case
+    idx, d2 = scalar_bmu(w, x)
+    clusters = np.arange(len(w), dtype=np.int32)
+    if streamed:
+        distances = np.empty(len(x))
+        labels, _ = predict_stream(w, clusters, x, out_distance=distances,
+                                  backend='patch', lattice_shape=(7, 5), chunk=17)
+    else:
+        labels, distances = predict(w, clusters, x, return_distance=True,
+                                    backend='patch', lattice_shape=(7, 5))
+    np.testing.assert_array_equal(labels, idx)
+    np.testing.assert_array_equal(distances.view(np.uint64), np.sqrt(d2).view(np.uint64))
+
+
+def test_lattice_underflow_radius_zero_training(lattice_underflow_case, monkeypatch):
+    import aweSOM.stream as stream
+    w, x = lattice_underflow_case
+    x = x[:1]
+    # Exercise the later-epoch lattice policy in a single isolated training epoch.
+    real_bmu = stream._BMU
+    def lattice_bmu(*args, **kwargs):
+        kwargs['first_epoch'] = False
+        return real_bmu(*args, **kwargs)
+    monkeypatch.setattr(stream, '_BMU', lattice_bmu)
+    expected = w.copy()
+    idx, _ = scalar_bmu(w, x)
+    assert idx[0] == 2
+    expected[idx[0]] = x[0]
+    actual, _ = train_batch_stream(x, 7, 5, epochs=1, initial_weights=w,
+                                  r_max=0, r_min=0, bmu='patch', final_pass='none')
+    np.testing.assert_array_equal(actual.view(np.uint64), expected.view(np.uint64))
+
+
+@pytest.mark.parametrize('scale', [2.0**-501, 2.0**-500, 2.0**-499, 1e-162])
+def test_lattice_underflow_threshold_and_ties(scale):
+    from aweSOM.inference import best_match_nodes_patch
+    rng = np.random.default_rng(821)
+    w = rng.normal(size=(35, 7)) * scale
+    w[33] = w[1]
+    x = np.concatenate([w, rng.normal(size=(100, 7)) * scale])
+    expected = scalar_bmu(w, x)
+    actual = best_match_nodes_patch(w, x, 7, 5, chunk=17)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
+
+
+def test_lattice_unsafe_centroid_rows():
+    from aweSOM.inference import best_match_nodes_patch
+    w = np.random.default_rng(13).normal(size=(35, 2))
+    x = np.array([[np.nan, 0], [np.inf, 0], [1.79e308, 0], [1.34e154, 0]])
+    expected = scalar_bmu(w, x)
+    actual = best_match_nodes_patch(w, x, 7, 5)
+    np.testing.assert_array_equal(actual[0], expected[0])
+    np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
