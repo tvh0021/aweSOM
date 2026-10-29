@@ -118,12 +118,17 @@ def test_end_to_end(tmp_path):
 
 
 def test_diagnostic_reasons(tmp_path):
-    base=['--inputs','x.h5','--anchor','1','--held-out','3','--out',str(tmp_path/'o'),'--rows-per-snapshot','10000000',
-          '--rows-per-epoch','20000000']
-    assert pool.diagnostic_reasons(pool.parser().parse_args(base))==[]
+    base=['--inputs','x.h5','--anchor','94208','--held-out','405504','--out',str(tmp_path/'o'),
+          '--rows-per-snapshot','10000000','--rows-per-epoch','20000000']
+    ids=['94208','98304']
+    assert pool.diagnostic_reasons(pool.parser().parse_args(base),ids)==[]
     for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
-                      (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features')]:
-        assert any(r.startswith(key) for r in pool.diagnostic_reasons(pool.parser().parse_args(base+extra))),key
+                      (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features'),
+                      (['--anchor','98304'],'anchor'),(['--held-out','405504','110592'],'held_out')]:
+        assert any(r.startswith(key) for r in pool.diagnostic_reasons(pool.parser().parse_args(base+extra),ids)),key
+    # a different training set: reordered, added or swapped snapshots
+    for other in (['98304','94208'],['94208','98304','110592'],['94208','110592']):
+        assert any(r.startswith('snapshots') for r in pool.diagnostic_reasons(pool.parser().parse_args(base),other))
 
 
 def test_rare_levels():

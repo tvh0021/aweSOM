@@ -506,10 +506,15 @@ APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattice
                 seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
                 r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
                 tube_bz=.7, tube_beta=0.)
+# The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
+# files is operational; a different selection, count or order is a different training set.
+APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=['405504'])
 
 
-def diagnostic_reasons(args):
+def diagnostic_reasons(args, snapshots=None):
     reasons=[f'{k}={getattr(args,k)!r}, approved {v!r}' for k,v in APPROVED.items() if getattr(args,k)!=v]
+    used=dict(snapshots=snapshots, anchor=args.anchor, held_out=list(args.held_out))
+    reasons+=[f'{k}={used[k]!r}, approved {v!r}' for k,v in APPROVED_SNAPSHOTS.items() if used[k]!=v]
     if args.allow_independent_thresholds: reasons.append('allow_independent_thresholds')
     if args.allow_six_features: reasons.append('allow_six_features')
     return reasons
@@ -527,6 +532,7 @@ def main(argv=None):
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
     args.code_commit = provenance()
     records,quota,disk,mismatches = inspect(args)
+    ids=[r['snapshot'] for r in records]
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
@@ -563,7 +569,7 @@ def main(argv=None):
                                        volume_weights='input weight_volume; selected weight hashes recorded; effective inverse probability includes pool quota / extracted count',
                                        row_order_sha256=scaling['row_order_sha256']),
                   aweSOM_commit=args.code_commit,input_hashes={r['path']:r['sha256'] for r in records},disk=disk,
-                  diagnostic_only=bool(diagnostic_reasons(args)),diagnostic_reasons=diagnostic_reasons(args),
+                  diagnostic_only=bool(diagnostic_reasons(args,ids)),diagnostic_reasons=diagnostic_reasons(args,ids),
                   threshold_override_mismatches=mismatches,
                   verification={r['tag']:r['verification'] for r in fits})
     dump(out/'freeze-manifest.json',manifest)
