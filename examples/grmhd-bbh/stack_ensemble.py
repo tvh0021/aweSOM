@@ -4,7 +4,8 @@
 features.h5 -> realizations (seeds x lattice scales) -> SCE Gsum (mask-free) -> stacked labels
 
 Each realization follows ``etk-analysis/scripts/train_som.py``: the first ``N`` rows,
-``manual_scaling`` ((x - mean) / 2 sigma of those rows), a lattice of
+the frozen median-IQR scaler for v2 or ``manual_scaling`` for legacy inputs,
+a lattice of
 ``scale * number_of_nodes(N, F)`` nodes at height/width ratio 0.7, ``alpha_0 = 0.5`` with
 decay, uniform (``1u``) initial weights, ``N`` online steps, and a U-matrix centroid
 merge at ``merge_cost = 0.2``. Realizations differ in seed and lattice scale.
@@ -47,6 +48,7 @@ import h5py
 import numpy as np
 
 from aweSOM import Lattice
+from aweSOM.grmhd_freeze import training_scaler
 from aweSOM.make_sce_clusters import anchored_sce_labels, stack_sce_labels
 from aweSOM.run_som import manual_scaling, number_of_nodes
 from aweSOM.sce import find_number_of_clusters, loop_over_all_clusters
@@ -148,7 +150,15 @@ def run_realization(cfg: dict) -> dict:
 
     t_start = time.perf_counter()
     x, names, _ = load_features(cfg["input"], n)
-    data = manual_scaling(x)
+    with h5py.File(cfg["input"], "r") as h:
+        scaler, scaling_meta = training_scaler(h, x, names, dtype=x.dtype)
+    if scaler.kind == "manual":
+        # Preserve historical float32 arithmetic before applying optional weights.
+        data = manual_scaling(x)
+        if "feature_weights" in scaling_meta:
+            data = data * np.asarray(json.loads(scaling_meta["feature_weights"]), dtype=data.dtype)
+    else:
+        data = scaler.transform(x)
     del x
     log_path = out / f"train.{tag}.log"
     # the merge step prints a few lines per centroid pair; keep it out of the console
@@ -180,7 +190,10 @@ def run_realization(cfg: dict) -> dict:
         "train_steps": int(train),
         "merge_cost": float(cfg["merge_cost"]),
         "history": False,
-        "scaling": "manual_scaling: (x - mean) / (2 std) of the first n_samples rows",
+        "scaling": scaler.kind,
+        "scaler_offset": scaler.offset.tolist(),
+        "scaler_scale": scaler.scale.tolist(),
+        **scaling_meta,
         "n_clusters": int(len(original_ids)),
         "lattice_cluster_ids": original_ids,
         "cluster_counts": [int(c) for c in counts],

@@ -39,9 +39,9 @@ def test_robust_training_round_trip(tmp_path):
     lattice = next((tmp_path/'train').glob('som_object*.pkl'))
     out = tmp_path/'model.h5'
     build = [sys.executable, str(root/'examples/grmhd-bbh/build_model.py'), '--lattice', str(lattice), '--training-file', str(file), '--merge-cost','.05','-o',str(out)]
-    refused = subprocess.run(build, env=env, capture_output=True, text=True)
+    refused = subprocess.run(build+["--scaler", "training-float32"], env=env, capture_output=True, text=True)
     assert refused.returncode and 'v2 requires --scaler file' in refused.stderr
-    result = subprocess.run(build+['--scaler','file'], env=env, capture_output=True, text=True)
+    result = subprocess.run(build, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     model = SOMModel.load(out)
     assert model.scaler.kind == 'median-iqr'

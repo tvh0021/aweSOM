@@ -22,6 +22,10 @@ def main():
     if len(args.model)!=len(args.output):raise ValueError('one output per model required')
     models=[SOMModel.load(path) for path in args.model]; ref=models[0]
     for m in models:
+        if m.feature_names != ref.feature_names:
+            raise ValueError("models must have identical feature names and order")
+        if (m.xdim, m.ydim) != (ref.xdim, ref.ydim):
+            raise ValueError("models must have identical lattice dimensions")
         assert np.array_equal(m.weights,ref.weights)
         assert np.array_equal(m.scaler.offset,ref.scaler.offset)
         assert np.array_equal(m.scaler.scale,ref.scaler.scale)
@@ -30,7 +34,8 @@ def main():
     t=time.time()
     with h5py.File(args.grid) as h:
         names=[n.decode() if isinstance(n,bytes) else str(n) for n in h['names'][()]]
-        assert names==list(ref.feature_names)
+        if names != list(ref.feature_names):
+            raise ValueError("grid and model feature names disagree")
         n=len(h['level']); outs=[np.lib.format.open_memmap(path,mode='w+',dtype='int16',shape=(n,)) for path in args.output]
         for a in range(0,n,1000000):
             sl=slice(a,min(a+1000000,n));lev=h['level'][sl]
