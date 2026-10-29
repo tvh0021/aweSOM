@@ -1,8 +1,8 @@
 """The GRMHD current-sheet features, computed on one level block.
 
 A numpy-only port of etkplot's ``features``/``derivatives``/``thresholds``
-modules (``/Volumes/ExternalNVMe/etk-analysis/etkplot``), restricted to the
-five default feature columns, with optional ``bz_frac`` in ``SIX_FEATURE_NAMES``:
+modules (``/Volumes/ExternalNVMe/etk-analysis/etkplot``), with five default feature columns, optional ``bz_frac`` in
+``SIX_FEATURE_NAMES``, and ``pol_frac`` in ``SEVEN_FEATURE_NAMES``:
 
 =================  =========================================================
 ``log_beta_inv``   log10(b^2 / (2 P))
@@ -14,7 +14,16 @@ five default feature columns, with optional ``bz_frac`` in ``SIX_FEATURE_NAMES``
 =================  =========================================================
 
 ``bz_frac`` is abs(Bz)/|B|, zero at zero norm or where |B| < b2_min.
-It uses the identity transform without winsor clipping.
+``pol_frac`` is sqrt(B_R^2 + Bz^2)/|B| about the nearer hole in 3D,
+with ties going to hole 1. On its z axis B_R^2 = (Bx^2 + By^2)/2.
+Both fractions are zero at B = 0 and use no winsor clipping.
+
+The default pipeline is v1. Opt in with ``FeatureThresholds(..., pipeline="v2")``.
+V2 uses B/sqrt(B.B + b2_min) for chi and sqrt(|B|^2 + b2_min) for
+both fraction denominators. It forbids winsor clipping and requires a frozen
+median-IQR model scaler. Scaler center and scale belong to ``SOMModel.scaler``.
+Pol_frac always needs explicit ``xyz`` axes and ``hole_centres`` at computation
+time; saved training positions must never substitute for snapshot geometry.
 
 eps = 1e-3. Derivatives are centred (Fornberg) first differences of
 accuracy 2, 4 or 6 along the block's x, y, z axes (flat metric, coordinate
@@ -48,6 +57,7 @@ import numpy as np
 __all__ = [
     "FEATURE_NAMES",
     "SIX_FEATURE_NAMES",
+    "SEVEN_FEATURE_NAMES",
     "INPUTS",
     "EPS",
     "DEFAULT_ACCURACY",
@@ -67,6 +77,7 @@ FEATURE_NAMES: Tuple[str, ...] = (
     "asinh_div_v",
 )
 SIX_FEATURE_NAMES = FEATURE_NAMES + ("bz_frac",)
+SEVEN_FEATURE_NAMES = SIX_FEATURE_NAMES + ("pol_frac",)
 INPUTS: Tuple[str, ...] = ("smallb2", "P", "rho_b", "Bx", "By", "Bz", "vel[0]", "vel[1]", "vel[2]")
 EPS = 1e-3
 ACCURACIES = (2, 4, 6)
@@ -83,6 +94,10 @@ _FIRST = {
 }
 
 _META_PREFIX = "feature_"
+
+
+def _text(value):
+    return value.decode() if isinstance(value, bytes) else str(value)
 
 
 def half_width(accuracy: int) -> int:
@@ -154,12 +169,47 @@ def smooth_chi(aux, floor):
     return np.sqrt(chi2)
 
 
+def _hole_centres(centres):
+    """Validate explicitly supplied positions; never infer a geometry."""
+    c = np.asarray(centres, dtype=float)
+    if c.shape != (2, 3) or not np.all(np.isfinite(c)):
+        raise ValueError("pol_frac needs hole_centres with shape (2, 3), all finite")
+    return c
+
+
+def _pol_frac(a, xyz, hole_centres):
+    """sqrt(B_R^2 + Bz^2)/|B| about the nearer hole, before any floor. Kept
+    <= 1 in floating point: B_R^2 is capped at Bx^2 + By^2 and the sums
+    are formed in the same order as |B|^2's."""
+    c = _hole_centres(hole_centres)
+    if xyz is None:
+        raise ValueError("pol_frac needs the point coordinates (xyz)")
+    x, y, z = (np.asarray(u, dtype=float).reshape(
+        [-1 if k == d else 1 for k in range(3)]) for d, u in enumerate(xyz))
+    second = sum((u - c[1, k]) ** 2 for k, u in enumerate((x, y, z))) < \
+        sum((u - c[0, k]) ** 2 for k, u in enumerate((x, y, z)))
+    rx = np.where(second, x - c[1, 0], x - c[0, 0])  # nearer hole; ties to hole 1
+    ry = np.where(second, y - c[1, 1], y - c[0, 1])
+    rx, ry = np.broadcast_arrays(rx, ry)
+    r = np.hypot(rx, ry)
+    bx, by, bz = a["Bx"], a["By"], a["Bz"]
+    bh2 = bx ** 2 + by ** 2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        br = (rx * bx + ry * by) / r
+    br2 = np.where(r > 0, np.minimum(br * br, bh2), 0.5 * bh2)
+    norm = np.sqrt(bh2 + bz ** 2)
+    return np.divide(np.sqrt(br2 + bz ** 2), norm, out=np.zeros_like(norm), where=norm != 0)
+
+
 def raw_features(
     arrays: Mapping[str, np.ndarray],
     dx: Sequence[float],
     accuracy: int = DEFAULT_ACCURACY,
     names: Sequence[str] = FEATURE_NAMES,
     pipeline: str = "v1",
+    *,
+    xyz=None,
+    hole_centres=None,
 ) -> Dict[str, np.ndarray]:
     """Each feature before its thresholds, float64, on the block's shape.
 
@@ -171,10 +221,15 @@ def raw_features(
         dx: grid spacing per axis.
         accuracy: order of the centred differences (2, 4 or 6).
         names: features to compute.
+        pipeline: v1 (default) or v2, matching the finish thresholds.
+        xyz: three 1D coordinate axes matching the block, required for pol_frac.
+        hole_centres: explicit finite (2, 3) positions, required for pol_frac.
 
     Returns:
         dict: feature name -> float64 array of the block's shape.
     """
+    if pipeline not in ("v1", "v2"):
+        raise ValueError(f"unknown pipeline {pipeline!r}")
     dx = np.asarray(dx, dtype=float)
     out: Dict[str, np.ndarray] = {}
     for n in names:
@@ -197,6 +252,9 @@ def raw_features(
             b2 = arrays["smallb2"]
             g2 = sum(derivative(b2, d, dx[d], accuracy) ** 2 for d in range(3))
             out[n] = _log10(_ratio(np.sqrt(g2), b2) + EPS)
+        elif n == "pol_frac":
+            out[n] = _pol_frac(arrays, xyz, hole_centres)
+            out["B_norm"] = np.sqrt(arrays["Bx"] ** 2 + arrays["By"] ** 2 + arrays["Bz"] ** 2)
         elif n == "bz_frac":
             norm = np.sqrt(arrays["Bx"] ** 2 + arrays["By"] ** 2 + arrays["Bz"] ** 2)
             out[n] = np.divide(np.abs(arrays["Bz"]), norm, out=np.zeros_like(norm), where=norm != 0)
@@ -205,7 +263,7 @@ def raw_features(
         elif n == "asinh_div_v":
             out[n] = sum(derivative(arrays[f"vel[{d}]"], d, dx[d], accuracy) for d in range(3))
         else:
-            raise ValueError(f"unknown feature {n!r}; the features are {FEATURE_NAMES}")
+            raise ValueError(f"unknown feature {n!r}; the features are {SEVEN_FEATURE_NAMES}")
     return out
 
 
@@ -227,13 +285,25 @@ class FeatureThresholds:
     accuracy: int = DEFAULT_ACCURACY
     epsilon: float = EPS
     pipeline: str = "v1"
+    scaler_kind: str | None = None
+    feature_names: Tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.pipeline not in ("v1", "v2"):
             raise ValueError(f"unknown pipeline {self.pipeline}")
         if self.pipeline == "v2" and self.winsor:
             raise ValueError("v2 does not allow winsor clipping")
+        expected_scaler = "median-iqr" if self.pipeline == "v2" else "manual"
+        if self.scaler_kind is None:
+            self.scaler_kind = expected_scaler
+        if self.scaler_kind != expected_scaler:
+            raise ValueError("pipeline and scaler_kind disagree")
+        self.feature_names = tuple(self.feature_names)
+        if self.feature_names and self.feature_names not in (FEATURE_NAMES, SIX_FEATURE_NAMES, SEVEN_FEATURE_NAMES):
+            raise ValueError("unsupported feature names or column order")
         self.b2_min = float(self.b2_min)
+        if not np.isfinite(self.b2_min) or self.b2_min < 0:
+            raise ValueError("b2_min must be finite and nonnegative")
         self.s_v = float(self.s_v)
         self.accuracy = int(self.accuracy)
         half_width(self.accuracy)
@@ -256,6 +326,8 @@ class FeatureThresholds:
     def from_h5_attrs(cls, attrs: Mapping) -> "FeatureThresholds":
         """From the root attributes of an etkplot training-set or grid file
         (``b2_min``, ``s_v``, ``winsor_<feature>``, ``accuracy``, ``epsilon``)."""
+        if _text(attrs.get("direction_norm", "Eulerian B dot B")) != "Eulerian B dot B":
+            raise ValueError("unsupported direction_norm")
         winsor = {}
         for n in FEATURE_NAMES:
             key = f"winsor_{n}"
@@ -268,7 +340,8 @@ class FeatureThresholds:
             winsor=winsor,
             accuracy=int(attrs.get("accuracy", DEFAULT_ACCURACY)),
             epsilon=float(attrs.get("epsilon", EPS)),
-            pipeline=str(attrs.get("pipeline", "v1")),
+            pipeline=_text(attrs.get("pipeline", "v1")),
+            scaler_kind=_text(attrs["scaler_kind"]) if "scaler_kind" in attrs else None,
         )
 
     @classmethod
@@ -277,7 +350,11 @@ class FeatureThresholds:
         import h5py
 
         with h5py.File(path, "r") as f:
-            return cls.from_h5_attrs(dict(f.attrs))
+            thr = cls.from_h5_attrs(dict(f.attrs))
+            if "names" in f:
+                thr.feature_names = tuple(_text(n) for n in f["names"][:])
+                thr.__post_init__()
+            return thr
 
     def to_metadata(self) -> Dict[str, str]:
         """``SOMModel.metadata`` entries (``feature_*`` keys, floats as %.17g so
@@ -291,6 +368,10 @@ class FeatureThresholds:
             f"{_META_PREFIX}accuracy": str(self.accuracy),
             f"{_META_PREFIX}epsilon": fmt(self.epsilon),
         }
+        meta[f"{_META_PREFIX}scaler_kind"] = self.scaler_kind
+        meta[f"{_META_PREFIX}direction_norm"] = "Eulerian B dot B"
+        if self.feature_names:
+            meta[f"{_META_PREFIX}columns"] = " ".join(self.feature_names)
         for n, (lo, hi) in self.winsor.items():
             meta[f"{_META_PREFIX}winsor_{n}"] = f"{fmt(lo)} {fmt(hi)}"
         return meta
@@ -304,6 +385,11 @@ class FeatureThresholds:
                 "the model's metadata holds no feature thresholds (feature_b2_min, feature_s_v); "
                 "freeze it with FeatureThresholds.to_metadata()"
             )
+        pipeline = _text(meta.get(f"{p}pipeline", "v1"))
+        if meta.get(f"{p}set", f"grmhd-etkplot-{pipeline}") != f"grmhd-etkplot-{pipeline}":
+            raise ValueError("feature set and pipeline disagree")
+        if meta.get(f"{p}direction_norm", "Eulerian B dot B") != "Eulerian B dot B":
+            raise ValueError("unsupported direction_norm")
         winsor = {}
         for n in FEATURE_NAMES:
             v = meta.get(f"{p}winsor_{n}")
@@ -316,16 +402,23 @@ class FeatureThresholds:
             winsor=winsor,
             accuracy=int(meta.get(f"{p}accuracy", DEFAULT_ACCURACY)),
             epsilon=float(meta.get(f"{p}epsilon", EPS)),
-            pipeline=str(meta.get(f"{p}pipeline", "v1")),
+            pipeline=pipeline,
+            scaler_kind=meta.get(f"{p}scaler_kind"),
+            feature_names=tuple(meta.get(f"{p}columns", "").split()),
         )
 
     @classmethod
     def from_model(cls, model) -> "FeatureThresholds":
         """From a frozen :class:`~aweSOM.model.SOMModel`; also checks that the
-        model uses the default five or optional six columns."""
-        if tuple(model.feature_names) not in (FEATURE_NAMES, SIX_FEATURE_NAMES):
+        model uses five, six or seven columns and matching transform metadata."""
+        if tuple(model.feature_names) not in (FEATURE_NAMES, SIX_FEATURE_NAMES, SEVEN_FEATURE_NAMES):
             raise ValueError(f"model features {model.feature_names} are not {list(FEATURE_NAMES)}")
-        return cls.from_metadata(model.metadata)
+        thr = cls.from_metadata(model.metadata)
+        if thr.feature_names and thr.feature_names != tuple(model.feature_names):
+            raise ValueError("model and threshold feature names disagree")
+        if thr.pipeline == "v2" and model.scaler.kind != thr.scaler_kind:
+            raise ValueError("v2 requires the frozen median-iqr scaler")
+        return thr
 
 
 def finish_features(
@@ -358,11 +451,15 @@ def finish_features(
         elif n == "bz_frac" and thresholds.pipeline == "v2":
             denom = np.sqrt(np.asarray(raw["B_norm"]).ravel()**2 + thresholds.b2_min)
             x = np.divide(np.asarray(raw["abs_Bz"]).ravel(), denom, out=np.zeros_like(denom), where=denom != 0)
+        elif n == "pol_frac" and thresholds.pipeline == "v2":
+            norm = np.asarray(raw["B_norm"]).ravel()
+            denom = np.sqrt(norm**2 + thresholds.b2_min)
+            x = np.divide(x * norm, denom, out=np.zeros_like(norm), where=denom != 0)
         elif n == "log_chi_B" and thresholds.b2_min > 0:
             x = x.copy()
             with np.errstate(invalid="ignore"):
                 x[(np.asarray(smallb2).ravel() < thresholds.b2_min) & np.isfinite(x)] = np.log10(EPS)
-        elif n == "bz_frac":
+        elif n in ("bz_frac", "pol_frac"):
             x = np.where(np.asarray(raw["B_norm"]).ravel() < thresholds.b2_min, 0.0, x)
         elif n == "asinh_div_v":
             x = np.arcsinh(x / thresholds.s_v)
@@ -381,6 +478,9 @@ def compute_features(
     thresholds: FeatureThresholds,
     select=None,
     names: Sequence[str] = FEATURE_NAMES,
+    *,
+    xyz=None,
+    hole_centres=None,
 ) -> np.ndarray:
     """Features after the thresholds at selected points of a block.
 
@@ -391,11 +491,16 @@ def compute_features(
         select: boolean mask of the block's shape, or an index expression, picking
             the points to return (C order). None: every point.
         names: column order.
+        xyz: three 1D axes for the full block, including its halo.
+        hole_centres: explicit finite (2, 3) positions for this snapshot.
 
     Returns:
         np.ndarray: float32 [N, len(names)].
     """
-    raw = raw_features(arrays, dx, thresholds.accuracy, names, thresholds.pipeline)
+    if thresholds.feature_names and tuple(names) != thresholds.feature_names:
+        raise ValueError("requested and threshold feature names disagree")
+    raw = raw_features(arrays, dx, thresholds.accuracy, names, thresholds.pipeline,
+                       xyz=xyz, hole_centres=hole_centres)
     b2 = arrays["smallb2"]
     if select is None:
         pick = lambda a: np.asarray(a).ravel()  # noqa: E731
