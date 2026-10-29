@@ -628,9 +628,10 @@ def parser():
 
 # The approved production training settings (production_pool.sbatch defaults). A run that departs
 # from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
+# r_min=8 on every lattice and target_clusters=10 approved by the user on 2026-10-29.
 APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
                 seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
-                r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
+                r_max=None, r_min=8., bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
                 tube_bz=.7, tube_beta=0.)
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.

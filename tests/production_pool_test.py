@@ -134,14 +134,17 @@ def test_end_to_end(tmp_path):
 
 def test_diagnostic_reasons(tmp_path,monkeypatch):
     base=['--inputs','x.h5','--anchor','94208','--held-out','405504','--out',str(tmp_path/'o'),
-          '--rows-per-snapshot','10000000','--rows-per-epoch','20000000']
+          '--rows-per-snapshot','10000000','--rows-per-epoch','20000000','--target-clusters','10','--r-min','8']
     monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{'94208':'a'*64,'98304':'b'*64})
     rec=lambda *ids: [dict(snapshot=i,sha256=pool.APPROVED_INPUT_SHA256.get(i,'c'*64)) for i in ids]
     reasons=lambda extra=(),records=rec('94208','98304'): pool.diagnostic_reasons(pool.parser().parse_args(base+list(extra)),records)
     assert reasons()==[]
+    # the per-lattice default radius (r5 on 48x34) is not the approved r8
+    assert any(r.startswith('r_min') for r in pool.diagnostic_reasons(pool.parser().parse_args(
+        [a for a in base if a not in ('--r-min','8')]),rec('94208','98304')))
     for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
                       (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features'),
-                      (['--anchor','98304'],'anchor'),(['--held-out','405504','110592'],'held_out')]:
+                      (['--anchor','98304'],'anchor'),(['--target-clusters','12'],'target_clusters'),(['--r-min','5'],'r_min'),(['--held-out','405504','110592'],'held_out')]:
         assert any(r.startswith(key) for r in reasons(extra)),key
     # a different training set: reordered, added or swapped snapshots
     for other in (rec('98304','94208'),rec('94208','98304','110592'),rec('94208','110592')):
