@@ -197,3 +197,85 @@ def test_stratified_sample_size_and_dtype():
     assert s.shape == (10_000, 2) and s.dtype == np.float32
     # whole blocks of consecutive rows
     assert np.all(np.diff(s[:100, 0]) == 2)
+
+
+@pytest.mark.parametrize('dtype', [np.float32, np.float64])
+@pytest.mark.parametrize('shape', [(19, 13), (7, 3), (1, 1)])
+def test_feature_grouped_bmu_exact(shape, dtype):
+    """Repartitioning unordered nodes preserves reference arithmetic and ties."""
+    from aweSOM.stream import _BMU
+    rng = np.random.default_rng(184)
+    xd, yd = shape
+    w = rng.normal(size=(xd * yd, 7))
+    w[-1] = w[0]
+    x = rng.normal(size=(600, 7)).astype(dtype)
+    x[:len(w)] = w
+    x[-4, 0] = np.nan
+    x[-3, 0] = np.inf
+    x[-2] = 1e30
+    x[-1] = 0.5 * (w[0] + w[len(w)//2])
+    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+    bmu = _BMU(w, 'patch', xd, yd)
+    bmu(x, idx, d2)
+    ref = best_match_nodes(w, x)
+    np.testing.assert_array_equal(idx, ref[0])
+    np.testing.assert_array_equal(d2, ref[1])
+
+
+def test_unordered_patch_pruning():
+    """Unordered initialization must not force nearly a full node scan."""
+    from aweSOM.stream import _BMU
+    from aweSOM.inference import _patch_kernel
+    rng = np.random.default_rng(184)
+    # A thin, correlated distribution, with no lattice ordering.
+    t = rng.uniform(-3, 3, (4096, 1))
+    w = t + 0.05 * rng.normal(size=(4096, 7))
+    x = rng.uniform(-3, 3, (512, 1)) + 0.05 * rng.normal(size=(512, 7))
+    bmu = _BMU(w, 'patch', 64, 64)
+    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+    evaluations = _patch_kernel(*bmu.patches, x, idx, d2)
+    assert evaluations / len(x) < len(w) / 2
+    ref = best_match_nodes(w, x)
+    np.testing.assert_array_equal(idx, ref[0])
+    np.testing.assert_array_equal(d2, ref[1])
+
+
+def test_feature_patches_partition_and_bounds():
+    from aweSOM.inference import _feature_patches
+    w = np.random.default_rng(2).normal(size=(257, 7))
+    wp, perm, offs, cent, rad = _feature_patches(w)
+    np.testing.assert_array_equal(np.sort(perm), np.arange(len(w)))
+    np.testing.assert_array_equal(wp.T, w[perm])
+    assert offs[0] == 0 and offs[-1] == len(w)
+    assert np.all((np.diff(offs) > 0) & (np.diff(offs) <= 16))
+    for b in range(len(rad)):
+        members = w[perm[offs[b]:offs[b+1]]]
+        assert np.all(np.sqrt(((members - cent[:, b])**2).sum(axis=1)) <= rad[b])
+
+
+@pytest.mark.parametrize('value', [np.nan, np.inf, 1e16])
+def test_feature_search_preserves_weight_fallback(value):
+    from aweSOM.stream import _BMU
+    w = np.random.default_rng(2).normal(size=(35, 3))
+    w[0, 0] = value
+    x = np.zeros((4, 3))
+    bmu = _BMU(w, 'patch', 7, 5)
+    assert bmu.kind == 'numba'
+    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+    bmu(x, idx, d2)
+    ref = best_match_nodes(w, x)
+    np.testing.assert_array_equal(idx, ref[0])
+    np.testing.assert_array_equal(d2, ref[1])
+
+
+def test_feature_search_training_bitwise_against_lattice(monkeypatch):
+    from aweSOM import stream
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=(4000, 7))
+    options = dict(xdim=19, ydim=13, epochs=4, chunk=700, bmu='patch')
+    actual, info = train_batch_stream(x, **options)
+    monkeypatch.setattr(stream, '_feature_patches', lambda w: stream.lattice_patches(w, 19, 13))
+    expected, old_info = train_batch_stream(x, **options)
+    np.testing.assert_array_equal(actual, expected)
+    for key in ('hits', 'qe', 'qe_initial'):
+        np.testing.assert_array_equal(info[key], old_info[key])

@@ -83,6 +83,7 @@ from ._batch_core import radius_schedule
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
+    _feature_patches,
     _patch_kernel,
     _screen_kernel,
     lattice_patches,
@@ -386,6 +387,10 @@ def neighbourhood_update(
 class _BMU:
     """Exact BMU search of one chunk against fixed weights.
 
+    Patch search uses lattice or feature-space groups, choosing the smaller
+    mean bounding radius. Both retain original node IDs and reference
+    arithmetic, including the lowest-index tie rule.
+
     ``"auto"`` times the screen and patch searches on the first rows of the
     first chunk and keeps the faster one for the pass (both are exact, with
     bitwise-equal results, so the choice only affects speed).
@@ -405,6 +410,12 @@ class _BMU:
             self.wmax = float(np.sqrt((self.w * self.w).sum(axis=1)).max())
         if self.kind in ("patch", "auto"):
             self.patches = lattice_patches(self.w, xdim, ydim)
+            feature_patches = _feature_patches(self.w)
+            # Sampled initialization has no lattice locality. Feature-space
+            # groups give tighter bounds there; smooth maps retain lattice
+            # patches when their average bounding radius is smaller.
+            if feature_patches[4].mean() < self.patches[4].mean():
+                self.patches = feature_patches
 
     def _run(self, kind: str, block, idx, d2) -> int:
         if kind == "screen":
@@ -526,8 +537,8 @@ def train_batch_stream(
         initial_weights: Optional ``(xdim * ydim, F)`` starting lattice.
         bmu: ``"auto"`` (default: per pass, the faster of screen and patch on
             the first 16384 rows), ``"screen"`` (float32 screen certified in
-            float64), ``"patch"`` (lattice-patch pruned search,
-            :func:`aweSOM.inference.best_match_nodes_patch`) or ``"numba"``
+            float64), ``"patch"`` (bounding-ball pruned search with lattice
+            or feature-space groups) or ``"numba"``
             (float64 brute force). All four give the exact float64 BMU
             (bitwise-equal labels), so the weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified

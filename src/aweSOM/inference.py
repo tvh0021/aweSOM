@@ -642,6 +642,39 @@ def default_patch_side(n_nodes: int) -> int:
     return 4 if n_nodes <= 8000 else 5
 
 
+def _feature_patches(weights: np.ndarray, leaf_size: int = 16) -> tuple:
+    """Bounding balls for balanced feature-space groups, retaining original IDs.
+
+    Split each group at the median of its widest feature. This only changes
+    the search index, never the weights or their lattice positions.
+    """
+    w = np.ascontiguousarray(weights, dtype=np.float64)
+    leaves = []
+
+    def split(ids):
+        if len(ids) <= leaf_size:
+            leaves.append(np.sort(ids))
+            return
+        values = w[ids]
+        axis = np.argmax(np.ptp(values, axis=0))
+        mid = len(ids) // 2
+        order = np.argpartition(values[:, axis], mid)
+        split(ids[order[:mid]])
+        split(ids[order[mid:]])
+
+    split(np.arange(len(w), dtype=np.int64))
+    perm = np.concatenate(leaves)
+    offs = np.concatenate(([0], np.cumsum([len(ids) for ids in leaves])))
+    cent = np.empty((len(leaves), w.shape[1]))
+    rad = np.empty(len(leaves))
+    for b, ids in enumerate(leaves):
+        members = w[ids]
+        cent[b] = members.mean(axis=0)
+        rad[b] = np.sqrt(((members - cent[b]) ** 2).sum(axis=1)).max()
+    rad = rad * (1.0 + 1e-9) + 1e-300
+    return np.ascontiguousarray(w[perm].T), perm, offs, np.ascontiguousarray(cent.T), rad
+
+
 @njit(parallel=True, nogil=True, cache=True)
 def _patch_kernel(wpT, perm, offs, centT, rad, data, out_idx, out_dist2) -> int:
     """Exact BMU search pruned by patch balls; see best_match_nodes_patch. Returns node evaluations."""
