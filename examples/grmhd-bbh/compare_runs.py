@@ -447,12 +447,18 @@ def main(argv=None):
         from aweSOM.model import SOMModel
 
         model = SOMModel.load(args.model)
+    meta = model.metadata if model is not None else {}
     if args.sheet_clusters:
         clusters = [int(c) for c in args.sheet_clusters.split(",")]
-    elif model is not None and model.metadata.get("selected_sheet_clusters", model.metadata.get("sheet_clusters")):
+    elif "selected_sheet_clusters" in meta or "sheet_clusters" in meta:
         # production_pool.py's frozen selected IDs take precedence over the older sheet_clusters key
-        chosen = model.metadata.get("selected_sheet_clusters") or model.metadata["sheet_clusters"]
-        clusters = [int(c) for c in chosen.split(",")]
+        chosen = meta["selected_sheet_clusters"] if "selected_sheet_clusters" in meta else meta["sheet_clusters"]
+        clusters = [int(c) for c in chosen.split(",") if c]
+        if not clusters:
+            # A valid zero-pick model: nothing to compare, and not a metadata error
+            status = meta.get("sheet_selection_status", "none")
+            print(f"model selected no sheet clusters (status {status}); nothing to compare", flush=True)
+            return
     else:
         raise SystemExit("give --sheet-clusters or a --model with selected sheet clusters in its metadata")
     print(f"sheet clusters: {clusters}", flush=True)
