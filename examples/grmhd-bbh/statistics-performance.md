@@ -8,6 +8,41 @@ insertion order and per-node partitioning before the rejection percentile are
 preserved. The function creates no scratch files and does not modify its inputs.
 `PhaseClock`, the worker supervisor and all training settings are unchanged.
 
+## Why the old code was slow on lagoon
+
+The old `export_statistics`, frozen in
+`tests/production_pool_statistics_reference.py`, grouped values through a
+float64 scratch file. It created that file with `open_memmap` in the output
+directory, which on the production cluster is lagoon, a network filesystem. It
+did this eight times: once for node distances and once for each of the seven
+features. Each pass wrote 8*N bytes, 160 MB at 20M rows, and the writes were
+scattered. Every row went to the slot reserved for its node or cluster, so
+consecutive rows landed in different parts of the file. The percentile and
+median calls then rewrote the same pages in place.
+
+The old code also read the raw matrix one column at a time. The pool stores
+rows contiguously, so reading one feature for all rows touches the whole
+matrix with a stride of seven values. Seven features meant seven strided passes
+over the same 560 MB.
+
+On a local drive these patterns cost little: the old code was 1.88 times slower
+on 3M rows (see below). On a network filesystem, each dirty page written back
+from a scattered memmap and each strided read can become a separate small
+request to the server. Many small round trips leave the process waiting, which
+fits the measured stage wall time of 4.3 to 6.9 times its CPU time. Old CPU
+time was also 56 to 298 times the new CPU time. The likely reason is kernel
+time spent on page faults and writeback, since `time.process_time` counts
+system time. This is inferred, not profiled.
+
+The new code reads the raw matrix once, in sequential row blocks, and does all
+grouping, percentiles and medians in RAM. It writes nothing to lagoon until the
+final outputs. On the cluster its wall time equals its CPU time.
+
+Measured: per-seed wall and CPU time for both versions on the same pool, and
+the local timings below. Inferred: that small network requests cause the gap.
+Without profiling on the cluster we cannot split the old wall time between the
+scratch writes and the column reads.
+
 ## Memory
 
 For N rows, D features, input element size S and row block size B, the feature
@@ -82,6 +117,43 @@ and 0.820 and 0.595 seconds CPU. The RAM-scratch variant takes 0.695 seconds
 wall and 0.695 seconds CPU. Its JSON is in the sibling
 `benchmark-release-uncached` directory.
 
-This local drive does not reproduce lagoon's 2020–2369 second stalls. The
-measurements identify both avoidable I/O paths, but cannot establish their
-relative contributions on the remote filesystem without cluster access.
+This local drive does not reproduce lagoon's stalls of 2000 seconds or more.
+The local runs identify both avoidable I/O paths. The cluster runs below
+measure the total effect on lagoon, but not the share of each path.
+
+## Production cluster measurements, 2026-10-29
+
+Jobs 8014 and 8047 ran the same production pool: 20M rows by 7 features,
+float32, contiguous HDF5, k=10, r_min=8, lattices 91x64 and 48x34, seeds 42, 43
+and 44. Both wrote their outputs to lagoon. Job 8014 runs the old code at
+0a006be; job 8047 runs the new code at cb3db68. Times are the `wall_seconds`
+and `cpu_seconds` fields of each job's `timing.log`, pulled to
+`/Volumes/ExternalNVMe/awesom-results/cluster/HHR_flux_production_pool_k10_r8_<job>/`.
+
+| Seed | Old stats wall | Old stats CPU | New stats wall | New stats CPU | Wall speedup | Training wall, old / new |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 91x64-s42 | 2369.4 | 537.7 | 5.27 | 5.24 | 450 | 399 / 404 |
+| 91x64-s43 | 2020.6 | 293.1 | 5.28 | 5.26 | 382 | 405 / 395 |
+| 91x64-s44 | 10127.5 | 1528.9 | 5.14 | 5.13 | 1970 | 213 / 193 |
+| 48x34-s42 | 2326.2 | 540.3 | 5.77 | 5.76 | 403 | 217 / 216 |
+| 48x34-s43 | pending | pending | 5.14 | 5.12 | pending | 210 / 207 |
+| 48x34-s44 | pending | pending | 4.86 | 4.85 | pending | pending / 116 |
+
+All times are in seconds. The new statistics stage is 382 to 1970 times faster
+in wall time on the four seeds measured so far. It now takes about 5 seconds per
+seed, roughly 1 to 4 percent of training time. The old stage took 5 to 48 times
+as long as training. The old stage's wall time was 4.3 to 6.9 times its CPU
+time; the new stage's wall time is within 0.4 percent of its CPU time. The
+91x64-s44 stage took about four times as long as the other old seeds. The logs
+do not show why; lagoon load at the time is one possibility.
+
+Job 8047 started at 23:11:49 UTC and wrote `VALIDATED 0` at 23:30:00 UTC, about
+18 minutes in total. Job 8014 started at 17:47:41 UTC and is still running.
+Its four finished statistics stages alone took 16843 seconds, 4.7 hours. The
+earlier job 8012 ran the same pipeline with the old code and spent about 8 hours
+outside its epoch loop, which is consistent with this stage.
+
+Two checks remain. The 48x34 s43 and s44 rows for 8014 will be filled in when
+that job finishes. Then the outputs of 8014 and 8047 must be compared. The
+local benchmark shows bitwise-identical results, but the production outputs
+have not yet been compared.
