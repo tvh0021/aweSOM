@@ -2,6 +2,16 @@
 
 Inputs are read only. Outputs require a fresh directory. See --help for overrides.
 The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
+
+Sheet-candidate selection (user-approved consensus rule, synthesis opus.md D1-D15):
+each fit records its candidates, clusters whose one-vs-rest rank effects on the
+training rows satisfy E(log_chi_B) > 0, E(log_grad_ln_b2) > 0 and E(log_beta_inv) < 0.
+After every seed of a lattice is fitted, main() selects once for the group: the
+first candidates (largest E(log_chi_B)) are selected sheet clusters when they are
+mutual best Jaccard matches for every seed pair, and the second ones join only if
+they are reproduced too. The IDs are frozen in each model as selected_sheet_clusters
+(alias sheet_clusters for older readers). A "sheet" proper needs the offline
+spatial check, which this driver does not run.
 """
 from __future__ import annotations
 
@@ -342,7 +352,8 @@ def grouped_order(keys, n_groups):
     return order, edges
 
 
-def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
+def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
+                      names=None, strata=None, n_clusters=None):
     """Exact float64 statistics with one sequential pass over the raw rows.
 
     Stable grouping reproduces the old counting scatter's input order, including
@@ -350,8 +361,17 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
     float64 column buffer separate from raw so median partitioning cannot change
     another column. No scratch files are created.
 
+    The fourth result holds the per-cluster descriptors of the sheet-candidate
+    rule (opus.md D10): row counts and shares (all rows and per training
+    snapshot from ``strata``), the K x D one-vs-rest rank effects 2 AUC - 1,
+    the K x 3 x D quartiles, and, when ``names`` carries the three signature
+    features, the joint favourable fraction. Each feature costs one sort.
+
     RAM is O(N*D + N + chunk*D + groups): raw retains its input dtype, one intp
-    permutation and one float64 column are live during feature statistics.
+    permutation and one float64 column are live during feature statistics; the
+    rank effect adds, for one feature at a time, a packed uint64 sort key (8N),
+    its labels (8N) and the doubled ranks (8N), plus the labels (4N) and a
+    favourable-row mask (N) kept across features.
     See statistics-performance.md for conservative production memory estimates.
     """
     order, edges = grouped_order(nodes, n_nodes)
@@ -366,18 +386,242 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
     # Copy mapped labels once, then release them before loading the raw matrix.
     keys = np.array(labels)
     medians = {int(c): [] for a in range(0,len(keys),chunk) for c in np.unique(keys[a:a+chunk])}
-    order, edges = grouped_order(keys, int(max(medians))+1)
-    del keys
+    K = max(int(max(medians))+1, int(n_clusters or 0))
+    order, edges = grouped_order(keys, K)
+    counts = np.diff(edges)
+    snapshot_rows = {}
+    for s in strata or ():
+        rows = snapshot_rows.setdefault(str(s['snapshot']), np.zeros(K, np.int64))
+        rows += np.bincount(keys[s['start']:s['start']+s['rows']], minlength=K)
     values = np.empty(raw.shape, dtype=raw.dtype)
     for a in range(0, len(raw), chunk):
         values[a:a+chunk] = raw[a:a+chunk]
+    n, D = raw.shape
+    effects = np.full((K, D), np.nan); quartiles = np.full((K, 3, D), np.nan)
+    pooled_medians = np.empty(D)
+    directions = dict(SIGNATURE) if names is not None and all(f in names for f, _ in SIGNATURE) else {}
+    favourable = np.ones(n, bool) if directions else None
     buf = np.empty(len(raw), dtype='f8')
-    for j in range(raw.shape[1]):
+    for j in range(D):
+        twice_rank_sums, pooled_medians[j] = rank_sums(values[:, j], keys, K)
+        effects[:, j] = effects_from_rank_sums(twice_rank_sums, counts, n)
+        sign = directions.get(names[j], 0) if directions else 0
+        if sign: favourable &= values[:, j] > pooled_medians[j] if sign > 0 else values[:, j] < pooled_medians[j]
         for a in range(0, len(raw), chunk):
             buf[a:a+chunk] = values[order[a:a+chunk], j]
         for c in medians:
-            medians[c].append(float(np.median(buf[edges[c]:edges[c+1]], overwrite_input=True)))
-    return q, reject, medians
+            segment = buf[edges[c]:edges[c+1]]
+            medians[c].append(float(np.median(segment, overwrite_input=True)))
+            quartiles[c, [0, 2], j] = np.percentile(segment, [25, 75], overwrite_input=True)
+            quartiles[c, 1, j] = medians[c][-1]
+    joint = None
+    if directions:
+        joint = np.bincount(keys, weights=favourable, minlength=K) / np.maximum(counts, 1)
+        joint[counts == 0] = np.nan
+    descriptors = dict(
+        cluster_rows=dict(all=counts, **snapshot_rows),
+        cluster_share=dict(all=counts/n, **{s: r/max(1, int(r.sum())) for s, r in snapshot_rows.items()}),
+        cluster_effects=effects, cluster_quartiles=quartiles, pooled_medians=pooled_medians,
+        cluster_joint_favorable_fraction=joint)
+    return q, reject, medians, descriptors
+
+
+# Sheet-candidate signature (opus.md D1): the sign of each feature's rank effect, strict.
+SIGNATURE = (('log_chi_B', 1), ('log_grad_ln_b2', 1), ('log_beta_inv', -1))
+SELECTION_RULE = ('candidate: E(log_chi_B) > 0 and E(log_grad_ln_b2) > 0 and E(log_beta_inv) < 0, '
+                  'E = 2 AUC - 1 one-vs-rest on the training rows, ordered by E(log_chi_B) descending; '
+                  'selected sheet cluster: the first candidate of every seed when they are mutual best '
+                  'Jaccard matches for every seed pair, plus the second candidates when those are too; '
+                  'at most two; fewer than two seeds is unavailable; no magnitude thresholds')
+# The rejected median thresholds, kept only as a diagnostic label for comparison with older runs.
+LEGACY_THRESHOLDS = dict(log_chi_B_gt=1., log_beta_inv_lt=.5)
+
+
+def rank_sums(column, keys, n_groups):
+    """Twice the per-group sum of global average ranks (1-based; ties share their mean rank),
+    and the column's median.
+
+    Twice the average rank of a tie block [start, end) is start+end+1, an integer, so the
+    sums are exact in float64 below 2**53. float32 columns sort as one uint64 array, the
+    order-preserving value bits above the label, about 3x faster than an argsort."""
+    column = np.asarray(column); n = len(column)
+    if column.dtype == np.float32:
+        bits = (column + np.float32(0)).view(np.uint32)  # -0.0 becomes +0.0, as comparisons see it
+        negative = (bits >> np.uint32(31)).astype(bool)
+        packed = np.where(negative, ~bits, bits | np.uint32(0x80000000)).astype(np.uint64)
+        del bits, negative
+        packed <<= np.uint64(32); packed |= np.asarray(keys).astype(np.uint64)
+        packed.sort()
+        lab = (packed & np.uint64(0xFFFFFFFF)).astype(np.intp)
+        packed >>= np.uint64(32); ordered = packed
+
+        def value(i):
+            u = np.uint32(ordered[i])
+            return float((u & np.uint32(0x7FFFFFFF) if u >> np.uint32(31) else ~u).view(np.float32))
+    else:
+        idx = np.argsort(column)
+        ordered = column[idx]; lab = np.asarray(keys)[idx]
+        del idx
+        value = lambda i: float(ordered[i])
+    median = (value((n-1)//2) + value(n//2)) / 2
+    starts = np.flatnonzero(np.r_[True, ordered[1:] != ordered[:-1]])
+    del ordered
+    if len(starts) == n:
+        twice = np.arange(2, 2*n+1, 2, dtype='f8')
+    else:
+        ends = np.r_[starts[1:], n]
+        twice = np.repeat((starts+ends+1).astype('f8'), ends-starts)
+    return np.bincount(lab, weights=twice, minlength=n_groups), median
+
+
+def effects_from_rank_sums(twice_rank_sums, counts, n):
+    """E = 2 AUC - 1 = (2 R - n_c (n + 1)) / (n_c (n - n_c)); NaN for empty or all-row clusters."""
+    counts = np.asarray(counts, dtype='f8')
+    E = np.full(len(counts), np.nan)
+    ok = (counts > 0) & (counts < n)
+    E[ok] = (twice_rank_sums[ok] - counts[ok]*(n+1)) / (counts[ok]*(n-counts[ok]))
+    return E
+
+
+def rank_effects(X, labels, n_groups):
+    """K x D one-vs-rest rank effects of X's columns; the reference for export_statistics."""
+    labels = np.asarray(labels); counts = np.bincount(labels, minlength=n_groups)
+    return np.stack([effects_from_rank_sums(rank_sums(X[:, j], labels, n_groups)[0], counts, len(labels))
+                     for j in range(X.shape[1])], axis=1)
+
+
+def sheet_candidates(effects, names):
+    """Clusters with the strict signature, ordered by E(log_chi_B) descending, then by ID."""
+    E = np.asarray(effects, dtype='f8')
+    col = {f: list(names).index(f) for f, _ in SIGNATURE}
+    conditions = {f'E_{f}_{"positive" if s > 0 else "negative"}': (E[:, col[f]] > 0) if s > 0 else (E[:, col[f]] < 0)
+                  for f, s in SIGNATURE}  # NaN (empty cluster) fails every comparison
+    candidate = np.logical_and.reduce(list(conditions.values()))
+    chi = E[:, col['log_chi_B']]
+    order = sorted(map(int, np.flatnonzero(candidate)), key=lambda c: (-chi[c], c))
+    ties = [[a, b] for a, b in zip(order, order[1:]) if chi[a] == chi[b]]
+    return dict(order=order, ties=ties,
+                clusters=[dict(cluster=c, candidate=bool(candidate[c]),
+                               **{k: bool(v[c]) for k, v in conditions.items()},
+                               **{f'E_{f}': E[c, col[f]] for f, _ in SIGNATURE}) for c in range(len(E))])
+
+
+def jaccard_matrix(a, b, ka, kb, chunk=2**21):
+    """Row-count Jaccard between every cluster of labelling a and of labelling b on the same rows."""
+    inter = np.zeros(ka*kb, np.int64)
+    for i in range(0, len(a), chunk):
+        inter += np.bincount(np.asarray(a[i:i+chunk], np.int64)*kb + np.asarray(b[i:i+chunk]), minlength=ka*kb)
+    inter = inter.reshape(ka, kb)
+    union = inter.sum(1)[:, None] + inter.sum(0)[None, :] - inter
+    return np.divide(inter, union, out=np.zeros((ka, kb)), where=union > 0)
+
+
+def mutual_best(J):
+    """Boolean matrix: (a, b) is each other's argmax Jaccard match."""
+    flags = np.zeros(J.shape, bool)
+    rows = np.argmax(J, axis=1)
+    for a, b in enumerate(rows):
+        flags[a, b] = int(np.argmax(J[:, b])) == a
+    return flags
+
+
+def select_group(orders, jaccard):
+    """Decide the selected sheet clusters once for a lattice group (opus.md D4, D6, D15).
+
+    orders: seed -> candidate IDs by E(log_chi_B) descending.
+    jaccard: (seed_i, seed_j) -> Jaccard matrix for every pair in seed order.
+    Returns picks per seed and the audit; status is selected, none or unavailable."""
+    seeds = list(orders)
+    picks = {s: [] for s in seeds}
+    audit = dict(seeds=seeds, rule=SELECTION_RULE, first=None, second=None)
+    if len(seeds) < 2:
+        return picks, dict(audit, status='unavailable',
+                           reason=f'fewer than two seeds ({len(seeds)}): reproduction cannot be checked')
+    empty = [s for s in seeds if not orders[s]]
+    if empty:
+        return picks, dict(audit, status='none', reason=f'empty signature set in seed(s) {empty}')
+
+    def check(rank):
+        missing = [s for s in seeds if len(orders[s]) <= rank]
+        if missing:
+            return dict(reproduced=False, missing_in_seeds=missing, pairs={})
+        pairs = {}
+        for i, j in jaccard:
+            a, b = orders[i][rank], orders[j][rank]
+            J = jaccard[(i, j)]
+            pairs[f'{i}-{j}'] = dict(clusters=[a, b], jaccard=float(J[a, b]),
+                                     best_of_first=int(np.argmax(J[a])), best_of_second=int(np.argmax(J[:, b])),
+                                     mutual=int(np.argmax(J[a])) == b and int(np.argmax(J[:, b])) == a)
+        return dict(reproduced=all(p['mutual'] for p in pairs.values()),
+                    candidates={s: orders[s][rank] for s in seeds}, pairs=pairs)
+
+    first = check(0); audit['first'] = first
+    if not first['reproduced']:
+        failed = [k for k, p in first['pairs'].items() if not p['mutual']]
+        return picks, dict(audit, status='none',
+                           reason=f'first candidates are not mutual best Jaccard matches for pair(s) {failed}')
+    for s in seeds: picks[s].append(orders[s][0])
+    second = check(1); audit['second'] = second
+    if second['reproduced']:
+        for s in seeds: picks[s].append(orders[s][1])
+        reason = 'first and second candidates reproduced across every seed pair'
+    elif second.get('missing_in_seeds'):
+        reason = f"first candidates reproduced; no second candidate in seed(s) {second['missing_in_seeds']}"
+    else:
+        failed = [k for k, p in second['pairs'].items() if not p['mutual']]
+        reason = f'first candidates reproduced; second candidates not mutual for pair(s) {failed}'
+    return picks, dict(audit, status='selected', reason=reason)
+
+
+def seed_overlap(jaccard):
+    return {f'{i}-{j}': dict(seeds=[i, j], jaccard=J, mutual_best=mutual_best(J))
+            for (i, j), J in jaccard.items()}
+
+
+def replace_json(path, data):
+    """Atomically replace a JSON file that this run wrote earlier."""
+    tmp = Path(str(path) + '.partial')
+    with tmp.open('x') as f:
+        json.dump(plain(data), f, indent=2, allow_nan=False)
+    os.replace(tmp, path)
+
+
+def one_line(data):
+    return json.dumps(plain(data), allow_nan=False, separators=(',', ':'))
+
+
+def group_selection(out, recs, chunk):
+    """Select once per lattice group, then record the result in every seed's h5 and JSON.
+
+    recs are the fit records of one lattice, in seed order, on the same pool rows."""
+    import itertools
+    from aweSOM import SOMModel
+    seeds = [r['seed'] for r in recs]
+    orders = {r['seed']: list(r['sheet_candidates']['order']) for r in recs}
+    sizes = {r['seed']: len(r['cluster_effects']) for r in recs}
+    labels = {r['seed']: np.load(out/f"{r['tag']}-labels.npy", mmap_mode='r') for r in recs}
+    jaccard = {(i, j): jaccard_matrix(labels[i], labels[j], sizes[i], sizes[j], chunk)
+               for i, j in itertools.combinations(seeds, 2)}
+    picks, audit = select_group(orders, jaccard)
+    overlap = seed_overlap(jaccard)
+    for r in recs:
+        s = r['seed']
+        own = dict(audit, seed=s, selected=picks[s])
+        entries = dict(selected_sheet_clusters=','.join(map(str, picks[s])),
+                       sheet_clusters=','.join(map(str, picks[s])),
+                       sheet_selection_status=audit['status'],
+                       selection_audit=one_line(own),
+                       # h5 attributes stop at 64 KB; 6 decimals keep K~30, three seeds well inside it
+                       seed_overlap=one_line({k: dict(v, jaccard=np.round(v['jaccard'], 6)) for k, v in overlap.items()}))
+        with h5py.File(out/f"{r['tag']}.h5", 'r+') as f:
+            for k, v in entries.items(): f['metadata'].attrs[k] = v
+        saved = SOMModel.load(out/f"{r['tag']}.h5").metadata
+        if any(saved[k] != v for k, v in entries.items()):
+            raise RuntimeError('selection metadata did not round-trip')
+        r.update(selected_sheet_clusters=picks[s], sheet_selection_status=audit['status'],
+                 selection_audit=own, seed_overlap=overlap)
+        replace_json(out/f"{r['tag']}.json", r)
+    return plain(dict(picks={str(s): p for s, p in picks.items()}, audit=audit))
 
 
 class PhaseClock:
@@ -450,19 +694,29 @@ def fit(args, shape, seed, scaling, out):
             nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
         clock.finish('labelling')
-        q, reject, medians = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk)
+        names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
+        q, reject, medians, described = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk,
+                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters)
+        candidates = sheet_candidates(described['cluster_effects'], names)
         clock.finish('statistics')
         del nodes, distances
-        names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         chi, beta = names.index('log_chi_B'), names.index('log_beta_inv')
-        sheets = [c for c,m in medians.items() if m[chi] > args.sheet_chi and m[beta] < args.sheet_beta]
+        legacy = [c for c,m in medians.items()
+                  if m[chi] > LEGACY_THRESHOLDS['log_chi_B_gt'] and m[beta] < LEGACY_THRESHOLDS['log_beta_inv_lt']]
         bz = names.index('bz_frac') if 'bz_frac' in names else None
         tubes = [c for c,m in medians.items() if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
         merge_settings = dict(merge_cost_used=lat.merge_cost_used,
                               target_clusters=args.target_clusters, n_clusters=lat.n_clusters)
+        # Selection is decided across the lattice's seeds in main(); until then nothing is selected.
+        pending = dict(status='pending', reason='awaiting the other seeds of this lattice')
+        exports = dict(cluster_effects=described['cluster_effects'], cluster_quartiles=described['cluster_quartiles'],
+                       cluster_rows=described['cluster_rows'], cluster_share=described['cluster_share'],
+                       cluster_joint_favorable_fraction=described['cluster_joint_favorable_fraction'],
+                       sheet_candidates=candidates)
         meta = dict(**merge_settings, seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
-                    sheet_clusters=','.join(map(str,sheets)), sheet_rule_statistic='median',
-                    sheet_rule=f'median log_chi_B > {args.sheet_chi} and median log_beta_inv < {args.sheet_beta}',
+                    selection_rule=SELECTION_RULE, selected_sheet_clusters='', sheet_clusters='',
+                    sheet_selection_status='pending', selection_audit=one_line(pending), seed_overlap='{}',
+                    effect_feature_order=one_line(names), **{k: one_line(v) for k, v in exports.items()},
                     tube_clusters=','.join(map(str,tubes)), tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}',
                     feature_settings=json.dumps(plain(args.anchor_attrs)),
                     feature_weights=json.dumps(plain(scaling['feature_weights'])),
@@ -506,7 +760,11 @@ def fit(args, shape, seed, scaling, out):
                execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
                node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, cluster_medians=medians,
-               sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
+               selection_rule=SELECTION_RULE, effect_feature_order=names, **exports,
+               pooled_medians=described['pooled_medians'],
+               selected_sheet_clusters=[], sheet_selection_status='pending', selection_audit=pending, seed_overlap={},
+               legacy_threshold_rule_diagnostic=dict(
+                   role='diagnostic only; plays no part in selection', statistic='median', **LEGACY_THRESHOLDS, IDs=legacy),
                tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
                reject_distance=reject, umat_file=f'{tag}-umat.npy',
                verification=dict(reload_mismatches=mismatch,cluster_label_patch_screen_mismatches=parity,
@@ -622,7 +880,7 @@ def parser():
     p.add_argument('--anchor',required=True); p.add_argument('--held-out',nargs='+',required=True)
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
-    p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43,44])
+    p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43],help='two or more seeds per lattice; the sheet-candidate selection needs at least two')
     p.add_argument('--seed-workers',type=int,default=1,help='concurrent spawned seeds within each lattice')
     p.add_argument('--threads-per-seed',type=int,help='Numba threads for the entire worker, including export and verification')
     p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
@@ -630,7 +888,6 @@ def parser():
     p.add_argument('--target-clusters',type=int,default=10,help='merge to at most this count; ties may yield fewer')
     p.add_argument('--merge-cost',type=float,default=.05,help='merge cost floor; keep the selected cost for subsequent training'); p.add_argument('--r-max',type=float); p.add_argument('--r-min',type=float)
     p.add_argument('--bz-weight',type=float,default=2.); p.add_argument('--pol-weight',type=float,default=2.)
-    p.add_argument('--sheet-chi',type=float,default=1.); p.add_argument('--sheet-beta',type=float,default=.5)
     p.add_argument('--tube-bz',type=float,default=.7); p.add_argument('--tube-beta',type=float,default=0.)
     p.add_argument('--min-free-gb',type=float,default=10)
     p.add_argument('--allow-independent-thresholds',action='store_true',help='diagnostic only; manifest cannot be production accepted')
@@ -641,9 +898,11 @@ def parser():
 # The approved production training settings (production_pool.sbatch defaults). A run that departs
 # from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
 # r_min=8 on every lattice and target_clusters=10 approved by the user on 2026-10-29.
+# Two seeds per lattice (2026-10-29): the consensus sheet-candidate selection needs at least two,
+# and three are too slow. The post-clustering sheet thresholds were rejected and removed.
 APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
-                seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
-                r_max=None, r_min=8., bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
+                seeds=[42,43], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
+                r_max=None, r_min=8., bz_weight=2., pol_weight=2.,
                 tube_bz=.7, tube_beta=0.)
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.
@@ -702,10 +961,13 @@ def main(argv=None):
                 wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
                                                numba.config.NUMBA_NUM_THREADS)
             trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
+        # Decided once for the lattice and written into every seed's model before the frozen link.
+        sheet_selection=group_selection(out,trio,args.chunk)
         idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
         chosen=trio[idx]
         os.link(out/f"{chosen['tag']}.h5",out/f'frozen-{shape[0]}x{shape[1]}.h5')
-        choices.append(dict(shape=shape,medoid_seed=chosen['seed'],model=f'frozen-{shape[0]}x{shape[1]}.h5',**band))
+        choices.append(dict(shape=shape,medoid_seed=chosen['seed'],model=f'frozen-{shape[0]}x{shape[1]}.h5',**band,
+                            sheet_selection=sheet_selection))
         fits.extend(trio)
     attrs=args.anchor_attrs
     physics={k:attrs.get(k,UNAVAILABLE) for k in ['b2_min','s_v','accuracy','epsilon','exponent','gamma_K','C_B_box',

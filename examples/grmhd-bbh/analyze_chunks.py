@@ -519,7 +519,9 @@ def main(argv=None):
     thr = FeatureThresholds.from_model(model)
     if "pol_frac" in model.feature_names and (args.bh is None or not np.all(np.isfinite(args.bh))):
         ap.error("pol_frac requires --bh with six finite coordinates")
-    sheets = [int(s) for s in model.metadata.get("sheet_clusters", "").replace(",", " ").split() if s.lstrip("-").isdigit()]
+    # Frozen IDs: production_pool.py's selected sheet clusters, never re-ranked here; older models carry sheet_clusters.
+    chosen = model.metadata.get("selected_sheet_clusters", model.metadata.get("sheet_clusters", ""))
+    sheets = [int(s) for s in chosen.replace(",", " ").split() if s.lstrip("-").isdigit()]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"[chunks] model {args.model}: {model.xdim}x{model.ydim}, thresholds {thr}, sheet clusters {sheets}", flush=True)

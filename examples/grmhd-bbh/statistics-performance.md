@@ -179,3 +179,17 @@ peak RSS. The freeze manifest differs in the same fields, plus
 `aweSOM_commit` and `implementation_sha256`. Sheet cluster IDs match: [4], [7]
 and [4] for the 91x64 seeds, and none for the 48x34 seeds. `merge_cost_used`
 matches per seed, for example 0.147779242479924 for 91x64-s42.
+
+## Sheet-candidate descriptors, 2026-10-29
+
+`export_statistics` now also returns the descriptors of the consensus
+sheet-candidate rule: one-vs-rest rank effects for all seven features,
+per-cluster quartiles, rows and shares per training snapshot, and the joint
+favourable fraction. Each feature needs one sort of N rows. A float32 column is
+sorted as one uint64 array, with the order-preserving value bits above the
+label. That is about 0.8 s per feature locally, against 2.3 s for an argsort.
+
+Measured locally on the job 8014 pool (2e7 rows, all six seeds), the statistics
+stage took 9.1 to 9.9 s per model, against 2.1 to 2.2 s before. The medians
+stayed bitwise identical to the previous code and to the job's JSON. The extra
+peak memory is about 28 bytes per row, about 0.6 GB at 2e7 rows.

@@ -42,6 +42,8 @@ def historical(tmp_path_factory):
         scaling = driver.pool(a, records, quota, a.out)
         a.anchor_attrs = records[0]['attrs']
         a.code_commit = 'historical-driver' if name == 'old' else 'dev-driver'
+        if name == 'old':  # the historical driver still applies the removed median thresholds
+            a.sheet_chi, a.sheet_beta = 1., .5
         result = driver.fit(a, (4, 3), 42, scaling, a.out)
         models.append(a.out / (result['tag'] + '.h5'))
     with h5py.File(tmp / 'old/pool.h5') as h:
@@ -73,11 +75,21 @@ def test_patch_matches_dev_and_preserves_frozen_model(historical, tmp_path):
     assert int(expected.metadata['target_clusters']) == 10
     assert float(expected.metadata['merge_cost_used']) >= .05
     assert int(expected.metadata['n_clusters']) == len(np.unique(expected.node_cluster))
-    ignored = {'aweSOM_commit', 'metadata_patched_by'} | merge_keys
+    # Historical models predate the consensus sheet-candidate selection too.
+    selection_keys = {'sheet_rule', 'sheet_rule_statistic', 'sheet_clusters', 'selection_rule',
+                      'selected_sheet_clusters', 'sheet_selection_status', 'selection_audit', 'seed_overlap',
+                      'effect_feature_order', 'cluster_effects', 'cluster_quartiles', 'cluster_rows',
+                      'cluster_share', 'cluster_joint_favorable_fraction', 'sheet_candidates'}
+    assert not (selection_keys - {'sheet_rule', 'sheet_rule_statistic', 'sheet_clusters'}) & patched.metadata.keys()
+    assert not {'sheet_rule', 'sheet_rule_statistic'} & expected.metadata.keys()
+    assert expected.metadata['sheet_selection_status'] == 'pending'
+    ignored = {'aweSOM_commit', 'metadata_patched_by'} | merge_keys | selection_keys
     assert {k: v for k, v in patched.metadata.items() if k not in ignored} == {
         k: v for k, v in expected.metadata.items() if k not in ignored}
-    assert {k for k in patched.metadata.keys() | expected.metadata.keys()
-            if patched.metadata.get(k) != expected.metadata.get(k)} == ignored
+    differ = {k for k in patched.metadata.keys() | expected.metadata.keys()
+              if patched.metadata.get(k) != expected.metadata.get(k)}
+    # sheet_clusters may agree by chance (both empty), every other ignored key differs
+    assert ignored - {'sheet_clusters'} <= differ <= ignored
     record = json.loads(patched.metadata['metadata_patched_by'])
     assert record == dict(tool_commit=subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
