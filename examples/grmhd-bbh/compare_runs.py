@@ -449,10 +449,12 @@ def main(argv=None):
         model = SOMModel.load(args.model)
     if args.sheet_clusters:
         clusters = [int(c) for c in args.sheet_clusters.split(",")]
-    elif model is not None and "sheet_clusters" in model.metadata:
-        clusters = [int(c) for c in model.metadata["sheet_clusters"].split(",")]
+    elif model is not None and model.metadata.get("selected_sheet_clusters", model.metadata.get("sheet_clusters")):
+        # production_pool.py's frozen selected IDs take precedence over the older sheet_clusters key
+        chosen = model.metadata.get("selected_sheet_clusters") or model.metadata["sheet_clusters"]
+        clusters = [int(c) for c in chosen.split(",")]
     else:
-        raise SystemExit("give --sheet-clusters or a --model with sheet_clusters metadata")
+        raise SystemExit("give --sheet-clusters or a --model with selected sheet clusters in its metadata")
     print(f"sheet clusters: {clusters}", flush=True)
     cfg = SheetConfig(connectivity=args.connectivity, min_cells=args.min_cells,
                       between_widths=tuple(float(w) for w in args.between_widths.split(",")),

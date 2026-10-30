@@ -108,7 +108,11 @@ def test_end_to_end(tmp_path):
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     m=json.loads((a.out/'results/freeze-manifest.json').read_text())
-    assert len(m['models'])==6 and len(m['selection'])==2
+    assert len(m['models'])==4 and len(m['selection'])==2
+    assert [r['seed'] for r in m['models']]==[42,43,42,43]
+    for choice in m['selection']:
+        assert choice['sheet_selection']['audit']['status'] in ('selected','none','unavailable')
+        assert choice['sheet_selection']['audit']['reason']
     assert set(m)>={'feature_names','pipeline','etk_analysis_commit','physics','scaler','models',
                     'selection','sample_manifest','aweSOM_commit','input_hashes','verification'}
     assert pool.APPROVED['target_clusters'] == 10
@@ -127,6 +131,15 @@ def test_end_to_end(tmp_path):
         assert r['verification']['reload_mismatches']==r['verification']['cluster_label_patch_screen_mismatches']==0
         assert r['verification']['scaler_max_abs_error']==0
         assert r['weights_dtype']=='float64'
+        # the group decision reached the model, its sidecar and the manifest alike
+        assert r['sheet_selection_status'] == sidecar['sheet_selection_status'] != 'pending'
+        assert saved.metadata['sheet_selection_status'] == r['sheet_selection_status']
+        assert saved.metadata['selected_sheet_clusters'] == saved.metadata['sheet_clusters'] == ','.join(map(str,r['selected_sheet_clusters']))
+        assert json.loads(saved.metadata['selection_audit']) == sidecar['selection_audit'] == r['selection_audit']
+        assert list(json.loads(saved.metadata['seed_overlap'])) == ['42-43']
+        assert np.array(r['cluster_effects']).shape == (r['n_clusters'], 7)
+        assert 'sheet_rule' not in saved.metadata and 'sheet_rule' not in r
+        assert r['legacy_threshold_rule_diagnostic']['role'].startswith('diagnostic only')
     assert m['sample_manifest']['held_out_IDs']==['3']
     # reduced training settings are a rehearsal, never a production manifest
     assert m['diagnostic_only'] and any(r.startswith('epochs=2') for r in m['diagnostic_reasons'])
@@ -193,12 +206,29 @@ def test_export_statistics_exact(tmp_path):
     raw=rng.normal(size=(1003,7)).astype('f4')
     nodes=rng.integers(0,9,len(raw),dtype='i4'); labels=nodes%3
     distances=rng.random(len(raw))
-    q,r,medians=pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'test',29)
+    raw[::7,5]=0  # ties
+    strata=[dict(snapshot='1',start=0,rows=400),dict(snapshot='2',start=400,rows=300),dict(snapshot='1',start=700,rows=303)]
+    q,r,medians,d=pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'test',29,
+                                         names=pool.NAMES,strata=strata,n_clusters=4)
     expected,reject=distance_quantiles_fast(nodes,distances,10)
     assert np.array_equal(q,expected,equal_nan=True)
     assert r==reject
     for c in medians:
         assert np.array_equal(medians[c],np.median(raw[labels==c].astype('f8'),axis=0))
+        np.testing.assert_allclose(d['cluster_quartiles'][c],np.percentile(raw[labels==c].astype('f8'),[25,50,75],axis=0),rtol=0,atol=1e-12)
+    # cluster 3 is empty: NaN effects, zero rows
+    assert d['cluster_effects'].shape==(4,7) and np.isnan(d['cluster_effects'][3]).all()
+    assert d['cluster_rows']['all'].tolist()==np.bincount(labels,minlength=4).tolist()
+    for c in range(3):
+        for j in range(7):
+            assert d['cluster_effects'][c,j]==pytest.approx(brute_effect(raw[:,j],labels==c),abs=1e-12)
+    one=np.r_[np.arange(400),np.arange(700,1003)]
+    assert d['cluster_rows']['1'].tolist()==np.bincount(labels[one],minlength=4).tolist()
+    assert d['cluster_share']['2'].sum()==pytest.approx(1)
+    med=np.median(raw.astype('f8'),axis=0); i=pool.NAMES.index
+    fav=(raw[:,i('log_chi_B')]>med[i('log_chi_B')])&(raw[:,i('log_grad_ln_b2')]>med[i('log_grad_ln_b2')])&(raw[:,i('log_beta_inv')]<med[i('log_beta_inv')])
+    np.testing.assert_allclose(d['cluster_joint_favorable_fraction'][:3],[fav[labels==c].mean() for c in range(3)])
+    assert np.array_equal(d['pooled_medians'],med)
     assert not list(tmp_path.glob('*statistics*'))
 
 
@@ -227,6 +257,9 @@ def test_non_git_kit(tmp_path,damage):
         assert result.returncode==0,result.stdout+result.stderr
         m=json.loads((a.out/'results/freeze-manifest.json').read_text())
         assert m['aweSOM_commit']==manifest['commit']
+        # one seed cannot check reproduction: unavailable, never a selection
+        assert m['selection'][0]['sheet_selection']['audit']['status']=='unavailable'
+        assert m['models'][0]['selected_sheet_clusters']==[]
         v=m['models'][0]['verification']
         assert v['bmu_node_mismatches']==0 and v['bmu_distance_rtol_1e6']
         assert all(v['saved_components_equal'].values())
@@ -430,3 +463,127 @@ def test_export_statistics_production_pool_bitwise(tmp_path, monkeypatch, chunk)
     assert list(old[2]) == list(new[2])
     for c in old[2]:
         assert np.asarray(old[2][c]).tobytes() == np.asarray(new[2][c]).tobytes()
+
+
+def brute_effect(x, inside):
+    """2 AUC - 1 by pairwise comparison, ties counted as half."""
+    a, b = x[inside].astype('f8')[:, None], x[~inside].astype('f8')[None, :]
+    return 2*((a > b).mean() + .5*(a == b).mean()) - 1
+
+
+def test_rank_effect_matches_brute_force():
+    rng = np.random.default_rng(5)
+    X = np.round(rng.normal(size=(301, 3)), 1).astype('f4')  # many ties
+    labels = rng.integers(0, 4, len(X))
+    E = pool.rank_effects(X, labels, 5)
+    assert np.isnan(E[4]).all()
+    for c in range(4):
+        for j in range(3):
+            assert E[c, j] == pytest.approx(brute_effect(X[:, j], labels == c), abs=1e-12)
+    # the float64 (argsort) path agrees with the packed float32 sort, and -0.0 ties +0.0
+    assert np.array_equal(pool.rank_effects(X.astype('f8'), labels, 5), E, equal_nan=True)
+    z = np.array([[-0.], [0.], [1.], [-1.]], 'f4'); zl = np.array([0, 1, 1, 0])
+    assert pool.rank_effects(z, zl, 2)[1, 0] == pytest.approx(brute_effect(z[:, 0], zl == 1))
+    assert pool.rank_sums(z[:, 0], zl, 2)[1] == 0 and pool.rank_sums(np.array([3, -2, 1, 7], 'f4'), zl, 2)[1] == 2
+    # a cluster holding exactly the largest values has E = 1
+    x = np.arange(10.)[:, None]; lab = (x[:, 0] >= 7).astype(int)
+    assert pool.rank_effects(x, lab, 2)[:, 0].tolist() == [-1., 1.]
+
+
+def effects_table(rows):
+    """K x 7 effects with (E_chi, E_grad, E_beta) per cluster in NAMES' columns."""
+    E = np.zeros((len(rows), 7)); i = pool.NAMES.index
+    for c, (chi, grad, beta) in enumerate(rows):
+        E[c, [i('log_chi_B'), i('log_grad_ln_b2'), i('log_beta_inv')]] = chi, grad, beta
+    return E
+
+
+def test_candidates_strict_signs_and_order():
+    E = effects_table([(.2, .1, -.1), (0., .5, -.5), (.6, .1, -.1), (.4, 0., -.1),
+                       (.5, .2, 0.), (.3, .3, -.3), (np.nan,)*3, (.3, .1, -.2)])
+    c = pool.sheet_candidates(E, pool.NAMES)
+    # zeros never count; NaN (empty) fails; ordered by E_chi, ties by ID and recorded
+    assert c['order'] == [2, 5, 7, 0]
+    assert c['ties'] == [[5, 7]]
+    assert [x['candidate'] for x in c['clusters']] == [True, False, True, False, False, True, False, True]
+    assert c['clusters'][1]['E_log_chi_B_positive'] is False and c['clusters'][1]['E_log_grad_ln_b2_positive'] is True
+    assert c['clusters'][4]['E_log_beta_inv_negative'] is False
+    assert pool.sheet_candidates(effects_table([(.1, .1, .1)]), pool.NAMES)['order'] == []
+
+
+def labelling(*blocks):
+    return np.concatenate([np.full(n, c) for c, n in blocks])
+
+
+def jaccards(labels):
+    import itertools
+    k = {s: int(l.max())+1 for s, l in labels.items()}
+    return {(i, j): pool.jaccard_matrix(labels[i], labels[j], k[i], k[j], chunk=7)
+            for i, j in itertools.combinations(labels, 2)}
+
+
+def test_jaccard_matrix_and_mutual_best():
+    a = np.array([0, 0, 1, 1, 2]); b = np.array([1, 1, 0, 2, 2])
+    J = pool.jaccard_matrix(a, b, 3, 3, chunk=2)
+    assert J[0, 1] == 1 and J[1, 0] == J[2, 2] == .5 and J[1, 2] == 1/3
+    flags = pool.mutual_best(J)
+    # cluster 1 of a prefers 0 of b; 2 of a and 2 of b prefer each other although 1 of a overlaps 2 of b
+    assert flags[0, 1] and flags[1, 0] and flags[2, 2] and flags.sum() == 3
+    J[1, 2] = .6  # now 2 of b prefers 1 of a, which prefers 2 of b: (1, 2) mutual, (1, 0) and (2, 2) not
+    flags = pool.mutual_best(J)
+    assert flags[0, 1] and flags[1, 2] and flags.sum() == 2
+
+
+# Three seeds on 100 rows: seed 43 relabels seed 42, seed 44 relabels and shifts 5 rows.
+SEEDS = {42: labelling((0, 40), (1, 30), (2, 20), (3, 10)),
+         43: labelling((2, 40), (0, 30), (3, 20), (1, 10)),
+         44: labelling((1, 38), (0, 32), (2, 20), (3, 10))}
+
+
+def test_selection_first_and_second_reproduced():
+    orders = {42: [1, 3], 43: [0, 1], 44: [0, 3]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS))
+    assert audit['status'] == 'selected' and picks == {42: [1, 3], 43: [0, 1], 44: [0, 3]}
+    assert audit['first']['reproduced'] and audit['second']['reproduced']
+    assert set(audit['first']['pairs']) == {'42-43', '42-44', '43-44'}
+
+
+def test_selection_second_refused():
+    # the second candidates do not correspond (cluster 3 of 42 vs cluster 3 of 43)
+    picks, audit = pool.select_group({42: [1, 3], 43: [0, 3], 44: [0, 3]}, jaccards(SEEDS))
+    assert audit['status'] == 'selected' and picks == {42: [1], 43: [0], 44: [0]}
+    assert not audit['second']['reproduced'] and '42-43' in audit['reason']
+    # one seed has no second candidate
+    picks, audit = pool.select_group({42: [1, 3], 43: [0], 44: [0, 3]}, jaccards(SEEDS))
+    assert picks == {42: [1], 43: [0], 44: [0]} and audit['second']['missing_in_seeds'] == [43]
+    # a reproduced second without a reproduced first selects nothing
+    picks, audit = pool.select_group({42: [0, 1], 43: [1, 0], 44: [1, 0]}, jaccards(SEEDS))
+    assert audit['status'] == 'none' and all(p == [] for p in picks.values()) and audit['second'] is None
+
+
+def test_selection_first_not_reproduced():
+    # seeds 42 and 43 agree, 44 picks a non-matching cluster: unanimity fails for the whole group
+    picks, audit = pool.select_group({42: [1], 43: [0], 44: [2]}, jaccards(SEEDS))
+    assert audit['status'] == 'none' and picks == {42: [], 43: [], 44: []}
+    assert audit['first']['pairs']['42-43']['mutual'] and not audit['first']['pairs']['42-44']['mutual']
+    assert 'not mutual' in audit['reason']
+
+
+def test_selection_empty_signature_and_single_seed():
+    picks, audit = pool.select_group({42: [1], 43: [], 44: [0]}, jaccards(SEEDS))
+    assert audit['status'] == 'none' and 'empty signature set' in audit['reason'] and '43' in audit['reason']
+    assert all(p == [] for p in picks.values())
+    picks, audit = pool.select_group({42: [1]}, {})
+    assert audit['status'] == 'unavailable' and picks == {42: []} and 'fewer than two seeds' in audit['reason']
+
+
+def test_selection_exports_serialize():
+    J = jaccards(SEEDS)
+    picks, audit = pool.select_group({42: [1, 3], 43: [0, 1], 44: [0, 3]}, J)
+    overlap = pool.seed_overlap(J)
+    assert overlap['42-43']['jaccard'].shape == (4, 4) and overlap['42-43']['mutual_best'].dtype == bool
+    E = effects_table([(.2, .1, -.1), (np.nan,)*3])
+    for x in (audit, overlap, pool.sheet_candidates(E, pool.NAMES), E):
+        line = pool.one_line(x)
+        assert '\n' not in line and json.loads(line) is not None
+    assert json.loads(pool.one_line(E))[1][0] is None
