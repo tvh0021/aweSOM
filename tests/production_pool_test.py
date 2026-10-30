@@ -4,8 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 
 import h5py
 import numpy as np
@@ -102,7 +104,7 @@ def test_end_to_end(tmp_path):
     cmd=[sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),'--inputs',*map(str,paths),
          '--anchor','1','--held-out','3','--out',str(a.out),'--rows-per-snapshot','60',
          '--rows-per-epoch','60','--lattices','4x3','3x2','--epochs','2','--chunk','29','--min-free-gb','0',
-         '--target-clusters','1']
+         '--target-clusters','1','--threads-per-seed','1','--seed-workers','2']
     result=subprocess.run(cmd,env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
     m=json.loads((a.out/'results/freeze-manifest.json').read_text())
@@ -114,6 +116,9 @@ def test_end_to_end(tmp_path):
     for r in m['models']:
         saved = SOMModel.load(a.out/'results'/f"{r['tag']}.h5")
         sidecar = json.loads((a.out/'results'/f"{r['tag']}.json").read_text())
+        assert r['execution']['numba_threads'] == r['training_info']['n_threads'] == 1
+        assert set(r['phase_timings']) == {'training','clustering','labelling','statistics','export','verification'}
+        assert len(r['training_info']['epoch_time']) == 2
         assert r['target_clusters'] == 1
         assert r['merge_cost_used'] >= .05
         assert r['n_clusters'] == len(np.unique(saved.node_cluster)) == 1
@@ -129,14 +134,17 @@ def test_end_to_end(tmp_path):
 
 def test_diagnostic_reasons(tmp_path,monkeypatch):
     base=['--inputs','x.h5','--anchor','94208','--held-out','405504','--out',str(tmp_path/'o'),
-          '--rows-per-snapshot','10000000','--rows-per-epoch','20000000']
+          '--rows-per-snapshot','10000000','--rows-per-epoch','20000000','--target-clusters','10','--r-min','8']
     monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{'94208':'a'*64,'98304':'b'*64})
     rec=lambda *ids: [dict(snapshot=i,sha256=pool.APPROVED_INPUT_SHA256.get(i,'c'*64)) for i in ids]
     reasons=lambda extra=(),records=rec('94208','98304'): pool.diagnostic_reasons(pool.parser().parse_args(base+list(extra)),records)
     assert reasons()==[]
+    # the per-lattice default radius (r5 on 48x34) is not the approved r8
+    assert any(r.startswith('r_min') for r in pool.diagnostic_reasons(pool.parser().parse_args(
+        [a for a in base if a not in ('--r-min','8')]),rec('94208','98304')))
     for extra,key in [(['--epochs','2'],'epochs'),(['--lattices','4x3'],'lattices'),(['--seeds','42'],'seeds'),
                       (['--rows-per-epoch','60'],'rows_per_epoch'),(['--allow-six-features'],'allow_six_features'),
-                      (['--anchor','98304'],'anchor'),(['--held-out','405504','110592'],'held_out')]:
+                      (['--anchor','98304'],'anchor'),(['--target-clusters','12'],'target_clusters'),(['--r-min','5'],'r_min'),(['--held-out','405504','110592'],'held_out')]:
         assert any(r.startswith(key) for r in reasons(extra)),key
     # a different training set: reordered, added or swapped snapshots
     for other in (rec('98304','94208'),rec('94208','98304','110592'),rec('94208','110592')):
@@ -236,3 +244,189 @@ def test_disk_scaler_quantiles(tmp_path):
         assert np.array_equal(pool.quantiles(raw),np.percentile(x.astype('f8'),[25,50,75],axis=0))
         assert np.array_equal(pool.quantiles(raw,13,752),np.percentile(x[13:752].astype('f8'),[25,50,75],axis=0))
     assert not (tmp_path/'scaler-column.npy').exists()
+
+
+def test_thread_budget(monkeypatch):
+    import numba
+    monkeypatch.setenv('SLURM_CPUS_PER_TASK', '2')
+    a = SimpleNamespace(threads_per_seed=2, seed_workers=1, seeds=[42,43])
+    assert pool.thread_budget(a) == dict(seed_workers=1, threads_per_seed=2, allocated_cpus=2)
+    a.seed_workers=2
+    with pytest.raises(ValueError, match='budget'):
+        pool.thread_budget(a)
+    a.threads_per_seed=0
+    with pytest.raises(ValueError): pool.thread_budget(a)
+
+
+def test_phase_clock(capsys):
+    clock = pool.PhaseClock('probe')
+    clock.finish('training')
+    assert clock.records['training']['wall_seconds'] >= 0
+    assert clock.records['training']['cpu_seconds'] >= 0
+    assert 'probe' in capsys.readouterr().out
+
+
+PROBE = '''
+import os, struct, time
+class Unreadable:  # pickles in the sender, cannot be rebuilt in the parent
+    def __reduce__(self): return (unreadable, ())
+def unreadable(): raise MemoryError('SIMULATED_RECEIVER_ALLOCATION_FAILURE')
+class Slow:  # takes two seconds to rebuild in the parent
+    def __init__(self, text): self.text = text
+    def __reduce__(self): return (slow, (self.text,))
+def slow(text): time.sleep(2); return text
+def probe(conn, mode):
+    if mode == 'die': time.sleep(.5); os._exit(19)
+    if mode == 'block': time.sleep(120)
+    if mode == 'pid-block':
+        with open(os.environ['PROBE_PIDS'], 'a') as f: f.write(f'{os.getpid()}\\n')
+        time.sleep(120)
+    if mode == 'partial':  # a framed message cut off mid-payload
+        os.write(conn.fileno(), struct.pack('!i', 100) + b'1234567'); time.sleep(120)
+    if mode == 'unreadable': conn.send(('ok', Unreadable())); conn.close(); return  # exits 0
+    if mode == 'slow-error-die': conn.send(('error', Slow('TRACEBACK_SENTINEL'))); conn.close(); os._exit(19)
+    if mode == 'garbled': conn.send('not a tuple'); conn.close(); return
+    if mode == 'bad-status': conn.send(('weird', 1)); conn.close(); return
+    if mode == 'double': conn.send(('ok', 'first')); conn.send(('ok', 'second')); conn.close(); return
+    if mode == 'ok-die': conn.send(('ok', 'x')); conn.close(); os._exit(19)
+    conn.send(('ok', mode if mode != 'linger' else b'x' * 2**23)); conn.close()
+    if mode == 'linger': time.sleep(120)  # result sent, process never exits
+'''
+
+
+@pytest.fixture
+def probe(tmp_path, monkeypatch):
+    (tmp_path/'wave_probe.py').write_text(PROBE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from wave_probe import probe
+    return probe
+
+
+def bounded(seconds, fn, *args, **kw):
+    import multiprocessing as mp
+    start = time.monotonic()
+    try: return fn(*args, **kw)
+    finally:
+        assert time.monotonic()-start < seconds
+        assert not mp.active_children()
+
+
+def test_wave_failure_stops_siblings(probe):
+    assert bounded(60, pool.run_wave, [('a',), ('b',)], target=probe) == ['a', 'b']
+    with pytest.raises(RuntimeError, match='exited without result'):
+        bounded(60, pool.run_wave, [('block',), ('die',)], target=probe)
+
+
+@pytest.mark.parametrize('stall', ['linger', 'partial'])
+def test_wave_failure_seen_while_sibling_stalls(probe, stall):
+    with pytest.raises(RuntimeError):
+        bounded(60, pool.run_wave, [(stall,), ('die',)], target=probe)
+
+
+def test_wave_keeps_result_of_worker_that_hangs_on_exit(probe):
+    out = bounded(60, pool.run_wave, [('linger',), ('a',)], target=probe, exit_grace=1)
+    assert out == [b'x' * 2**23, 'a']
+
+
+def test_wave_reader_exception_with_clean_exit_fails_fast(probe):
+    with pytest.raises(RuntimeError, match='could not be read.*SIMULATED_RECEIVER_ALLOCATION_FAILURE'):
+        bounded(30, pool.run_wave, [('unreadable',), ('block',)], target=probe)
+
+
+def test_wave_keeps_traceback_sent_before_abnormal_exit(probe):
+    with pytest.raises(RuntimeError, match='TRACEBACK_SENTINEL') as info:
+        bounded(30, pool.run_wave, [('slow-error-die',), ('a',)], target=probe)
+    assert 'exit code 19' in str(info.value)
+
+
+@pytest.mark.parametrize('mode', ['garbled', 'bad-status'])
+def test_wave_rejects_malformed_message(probe, mode):
+    with pytest.raises(RuntimeError, match='could not be read'):
+        bounded(30, pool.run_wave, [(mode,), ('block',)], target=probe)
+
+
+def test_wave_reads_one_message_per_worker(probe):
+    assert bounded(30, pool.run_wave, [('double',), ('a',)], target=probe) == ['first', 'a']
+
+
+def test_wave_rejects_abnormal_exit_after_result(probe):
+    with pytest.raises(RuntimeError, match='exit code 19 after its result'):
+        bounded(30, pool.run_wave, [('ok-die',), ('a',)], target=probe)
+
+
+def test_wave_leaks_no_descriptors(probe):
+    fds = lambda: len(os.listdir('/proc/self/fd' if os.path.exists('/proc/self/fd') else '/dev/fd'))
+    pool.run_wave([('a',)], target=probe)  # warm multiprocessing's own helpers
+    before = fds()
+    for _ in range(3):
+        pool.run_wave([('a',), ('b',)], target=probe)
+        with pytest.raises(RuntimeError): pool.run_wave([('block',), ('die',)], target=probe)
+        pool.run_wave([('linger',)], target=probe, exit_grace=.5)
+    assert fds() == before
+
+
+@pytest.mark.parametrize('sig, codes', [(signal.SIGTERM, {143}), (signal.SIGINT, {-signal.SIGINT, 1, 130})])
+def test_wave_parent_signal_cleans_up_children(probe, tmp_path, sig, codes):
+    pids = tmp_path/'pids'; script = tmp_path/'driver.py'
+    script.write_text(f'''
+import importlib.util, sys
+sys.path.insert(0, {str(tmp_path)!r})
+spec = importlib.util.spec_from_file_location('production_pool', {pool.__file__!r})
+pool = importlib.util.module_from_spec(spec); spec.loader.exec_module(pool)
+from wave_probe import probe
+if __name__ == '__main__': pool.run_wave([('pid-block',), ('pid-block',)], target=probe)
+''')
+    env = dict(os.environ, PROBE_PIDS=str(pids))
+    proc = subprocess.Popen([sys.executable, str(script)], env=env)
+    deadline = time.monotonic()+30
+    while time.monotonic() < deadline and (not pids.exists() or len(pids.read_text().split()) < 2): time.sleep(.1)
+    children = [int(p) for p in pids.read_text().split()]; assert len(children) == 2
+    proc.send_signal(sig); assert proc.wait(timeout=30) in codes
+    for _ in range(50):
+        if all(not alive(pid) for pid in children): break
+        time.sleep(.1)
+    assert all(not alive(pid) for pid in children)
+
+
+def alive(pid):
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return False
+    return True
+
+
+@pytest.mark.parametrize('chunk', [1, 29, 1000])
+def test_export_statistics_production_pool_bitwise(tmp_path, monkeypatch, chunk):
+    from production_pool_statistics_reference import export_statistics as old_export
+    paths = inputs(tmp_path); a = args(tmp_path, paths)
+    records, quota, *_ = pool.inspect(a)
+    a.out.mkdir(); pool.pool(a, records, quota, a.out)
+    rng = np.random.default_rng(802)
+    with h5py.File(a.out/'pool.h5') as h:
+        raw = h['raw']
+        assert raw.chunks is None and raw.dtype == np.dtype('f4')
+        nodes = rng.integers(0, 9, len(raw), dtype='i4')
+        labels = np.array([0, 3, 7], dtype='i4')[nodes % 3]
+        distances = rng.random(len(raw))
+        for name, data in [('nodes', nodes), ('labels', labels), ('distances', distances)]:
+            np.save(a.out/f'{name}.npy', data)
+        nodes = np.load(a.out/'nodes.npy', mmap_mode='r')
+        labels = np.load(a.out/'labels.npy', mmap_mode='r')
+        distances = np.load(a.out/'distances.npy', mmap_mode='r')
+        old = old_export(raw, nodes, distances, labels, 10, a.out, 'old', chunk)
+        # Statistics must never create a disk buffer or read individual columns.
+        def no_scratch(*args, **kwargs):
+            raise AssertionError('statistics scratch allocation')
+        monkeypatch.setattr(np.lib.format, 'open_memmap', no_scratch)
+        class RowsOnly:
+            shape = raw.shape
+            dtype = raw.dtype
+            def __len__(self): return len(raw)
+            def __getitem__(self, key):
+                assert isinstance(key, slice)
+                return raw[key]
+        new = pool.export_statistics(RowsOnly(), nodes, distances, labels, 10, a.out, 'new', chunk)
+    assert old[0].tobytes() == new[0].tobytes()
+    assert np.float64(old[1]).tobytes() == np.float64(new[1]).tobytes()
+    assert list(old[2]) == list(new[2])
+    for c in old[2]:
+        assert np.asarray(old[2][c]).tobytes() == np.asarray(new[2][c]).tobytes()

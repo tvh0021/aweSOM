@@ -5,6 +5,7 @@ The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
 """
 from __future__ import annotations
 
+import copy
 import argparse
 import hashlib
 import importlib.util
@@ -20,6 +21,9 @@ import time
 import traceback
 
 sys.dont_write_bytecode = True
+# Bound native libraries before NumPy is imported, including in spawned workers.
+for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
+    os.environ[_key] = '1'
 import h5py
 import numpy as np
 
@@ -319,49 +323,98 @@ class EpochSource:
                 q -= n; pos = (pos+n) % s['rows']
 
 
-def grouped_values(keys, values, n_groups, out, chunk):
-    """Counting scatter into one disk-backed float64 buffer; O(chunk+groups) RAM."""
-    counts = np.zeros(n_groups, np.int64)
-    for a in range(0,len(keys),chunk):
-        counts += np.bincount(keys[a:a+chunk], minlength=n_groups)
-    edges = np.r_[0, np.cumsum(counts)]
-    positions = edges[:-1].copy()
-    buf = np.lib.format.open_memmap(out, mode='w+', dtype='f8', shape=(len(keys),))
-    for a in range(0,len(keys),chunk):
-        scatter_values(np.asarray(keys[a:a+chunk]), np.asarray(values[a:a+chunk], dtype='f8'), positions, buf)
-    return buf, edges
-
-
 from numba import njit
 
+
 @njit(cache=False)
-def scatter_values(keys, values, positions, buf):
+def scatter_order(keys, positions, order):
+    """Stable counting-sort permutation, with no comparison-sort workspace."""
     for i in range(len(keys)):
         k = keys[i]
-        buf[positions[k]] = values[i]
+        order[positions[k]] = i
         positions[k] += 1
 
 
+def grouped_order(keys, n_groups):
+    edges = np.r_[0, np.cumsum(np.bincount(keys, minlength=n_groups))]
+    order = np.empty(len(keys), dtype=np.intp)
+    scatter_order(keys, edges[:-1].copy(), order)
+    return order, edges
+
+
 def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk):
-    scratch = out / f'{tag}-statistics.npy'
-    buf, edges = grouped_values(nodes, distances, n_nodes, scratch, chunk)
+    """Exact float64 statistics with one sequential pass over the raw rows.
+
+    Stable grouping reproduces the old counting scatter's input order, including
+    its per-node partitioning before the global rejection percentile. Keep the
+    float64 column buffer separate from raw so median partitioning cannot change
+    another column. No scratch files are created.
+
+    RAM is O(N*D + N + chunk*D + groups): raw retains its input dtype, one intp
+    permutation and one float64 column are live during feature statistics.
+    See statistics-performance.md for conservative production memory estimates.
+    """
+    order, edges = grouped_order(nodes, n_nodes)
+    buf = np.asarray(distances, dtype='f8')[order]
     q = np.full(n_nodes, np.nan)
     for i in range(n_nodes):
         if edges[i+1] > edges[i]:
             q[i] = np.percentile(buf[edges[i]:edges[i+1]], 99., overwrite_input=True)
     reject = float(np.percentile(buf, 99.9, overwrite_input=True))
-    del buf
-    medians = {int(c): [] for a in range(0,len(labels),chunk) for c in np.unique(labels[a:a+chunk])}
-    class Column:
-        def __init__(self, j): self.j = j
-        def __getitem__(self, key): return raw[key,self.j]
+    del buf, order
+
+    # Copy mapped labels once, then release them before loading the raw matrix.
+    keys = np.array(labels)
+    medians = {int(c): [] for a in range(0,len(keys),chunk) for c in np.unique(keys[a:a+chunk])}
+    order, edges = grouped_order(keys, int(max(medians))+1)
+    del keys
+    values = np.empty(raw.shape, dtype=raw.dtype)
+    for a in range(0, len(raw), chunk):
+        values[a:a+chunk] = raw[a:a+chunk]
+    buf = np.empty(len(raw), dtype='f8')
     for j in range(raw.shape[1]):
-        buf, edges = grouped_values(labels, Column(j), int(max(medians))+1, scratch, chunk)
+        for a in range(0, len(raw), chunk):
+            buf[a:a+chunk] = values[order[a:a+chunk], j]
         for c in medians:
             medians[c].append(float(np.median(buf[edges[c]:edges[c+1]], overwrite_input=True)))
-        del buf
-    scratch.unlink()
     return q, reject, medians
+
+
+class PhaseClock:
+    """Emit completed stages immediately, even if a later stage never finishes."""
+    def __init__(self, tag):
+        self.tag, self.records = tag, {}
+        self.wall, self.cpu = time.perf_counter(), time.process_time()
+
+    def finish(self, stage):
+        wall, cpu = time.perf_counter(), time.process_time()
+        self.records[stage] = dict(wall_seconds=wall-self.wall, cpu_seconds=cpu-self.cpu)
+        print(json.dumps(dict(tag=self.tag, stage=stage, **self.records[stage])), flush=True)
+        self.wall, self.cpu = wall, cpu
+
+
+def thread_budget(args):
+    """Split the allocation without exceeding Numba's startup thread ceiling."""
+    import numba
+    available = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    allocated = int(os.environ.get('SLURM_CPUS_PER_TASK', available))
+    workers = min(args.seed_workers, len(args.seeds))
+    threads = args.threads_per_seed
+    if threads is None:
+        threads = min(allocated // max(1, workers), numba.config.NUMBA_NUM_THREADS)
+    if args.seed_workers < 1 or workers < 1 or threads < 1 or workers*threads > allocated or threads > numba.config.NUMBA_NUM_THREADS:
+        raise ValueError('invalid seed thread budget or NUMBA_NUM_THREADS ceiling')
+    return dict(seed_workers=workers, threads_per_seed=threads, allocated_cpus=allocated)
+
+
+def execution_info():
+    import numba
+    return dict(numba_threads=numba.get_num_threads(), numba_thread_ceiling=numba.config.NUMBA_NUM_THREADS,
+                pid=os.getpid(), hostname=os.uname().nodename,
+                affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None,
+                thread_environment={k:os.environ.get(k) for k in ('NUMBA_NUM_THREADS', 'OMP_NUM_THREADS',
+                    'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS',
+                    'SLURM_CPUS_PER_TASK', 'SLURM_JOB_ID')})
 
 
 def fit(args, shape, seed, scaling, out):
@@ -370,6 +423,9 @@ def fit(args, shape, seed, scaling, out):
     from aweSOM.inference import best_match_nodes_patch
     t = time.perf_counter()
     tag = f'{shape[0]}x{shape[1]}-s{seed}'
+    clock = PhaseClock(tag)
+    execution = execution_info()
+    print(json.dumps(dict(tag=tag, execution=execution)), flush=True)
     scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
     with h5py.File(out / 'pool.h5', 'r') as h:
         raw, scaled = h['raw'], h['scaled']
@@ -378,11 +434,13 @@ def fit(args, shape, seed, scaling, out):
                                     bmu='patch', seed=seed, groups=args.groups, r_max=args.r_max,
                                     r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
                                     final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True)
+        clock.finish('training')
         if w.dtype != np.float64 or not np.isfinite(w).all():
             raise RuntimeError('training returned invalid float64 weights')
         lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
         nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
         np.save(out / f'{tag}-umat.npy', lat.umat)
+        clock.finish('clustering')
         labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
         node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
         nodes = np.lib.format.open_memmap(node_path, mode='w+', dtype='i4', shape=(len(raw),))
@@ -391,7 +449,9 @@ def fit(args, shape, seed, scaling, out):
             b = min(a+args.chunk, len(raw))
             nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
+        clock.finish('labelling')
         q, reject, medians = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk)
+        clock.finish('statistics')
         del nodes, distances
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         chi, beta = names.index('log_chi_B'), names.index('log_beta_inv')
@@ -415,6 +475,7 @@ def fit(args, shape, seed, scaling, out):
         meta.update(thresholds.to_metadata())
         model = SOMModel(*shape,w,nc,names,scaler,q,reject,metadata=meta)
         temp = out / f'{tag}.partial.h5'; model.save(temp); publish(temp,out / f'{tag}.h5')
+        clock.finish('export')
         loaded = SOMModel.load(out / f'{tag}.h5')
         mismatch = parity = 0; scaler_error = 0.
         for a in range(0,len(raw),args.chunk):
@@ -438,10 +499,11 @@ def fit(args, shape, seed, scaling, out):
             raise RuntimeError('freeze verification failed')
         node_path.unlink(); distance_path.unlink()
         labels.flush()
+        clock.finish('verification')
     rec = dict(tag=tag, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
-               training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
+               execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
                node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, cluster_medians=medians,
                sheet_rule=dict(statistic='median',log_chi_B_gt=args.sheet_chi,log_beta_inv_lt=args.sheet_beta,IDs=sheets),
@@ -456,19 +518,82 @@ def fit(args, shape, seed, scaling, out):
 
 
 def worker(conn, *args):
-    try: conn.send(('ok',fit(*args)))
+    try:
+        import numba
+        numba.set_num_threads(args[0].threads_per_seed)
+        conn.send(('ok',fit(*args)))
     except BaseException: conn.send(('error',traceback.format_exc()))
     finally: conn.close()
 
 
-def isolated(*args):
-    ctx = mp.get_context('spawn'); receive, send = ctx.Pipe(duplex=False)
-    process = ctx.Process(target=worker,args=(send,*args)); process.start(); send.close()
-    try: status, result = receive.recv()
-    except EOFError: status, result = 'error', 'worker exited without result'
-    process.join(); receive.close()
-    if status != 'ok' or process.exitcode: raise RuntimeError(result)
-    return result
+def run_wave(jobs, target=worker, exit_grace=60):
+    """Run one wave of fits in spawned workers; results come back in job order.
+
+    One daemon reader thread per pipe posts exactly one terminal event; the
+    supervisor only ever waits one second at a time, so the first error message,
+    abnormal exit or dead reader stops the siblings and raises with whatever
+    detail arrived. A worker that delivered its result but does not exit within
+    exit_grace seconds is terminated and its result kept. Every wait is bounded;
+    SIGTERM to the parent runs the same cleanup."""
+    import queue, signal, threading
+    jobs = list(jobs); ctx = mp.get_context('spawn'); running = []; readers = []; inbox = queue.Queue()
+    results = [None]*len(jobs); waiting = set(range(len(jobs)))
+
+    def read(i, receive):  # one recv, one event, whatever happens
+        try:
+            status, payload = receive.recv()
+            if status not in ('ok', 'error'): raise ValueError(f'unknown status {status!r}')
+        except (EOFError, OSError) as error: status, payload = 'error', f'worker {i} exited without result ({error!r})'
+        except BaseException as error: status, payload = 'error', f'worker {i} result could not be read ({error!r})'
+        inbox.put((i, status, payload))
+
+    def pump(timeout):  # apply every queued event, waiting at most timeout for the first
+        while True:
+            try: i, status, payload = inbox.get(timeout=timeout)
+            except queue.Empty: return
+            timeout = 0
+            if i not in waiting: continue
+            if status != 'ok':
+                process = running[i][1]; process.join(5)
+                raise RuntimeError(payload if not process.exitcode else f'{payload}\nworker {i} exit code {process.exitcode}')
+            results[i] = payload; waiting.discard(i)
+
+    def on_term(signum, frame): raise SystemExit(128+signum)
+    main = threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGTERM, on_term) if main else None
+    try:
+        for job in jobs:
+            receive, send = ctx.Pipe(duplex=False)
+            with send:  # closed even if start() fails; receive is closed in finally
+                process = ctx.Process(target=target, args=(send, *job)); running.append((receive, process)); process.start()
+            readers.append(threading.Thread(target=read, args=(len(readers), receive), daemon=True)); readers[-1].start()
+        while waiting:
+            dead = [j for j in waiting if not readers[j].is_alive()]  # checked before pump: a finished reader's event is already queued
+            pump(1)
+            for j in dead:
+                if j in waiting: raise RuntimeError(f'worker {j} result reader died without reporting')
+            for j, (_, process) in enumerate(running):
+                if process.exitcode and j in waiting:  # pipe is closed now, so its message or EOF is at most a decode away
+                    readers[j].join(5); pump(0)
+                    if j in waiting: raise RuntimeError(f'worker {j} exited without result (exit code {process.exitcode})')
+                if process.exitcode: raise RuntimeError(f'worker {j} exit code {process.exitcode} after its result')
+        deadline = time.monotonic()+exit_grace
+        for j, (_, process) in enumerate(running):
+            process.join(max(0, deadline-time.monotonic()))
+            if process.exitcode: raise RuntimeError(f'worker {j} exit code {process.exitcode} after its result')
+            if process.exitcode is None:
+                print(f'warning: worker {j} sent its result but did not exit within {exit_grace} s; terminating', flush=True)
+        return results
+    finally:
+        if main: signal.signal(signal.SIGTERM, previous)
+        for _, process in running:
+            if process.is_alive(): process.terminate()
+        for _, process in running:  # is_alive() is False for a process that never started
+            if process.is_alive(): process.join(10)
+            if process.is_alive(): process.kill(); process.join(10)
+            if process.is_alive(): print(f'warning: worker {process.pid} survived SIGKILL (uninterruptible?)', flush=True)
+        for reader in readers: reader.join(5)
+        for receive, _ in running: receive.close()
 
 
 def agreement(a,b,chunk=2**21):
@@ -498,6 +623,8 @@ def parser():
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
     p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43,44])
+    p.add_argument('--seed-workers',type=int,default=1,help='concurrent spawned seeds within each lattice')
+    p.add_argument('--threads-per-seed',type=int,help='Numba threads for the entire worker, including export and verification')
     p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
     p.add_argument('--sample-seed',type=int,default=42); p.add_argument('--groups',type=int,default=64)
     p.add_argument('--target-clusters',type=int,default=10,help='merge to at most this count; ties may yield fewer')
@@ -513,9 +640,10 @@ def parser():
 
 # The approved production training settings (production_pool.sbatch defaults). A run that departs
 # from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
+# r_min=8 on every lattice and target_clusters=10 approved by the user on 2026-10-29.
 APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
                 seeds=[42,43,44], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
-                r_max=None, r_min=None, bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
+                r_max=None, r_min=8., bz_weight=2., pol_weight=2., sheet_chi=1., sheet_beta=.5,
                 tube_bz=.7, tube_beta=0.)
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.
@@ -551,6 +679,9 @@ def main(argv=None):
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
+    auto_threads = args.threads_per_seed is None
+    execution_plan = thread_budget(args)
+    args.threads_per_seed = execution_plan['threads_per_seed']
     args.code_commit = provenance()
     records,quota,disk,mismatches = inspect(args)
     args.out.mkdir()
@@ -561,7 +692,16 @@ def main(argv=None):
     scaling=pool(args,records,quota,out)
     fits=[]; choices=[]
     for shape in shapes:
-        trio=[isolated(args,shape,seed,scaling,out) for seed in args.seeds]
+        trio=[]
+        width=execution_plan['seed_workers']
+        for start in range(0,len(args.seeds),width):
+            seeds=args.seeds[start:start+width]
+            wave_args=copy.copy(args)
+            if auto_threads:
+                import numba
+                wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
+                                               numba.config.NUMBA_NUM_THREADS)
+            trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
         idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
         chosen=trio[idx]
         os.link(out/f"{chosen['tag']}.h5",out/f'frozen-{shape[0]}x{shape[1]}.h5')
@@ -573,10 +713,10 @@ def main(argv=None):
     physics['winsor']='none'
     extraction_commit=attrs.get('git_commit','unknown')
     from aweSOM.stream import peak_rss_bytes
-    manifest=dict(schema_version=1,feature_names=records[0]['names'],pipeline='v2',
+    manifest=dict(schema_version=1,execution_plan=dict(**execution_plan,auto_threads=auto_threads),feature_names=records[0]['names'],pipeline='v2',
                   end_to_end_wall_seconds=time.perf_counter()-started,
                   parent_peak_rss_bytes=peak_rss_bytes(),
-                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+max(r['peak_rss_bytes'] for r in fits),
+                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+execution_plan['seed_workers']*max(r['peak_rss_bytes'] for r in fits),
                   implementation_sha256=digest(Path(__file__)),
                   etk_analysis_commit=extraction_commit if extraction_commit!='unknown' else UNAVAILABLE,
                   current_local_etk_checkout_commit=commit('/Volumes/ExternalNVMe/etk-analysis') if Path('/Volumes/ExternalNVMe/etk-analysis/.git').exists() else UNAVAILABLE,
