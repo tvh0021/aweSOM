@@ -28,11 +28,12 @@ over the same 560 MB.
 On a local drive these patterns cost little: the old code was 1.88 times slower
 on 3M rows (see below). On a network filesystem, each dirty page written back
 from a scattered memmap and each strided read can become a separate small
-request to the server. Many small round trips leave the process waiting, which
-fits the measured stage wall time of 4.3 to 6.9 times its CPU time. Old CPU
-time was also 56 to 298 times the new CPU time. The likely reason is kernel
-time spent on page faults and writeback, since `time.process_time` counts
-system time. This is inferred, not profiled.
+request to the server. Many small round trips leave the process waiting. That
+fits the measured stage wall time, which was 4.3 to 6.9 times its CPU time in
+five of six seeds and 2.7 times in the sixth. Old CPU time was also 56 to 303
+times the new CPU time in those five seeds. The likely reason is kernel time
+spent on page faults and writeback, since `time.process_time` counts system
+time. This is inferred, not profiled.
 
 The new code reads the raw matrix once, in sequential row blocks, and does all
 grouping, percentiles and medians in RAM. It writes nothing to lagoon until the
@@ -125,8 +126,8 @@ measure the total effect on lagoon, but not the share of each path.
 
 Jobs 8014 and 8047 ran the same production pool: 20M rows by 7 features,
 float32, contiguous HDF5, k=10, r_min=8, lattices 91x64 and 48x34, seeds 42, 43
-and 44. Both wrote their outputs to lagoon. Job 8014 runs the old code at
-0a006be; job 8047 runs the new code at cb3db68. Times are the `wall_seconds`
+and 44. Both wrote their outputs to lagoon. Job 8014 ran the old code at
+0a006be; job 8047 ran the new code at cb3db68. Times are the `wall_seconds`
 and `cpu_seconds` fields of each job's `timing.log`, pulled to
 `/Volumes/ExternalNVMe/awesom-results/cluster/HHR_flux_production_pool_k10_r8_<job>/`.
 
@@ -136,24 +137,45 @@ and `cpu_seconds` fields of each job's `timing.log`, pulled to
 | 91x64-s43 | 2020.6 | 293.1 | 5.28 | 5.26 | 382 | 405 / 395 |
 | 91x64-s44 | 10127.5 | 1528.9 | 5.14 | 5.13 | 1970 | 213 / 193 |
 | 48x34-s42 | 2326.2 | 540.3 | 5.77 | 5.76 | 403 | 217 / 216 |
-| 48x34-s43 | pending | pending | 5.14 | 5.12 | pending | 210 / 207 |
-| 48x34-s44 | pending | pending | 4.86 | 4.85 | pending | pending / 116 |
+| 48x34-s43 | 10075.1 | 1551.4 | 5.14 | 5.12 | 1961 | 210 / 207 |
+| 48x34-s44 | 73.1 | 27.2 | 4.86 | 4.85 | 15 | 118 / 116 |
+| Total | 26992.0 | 4478.6 | 31.47 | 31.37 | 858 | 1561 / 1531 |
 
-All times are in seconds. The new statistics stage is 382 to 1970 times faster
-in wall time on the four seeds measured so far. It now takes about 5 seconds per
-seed, roughly 1 to 4 percent of training time. The old stage took 5 to 48 times
-as long as training. The old stage's wall time was 4.3 to 6.9 times its CPU
-time; the new stage's wall time is within 0.4 percent of its CPU time. The
-91x64-s44 stage took about four times as long as the other old seeds. The logs
-do not show why; lagoon load at the time is one possibility.
+All times are in seconds. The new statistics stage is 15 to 1970 times faster
+in wall time per seed, and 382 to 1970 times faster on five of the six seeds.
+Over all six seeds the old stage took 7.5 hours and the new one 31 seconds. The
+new stage takes about 5 seconds per seed, roughly 1 to 4 percent of training
+time. Except for 48x34-s44, the old stage took 5 to 48 times as long as
+training. The new stage's wall time is within 0.4 percent of its CPU time.
+
+The old timings vary more than the code explains. Three seeds took 2020 to 2369
+seconds, two took about 10,000 seconds, and 48x34-s44 took 73 seconds. Each
+lattice runs s42 and s43 together with 16 threads each, then s44 alone with 32
+threads. A plausible reading is that 48x34-s44 was fast because no other seed
+in the job was writing to lagoon. That is inferred, not measured. It does not
+explain 91x64-s44, which also ran alone in its slot and took 10,128 seconds.
+Load from other jobs on lagoon and the state of the page cache are other
+possible causes; the logs do not record either. 48x34-s43 did share its slot
+with s42, but so did the three seeds near 2,000 seconds. Treat the per-seed
+spread as uncontrolled. The new stage varied only from 4.86 to 5.77 seconds.
 
 Job 8047 started at 23:11:49 UTC and wrote `VALIDATED 0` at 23:30:00 UTC, about
-18 minutes in total. Job 8014 started at 17:47:41 UTC and is still running.
-Its four finished statistics stages alone took 16843 seconds, 4.7 hours. The
-earlier job 8012 ran the same pipeline with the old code and spent about 8 hours
-outside its epoch loop, which is consistent with this stage.
+18 minutes in total. Job 8014 started at 17:47:41 UTC and wrote `VALIDATED 0`
+at 00:24:14 UTC the next day, about 6.6 hours. The earlier job 8012 ran the same
+pipeline with the old code and spent about 8 hours outside its epoch loop, which
+is consistent with this stage.
 
-Two checks remain. The 48x34 s43 and s44 rows for 8014 will be filled in when
-that job finishes. Then the outputs of 8014 and 8047 must be compared. The
-local benchmark shows bitwise-identical results, but the production outputs
-have not yet been compared.
+## Output identity on the cluster
+
+The `run/results/` directories of 8014 and 8047 match wherever results are
+stored. All six `*-labels.npy` and all six `*-umat.npy` files are byte-for-byte
+identical. In every model `.h5` and `frozen-*.h5` file, the datasets `weights`,
+`node_cluster`, `node_dist_q99` and `scaler` are identical, and `feature_names`
+has identical values. The only attribute that differs is
+`metadata.aweSOM_commit`. In the model JSON files, every field matches,
+including `cluster_medians`, `reject_distance`, `merge_cost_used` and
+`sheet_rule`. The exceptions are timings, hostname, pid, `SLURM_JOB_ID` and
+peak RSS. The freeze manifest differs in the same fields, plus
+`aweSOM_commit` and `implementation_sha256`. Sheet cluster IDs match: [4], [7]
+and [4] for the 91x64 seeds, and none for the 48x34 seeds. `merge_cost_used`
+matches per seed, for example 0.147779242479924 for 91x64-s42.
