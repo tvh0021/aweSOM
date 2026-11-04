@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.1.0
+Version: 1.1.1
 
 ## 1. Installation
 
@@ -103,7 +103,8 @@ Initilize the lattice and train
 
 ```python
 # Create an initial SOM instance
-map = Lattice(xdim=40, ydim=15, alpha_0=0.5, train=100000)
+xdim, ydim = 40, 15
+map = Lattice(xdim=xdim, ydim=ydim, alpha_0=0.5, train=100000)
 
 # Train the SOM with some data in the shape of $N \times F$.
 true_labels = iris.target
@@ -120,6 +121,7 @@ To visualize the SOM with U-matrix, which is saved at the end of training at `ma
 naive_centroids_matrix = map.compute_centroids() # return the centroid associated with each node
 unique_centroids = map.get_unique_centroids(map.compute_centroids()) # return the indivual centroids
 
+plot_centroids = {}
 plot_centroids['position_x'] = [x+0.5 for x in unique_centroids['position_x']]
 plot_centroids['position_y'] = [y+0.5 for y in unique_centroids['position_y']]
 
@@ -167,7 +169,7 @@ axs[0].legend(scatter_ground.legend_elements()[0], iris.target_names, loc="upper
 scatter_som = axs[1].scatter(iris.data[:,1], iris.data[:,2], c=som_labels, cmap='viridis')
 axs[1].set_xlabel('Sepal Width')
 axs[1].set_ylabel('Petal Length')
-axs[1].legend(scatter.legend_elements()[0], np.unique(final_clusters), loc="upper right", title="aweSOM")
+axs[1].legend(scatter_som.legend_elements()[0], np.unique(som_labels), loc="upper right", title="aweSOM")
 plt.show()
 ```
 
@@ -239,27 +241,25 @@ for xdim in parameters["xdim"]:
             for train in parameters["train"]:
                 print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
                 map = Lattice(xdim, ydim, alpha_0, train, )
-                map.train_lattice(iris_data_transformed, feature_names, labels)
-                # projection_2d = map.map_data_to_lattice()
+                map.train_lattice(iris_data_transformed, feature_names, true_labels)
+                projection_2d = map.map_data_to_lattice()
                 final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
                 som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
                 save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
 ```
 
-This saves 36 realizations to the current working directory.
+This saves 36 realizations to the current working directory, so start the Python session in a fresh scratch directory rather than inside the repository. (The repository ships the same outputs in `examples/iris/som_results/`; to use those instead, run the rest of this section from `examples/iris/` and skip the next two shell steps.)
 
-In the terminal (skip this step if you use the pre-generated files):
+In the terminal, from that same scratch directory:
 
 ```bash
-cd [path_to_aweSOM]/aweSOM/examples/iris/
-mkdir som_results
+mkdir -p som_results
 mv labels* som_results/
 ```
 
-Then,
+Then run SCE in a subshell, so that the Python session keeps its working directory:
 ```bash
-cd som_results/
-python3 [path_to_aweSOM]/aweSOM/src/aweSOM/sce.py --subfolder SCE --dims 150
+(cd som_results && python3 [path_to_aweSOM]/aweSOM/src/aweSOM/sce.py --subfolder SCE --dims 150)
 ```
 
 This will create (or append to) the `multimap_mappings.txt` file inside `som_results/SCE/` with the $G_{\rm sum}$ for each cluster. It also save the mask for each cluster $C$ as a `.npy` file.  
