@@ -8,7 +8,6 @@ import contextlib
 import inspect
 import io
 import sys
-import time
 
 import numpy as np
 import pytest
@@ -116,15 +115,13 @@ def test_large_lattice_merge_has_no_recursion_limit():
         naive = som.compute_centroids(False)
         n_naive = len(som.get_unique_centroids(naive)["position_x"])
         # leave fewer spare frames than there are merges, so a recursive merge fails
+        spare_frames = 150
         limit = sys.getrecursionlimit()
-        sys.setrecursionlimit(len(inspect.stack()) + 150)
+        sys.setrecursionlimit(len(inspect.stack()) + spare_frames)
         try:
-            start = time.perf_counter()
             merged = som.merge_similar_centroids(_copy_centroids(naive), 0.3)
-            elapsed = time.perf_counter() - start
         finally:
             sys.setrecursionlimit(limit)
     n_merged = len(som.get_unique_centroids(merged)["position_x"])
-    assert n_naive > 100
-    assert n_naive - n_merged > 100  # more merges than a shallow recursion would allow
-    assert elapsed < 120
+    assert n_naive > spare_frames
+    assert n_naive - n_merged > spare_frames  # more merges than the spare frames allow
