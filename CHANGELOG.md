@@ -4,6 +4,65 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-11-04
+
+This release fixes crashes in training, cluster merging, SCE and the
+`run_som.py` command line. For every input that ran in v1.1.1, trained
+lattices, cluster maps and SCE values are the same.
+
+### Fixed
+
+- `Lattice.train_lattice` raised `ZeroDivisionError` when `train` was below
+  25 with the default decaying learning rate, or below 10 with any learning
+  rate. Short runs now train.
+- `Lattice.train_lattice` raised `ZeroDivisionError` when the larger lattice
+  side was 7, and when a training batch had fewer than 4 steps. Both cases
+  now train.
+- `Lattice.train_lattice(restart_lattice=w)` trained `w` in place, so the
+  caller's array changed. Training now works on a copy of `w`.
+- `Lattice.assign_cluster_to_lattice` raised `IndexError` when the U-matrix
+  had one centroid. It now returns a single cluster.
+- `sce.compute_SQ` divided zero by zero when a mask was empty. NumPy issued a
+  `RuntimeWarning`, or raised `FloatingPointError` under
+  `np.errstate(all="raise")`. The function now returns 0 before it divides.
+  The result is unchanged.
+- SCE removed the `.npy` suffix with `str.strip(".npy")`. That call also
+  removed every `.`, `n`, `p` or `y` at either end of a run name, so the run
+  `labels.run-1p.npy` appeared as `labels.run-1` in `multimap_mappings.txt`
+  and in its mask file names. SCE now removes only the suffix.
+- The `run_som.py` command line failed before it loaded any data. Run as a
+  script, it raised `ImportError` on a relative import. Run with
+  `python -m aweSOM.run_som`, it raised `AttributeError` because it read
+  `args.neurons_path`, which the parser does not define. It now uses an
+  absolute import and reads `args.lattice_path`.
+- `Lattice.best_match` printed progress every `N // 10` points, which is a
+  modulus of 0 for fewer than 10 points. Numba's parallel loop returned 0
+  there instead of raising, so results were correct. The divisor is now at
+  least 1.
+- The README and the testing page said that `sce_test.py` fails partially
+  without a CUDA GPU. They now state which tests pass with and without JAX.
+
+### Changed
+
+- No numerical change. Training from a restart array gives the same
+  `Lattice.lattice` and `Lattice.umat` as v1.1.1, in the dtype of the array
+  you pass. The array
+  itself no longer changes during training, so code that read the trained
+  weights from it must read `Lattice.lattice` instead.
+- `sce_test.py` reloads `aweSOM.sce` under the patched JAX backend and
+  compares values instead of types, so it no longer depends on the real
+  backend of the machine. Tests write their files into temporary directories
+  and use seeded input data.
+- `src/aweSOM/som.py` uses LF line endings.
+
+### Added
+
+- `tests/regression_test.py` and `tests/small_input_and_restart_test.py`,
+  with tests for the training, merging, `best_match` and SCE fixes above. The
+  restart tests compare the trained weights, the U-matrix and the cluster map
+  with values from v1.1.1, stored in
+  `tests/fixtures/restart_training_v1.1.1.npz`.
+
 ## [1.1.1] - 2026-11-04
 
 The only package code change is one NumPy-compatibility line (below);
@@ -49,5 +108,6 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.1.2]: https://github.com/tvh0021/aweSOM/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/tvh0021/aweSOM/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/tvh0021/aweSOM/releases/tag/v1.1.0
