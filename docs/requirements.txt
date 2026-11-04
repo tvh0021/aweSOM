@@ -4,4 +4,3 @@ nbsphinx
 sphinxcontrib-napoleon
 ipython
 jupyter
-aweSOM

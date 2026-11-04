@@ -1,0 +1,32 @@
+name: Tests
+on:
+  push:
+    branches: [public-release]
+  pull_request:
+    branches: [public-release]
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel]
+        python-version: ["3.9", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt jax jaxlib
+      - name: Install aweSOM
+        run: pip install .
+      - name: Run tests
+        # The tests read examples/iris/... by relative path, so run them from the checkout root.
+        run: python -m pytest -q tests
