@@ -2,5 +2,5 @@ from .som import Lattice
 
 # import run_som, sce, make_sce_clusters
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 __author__ = "Trung Ha"

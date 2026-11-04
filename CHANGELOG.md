@@ -4,6 +4,27 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-11-04
+
+This release rewrites the cluster merge in `Lattice.merge_similar_centroids`
+as a loop. Merged cluster maps are identical to v1.1.2.
+
+### Changed
+
+- `Lattice.merge_similar_centroids` no longer calls itself once per merge. It
+  merges the cheapest pair in a loop and stops at the same point as before.
+  It returns the same centroids and sets the same `nodes_count` as v1.1.2.
+- A map that needs more merges than Python's recursion limit (1000 by
+  default) now merges. v1.1.2 raised `RecursionError` on such maps.
+- The merge computes each pairwise cost once and reuses it in later merge
+  rounds, so large lattices merge faster.
+
+### Added
+
+- `tests/merge_test.py`. It compares the merge with a frozen copy of the
+  v1.1.2 recursive merge on 20 trained maps at three thresholds. It also
+  merges a 60 by 40 map under a lowered recursion limit.
+
 ## [1.1.2] - 2026-11-04
 
 This release fixes crashes in training, cluster merging, SCE and the
@@ -108,6 +129,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.1.3]: https://github.com/tvh0021/aweSOM/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/tvh0021/aweSOM/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/tvh0021/aweSOM/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/tvh0021/aweSOM/releases/tag/v1.1.0

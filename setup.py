@@ -6,7 +6,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="aweSOM",
-    version="1.1.2",
+    version="1.1.3",
     author="Trung Ha",
     author_email="thccrg@rit.edu",
     description="Accelerated Self-Organizing Maps and Statistically Combined Ensemble method for plasma intermittency detection",

@@ -4,6 +4,7 @@
 ## with modifications by Trung Ha (2024) for aweSOM
 
 import sys
+from collections import Counter
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -862,90 +863,83 @@ class Lattice:
         """
 
         heat = self.umat
+        heat_squared = heat**2
         centroids = naive_centroids.copy()
-        unique_centroids = self.get_unique_centroids(
-            centroids
-        )  # the nodes_count dictionary is also created here, so don't remove this line
 
-        # for each pair of centroids, compute the weighted distance between them via interpolating the umat
-        # if the distance is less than the threshold, combine the centroids
+        # The pairwise cost depends only on the U-matrix and the two (ordered) endpoints,
+        # so it is computed once per ordered pair and reused in later rounds. Each round
+        # merges the cheapest pair, then re-ranks the surviving centroids against the new
+        # largest cost; this loop is the non-recursive form of the original recursion.
+        cost_cache = {}
 
-        cost_between_centroids = []
+        while True:
+            # same centroid list, unique order and counts as get_unique_centroids, in
+            # linear rather than quadratic time; that method still sets self.nodes_count
+            # once the merging stops
+            centr_locs = [
+                (centroids["centroid_x"][ix, iy], centroids["centroid_y"][ix, iy])
+                for ix in range(self.xdim)
+                for iy in range(self.ydim)
+            ]
+            nodes_count = Counter(centr_locs)
+            unique_ids = list(set(centr_locs))
+            position_x = [x for x, y in unique_ids]
+            position_y = [y for x, y in unique_ids]
 
-        for i in range(len(unique_centroids["position_x"]) - 1):
-            for j in range(i + 1, len(unique_centroids["position_x"])):
-                a = [
-                    unique_centroids["position_x"][i],
-                    unique_centroids["position_y"][i],
-                ]
-                b = [
-                    unique_centroids["position_x"][j],
-                    unique_centroids["position_y"][j],
-                ]
-                num_sample = 5 * int(np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2))
-                x, y = np.linspace(a[0], b[0], num_sample), np.linspace(
-                    a[1], b[1], num_sample
-                )
-                umat_dist = map_coordinates(heat**2, np.vstack((x, y)))
-                total_cost = np.sum(umat_dist)
-                # total_cost /= num_sample
-                cost_between_centroids.append([a, b, total_cost])
+            # for each pair of centroids, compute the weighted distance between them via interpolating the umat
+            # if the distance is less than the threshold, combine the centroids
+            cost_between_centroids = []
 
-        if len(cost_between_centroids) == 0:
-            print("Number of unique centroids:  1", flush=True)
-            return centroids
+            for i in range(len(position_x) - 1):
+                for j in range(i + 1, len(position_x)):
+                    a = [position_x[i], position_y[i]]
+                    b = [position_x[j], position_y[j]]
+                    key = (a[0], a[1], b[0], b[1])
+                    total_cost = cost_cache.get(key)
+                    if total_cost is None:
+                        num_sample = 5 * int(
+                            np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+                        )
+                        x, y = np.linspace(a[0], b[0], num_sample), np.linspace(
+                            a[1], b[1], num_sample
+                        )
+                        umat_dist = map_coordinates(heat_squared, np.vstack((x, y)))
+                        total_cost = np.sum(umat_dist)
+                        cost_cache[key] = total_cost
+                    cost_between_centroids.append([a, b, total_cost])
 
-        # cost_between_centroids.sort(key=lambda x: x[2])
-        sorted_cost = sorted(
-            cost_between_centroids, key=lambda x: x[2]
-        )  # this ranks all pairwise cost in ascending order
-        # normalize the cost such that the largest cost at each step is always one
-        sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+            if len(cost_between_centroids) == 0:
+                self.get_unique_centroids(centroids)  # sets self.nodes_count
+                print("Number of unique centroids:  1", flush=True)
+                return centroids
 
-        # combine the centroids recursively until the threshold is reached
-        if sorted_cost[0][2] < threshold:
+            sorted_cost = sorted(
+                cost_between_centroids, key=lambda x: x[2]
+            )  # this ranks all pairwise cost in ascending order
+            # normalize the cost such that the largest cost at each step is always one
+            sorted_cost = [[a, b, c / sorted_cost[-1][2]] for a, b, c in sorted_cost]
+
+            # stop once the cheapest remaining pair is above the threshold
+            if not sorted_cost[0][2] < threshold:
+                self.get_unique_centroids(centroids)  # sets self.nodes_count
+                print("Number of unique centroids: ", len(position_x), flush=True)
+                print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
+                return centroids
+
             centroid_a = tuple(sorted_cost[0][0])
             centroid_b = tuple(sorted_cost[0][1])
-            # heat_a = heat[centroid_a[0], centroid_a[1]]
-            # heat_b = heat[centroid_b[0], centroid_b[1]]
-            nodes_a = self.nodes_count[centroid_a]
-            nodes_b = self.nodes_count[centroid_b]
+            nodes_a = nodes_count[centroid_a]
+            nodes_b = nodes_count[centroid_b]
 
             print(f"Centroid A: {centroid_a}, count: {nodes_a}", flush=True)
             print(f"Centroid B: {centroid_b}, count: {nodes_b}", flush=True)
-            # print(f"Centroid A: {centroid_a}, Umatrix value: {heat_a}", flush=True)
-            # print(f"Centroid B: {centroid_b}, Umatrix value: {heat_b}", flush=True)
             print("Merging...", flush=True)
-
-            replace_a_with_b = False
 
             # this method takes the centroid with the larger number of nodes
             if nodes_a < nodes_b:
-                replace_a_with_b = True
-
-            # this method takes the centroid with the smaller U-matrix value
-            # if heat_a > heat_b:
-            #     replace_a_with_b = True
-
-            if replace_a_with_b:
                 centroids = self.replace_value(centroids, centroid_a, centroid_b)
             else:
                 centroids = self.replace_value(centroids, centroid_b, centroid_a)
-
-            # print("New centroids: \n", centroids, flush=True)
-            centroids = self.merge_similar_centroids(centroids, threshold)
-        else:
-            unique_centroids = self.get_unique_centroids(centroids)
-            # print("Centroids: \n", unique_centroids, flush=True)
-            print(
-                "Number of unique centroids: ",
-                len(unique_centroids["position_x"]),
-                flush=True,
-            )
-            print("Minimum cost between centroids: ", sorted_cost[0][2], flush=True)
-            return centroids
-
-        return centroids
 
     def get_unique_centroids(self, centroids):
         """
