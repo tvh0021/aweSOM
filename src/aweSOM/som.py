@@ -121,7 +121,12 @@ class Lattice:
         )  # only train for this number of steps; useful for restarting training
 
         if self.restart_lattice is not None:
-            lattice = self.restart_lattice
+            lattice = np.array(self.restart_lattice, copy=True)
+            if self.restart_lattice is getattr(self, "lattice", None):
+                # restarting from self.lattice: keep self.lattice bound to the
+                # array being trained, as it was when 1.1.1 trained in place,
+                # so the final U-matrix reads the trained weights
+                self.lattice = lattice
         else:
             if self.init == "uniform":
                 # vector with small init values for all nodes
@@ -138,8 +143,8 @@ class Lattice:
 
         alpha = self.alpha  # starting learning rate
         if self.alpha_type == 1:
-            alpha_freq = (
-                self.train // 25
+            alpha_freq = max(
+                1, self.train // 25
             )  # how often to decay the learning rate; at 24 steps, alpha_f ~ 1e-3 alpha_0
         else:
             alpha_freq = 1
@@ -154,8 +159,8 @@ class Lattice:
         nsize_step = (
             this_batch_train // 4
         )  # for the third quarter of the training steps, shrink the neighborhood
-        nsize_freq = nsize_step // (
-            nsize_max - nsize_min
+        nsize_freq = max(
+            1, nsize_step // max(1, nsize_max - nsize_min)
         )  # how often to shrink the neighborhood
 
         # if self.epoch < 2 * nsize_step:
@@ -208,7 +213,7 @@ class Lattice:
 
         print("Begin training", flush=True)
         while True:
-            if epoch % int(self.train // 10) == 0:
+            if epoch % max(1, self.train // 10) == 0:
                 print("Evaluating epoch = ", epoch, flush=True)
 
             # if (epoch % loss_freq == 0) & (epoch != 0):
@@ -468,7 +473,7 @@ class Lattice:
             else:
                 best_match_node[i] = np.argmin(s)
 
-            if i % int(obs.shape[0] // 10) == 0:
+            if i % max(1, obs.shape[0] // 10) == 0:
                 print("i = ", i)
 
         return best_match_node
@@ -885,6 +890,10 @@ class Lattice:
                 total_cost = np.sum(umat_dist)
                 # total_cost /= num_sample
                 cost_between_centroids.append([a, b, total_cost])
+
+        if len(cost_between_centroids) == 0:
+            print("Number of unique centroids:  1", flush=True)
+            return centroids
 
         # cost_between_centroids.sort(key=lambda x: x[2])
         sorted_cost = sorted(

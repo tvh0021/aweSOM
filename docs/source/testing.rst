@@ -24,8 +24,10 @@ Or run a specific test function within a module:
 
     python -m pytest tests/[module]_test.py::test_[function]
 
-If there is no GPU, or if the GPU is not CUDA-compatible, the `sce_test.py` module will fail partially.
-This is expected behavior, and SCE computation should still fall back to the CPU.
+Two tests in ``sce_test.py`` import JAX.
+Without JAX, ``test_jax_gpu_available`` and ``test_jax_cpu_available`` fail with ``ModuleNotFoundError``, and the other four tests pass.
+With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`` issues a warning.
+SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 
 Performance tests
 -----------------

@@ -30,13 +30,24 @@ def test_jax_gpu_available():
 
 
 def test_jax_cpu_available():
-    # Check that the correct device is being used
-    with patch("jax.default_backend", return_value="cpu"):
-        import aweSOM.sce as sce
+    # Check that the correct device is being used. `aweSOM.sce` chooses its
+    # array library at import time, so the module has to be re-imported
+    # under the patched backend and restored afterwards (otherwise this test
+    # only passes by accident on machines whose real backend is already cpu,
+    # and fails on an Apple Metal install).
+    import importlib
 
-        assert sce.USE_JAX is False
-        assert sce.array_lib.__name__ == "numpy"
-        assert not hasattr(sce, "jnp")
+    import aweSOM.sce as sce
+
+    try:
+        with patch("jax.default_backend", return_value="cpu"):
+            sce = importlib.reload(sce)
+            assert sce.USE_JAX is False
+            assert sce.array_lib.__name__ == "numpy"
+            # (no `hasattr(sce, "jnp")` check: importlib.reload keeps the old
+            # module dict, so a stale `jnp` survives from the real import)
+    finally:
+        importlib.reload(sce)
 
 
 def test_load_som_npy(tmp_path):
@@ -69,9 +80,13 @@ def test_compute_SQ():
 
     SQ, SQ_matrix = compute_SQ(mask1, mask2)
 
-    # Assert the SQ value and SQ_matrix are as expected
-    assert isinstance(SQ, float)
-    assert isinstance(SQ_matrix, np.ndarray)
+    # Assert the SQ value and SQ_matrix are as expected. On a GPU/Metal
+    # backend these come back as jax arrays, so compare by value and shape
+    # rather than by concrete type.
+    assert np.ndim(SQ) == 0
+    assert np.isclose(float(SQ), 2.0 / 3.0)
+    SQ_matrix = np.asarray(SQ_matrix)
+    assert SQ_matrix.shape == mask1.shape
 
 
 def test_find_number_of_clusters():

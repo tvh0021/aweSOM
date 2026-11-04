@@ -9,7 +9,7 @@ features_names = ["feature1", "feature2", "feature3", "feature4"]
 alpha_0 = 0.5
 xdim = 20
 ydim = 10
-data = np.random.rand(data_dims[0], data_dims[1])
+data = np.random.default_rng(2024).random(data_dims)
 
 
 @pytest.fixture
