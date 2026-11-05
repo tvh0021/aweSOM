@@ -395,6 +395,7 @@ class _BMU:
     original node IDs and reference arithmetic, including the lowest-index tie
     rule.
 
+    ``"cuda"`` uses optional CuPy float64 brute force in every epoch.
     ``"auto"`` times the screen and patch searches on the first rows of the
     first chunk and keeps the faster one for the pass (both are exact, with
     bitwise-equal results, so the choice only affects speed).
@@ -406,6 +407,9 @@ class _BMU:
                  first_epoch: bool = False):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
+        if kind == "cuda":
+            from ._gpu import GpuSearcher
+            self.gpu = GpuSearcher(self.w, xdim, ydim)
         self.feature = first_epoch
         if kind in ("screen", "patch", "auto") and (
             not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15
@@ -421,6 +425,8 @@ class _BMU:
                 self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
+        if kind == "cuda":
+            return self.gpu(block, idx, d2)
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
         if kind == "patch":
@@ -574,8 +580,8 @@ def train_batch_stream(
         sampling it is measured on the next epoch's sample. ``hits`` is empty
         when ``final_pass="none"``.
     """
-    if bmu not in ("auto", "screen", "patch", "numba"):
-        raise ValueError('bmu must be "auto", "screen", "patch" or "numba"')
+    if bmu not in ("auto", "screen", "patch", "numba", "cuda"):
+        raise ValueError('bmu must be "auto", "screen", "patch", "numba" or "cuda"')
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError("sample_fraction must be in (0, 1]")
     if final_pass not in ("full", "sample", "none"):
@@ -713,8 +719,8 @@ def predict_stream(
             ``h5py.Dataset``); allocated in memory if None.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
-        backend: ``predict`` backend (default ``"screen"``; ``"patch"`` is
-            exact too and faster on trained lattices, needs ``lattice_shape``).
+        backend: ``predict`` backend, including optional ``"cuda"``.
+            Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
@@ -731,11 +737,21 @@ def predict_stream(
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
     pos = 0
+    gpu = _BMU(weights, "cuda", len(weights), 1) if backend == "cuda" else None
+    clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
+    if gpu is not None and len(clusters) != len(weights):
+        raise ValueError("node_cluster must have one entry per node")
     for c in it:
         t0 = time.perf_counter()
-        res = predict(weights, node_cluster, c, chunk=c.shape[0],
-                      return_distance=out_distance is not None, backend=backend,
-                      lattice_shape=lattice_shape)
+        if gpu is not None:
+            idx, d2 = np.empty(len(c), np.int32), np.empty(len(c), np.float64)
+            gpu(c, idx, d2)
+            labels = clusters[idx]
+            res = (labels, np.sqrt(d2)) if out_distance is not None else labels
+        else:
+            res = predict(weights, node_cluster, c, chunk=c.shape[0],
+                          return_distance=out_distance is not None, backend=backend,
+                          lattice_shape=lattice_shape)
         t1 = time.perf_counter()
         m = c.shape[0]
         if out_distance is not None:

@@ -1,0 +1,15 @@
+{
+  "reference_commit": "82dee49",
+  "options": {
+    "xdim": 12,
+    "ydim": 8,
+    "epochs": 3,
+    "chunk": 1024,
+    "groups": 8,
+    "bmu": "numba",
+    "final_pass": "none",
+    "prefetch": false,
+    "n_threads": 4
+  },
+  "weights_sha256": "8c8f5b417efa18a496cb5766107081733860c60d40801bd42ac4c39dc064ec44"
+}

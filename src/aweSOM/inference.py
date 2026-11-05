@@ -1000,6 +1000,7 @@ def predict(
     ``backend="patch"`` runs :func:`best_match_nodes_patch` (CPU, exact,
     bitwise equal to ``"numba"``; needs ``lattice_shape``), the fastest exact
     CPU path on trained lattices of a few thousand nodes or more.
+    ``backend="cuda"`` runs the optional exact float64 CuPy search.
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -1015,7 +1016,7 @@ def predict(
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
         backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"``,
-            ``"patch"`` or ``"jax"``. Defaults to ``"screen"``.
+            ``"patch"``, ``"cuda"`` or ``"jax"``. Defaults to ``"screen"``.
         lattice_shape (tuple[int, int] | None, optional): ``(xdim, ydim)``,
             required by ``backend="patch"``.
 
@@ -1045,10 +1046,15 @@ def predict(
         nodes_idx, dist2 = best_match_nodes_patch(
             weights, data, *lattice_shape, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
+    elif backend == "cuda":
+        from ._gpu import best_match_nodes_cuda
+        nodes_idx, dist2 = best_match_nodes_cuda(
+            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)
