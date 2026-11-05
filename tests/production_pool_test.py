@@ -71,6 +71,7 @@ def test_override_and_strata(tmp_path):
     paths=inputs(tmp_path); a=args(tmp_path,paths)
     with h5py.File(paths[1],'r+') as h: h.attrs['s_v']=2.
     a.allow_independent_thresholds=True
+    a.write_scaled=True
     rec,quota,_,bad=pool.inspect(a); assert bad
     a.out.mkdir(); scaling=pool.pool(a,rec,quota,a.out)
     with h5py.File(a.out/'pool.h5') as h:

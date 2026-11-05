@@ -1,0 +1,70 @@
+"""Scale-out driver regression checks."""
+from production_pool_test import pool, inputs, args, ROOT
+import json
+import os
+import subprocess
+import sys
+from types import SimpleNamespace
+import h5py
+import numpy as np
+import pytest
+
+
+def test_raw_scaling_matches_stored(tmp_path):
+    paths = inputs(tmp_path); a = args(tmp_path,paths); a.write_scaled = True
+    records,quota,*_ = pool.inspect(a); a.out.mkdir()
+    scaling = pool.pool(a,records,quota,a.out)
+    from aweSOM import Scaler
+    scaler = Scaler('median-iqr',np.array(scaling['center']),np.array(scaling['scale']))
+    with h5py.File(a.out/'pool.h5') as h:
+        raw = pool.EpochSource(h['raw'],scaling['strata'],60,42,17,
+                               transform=lambda x: scaler.transform(x.astype('f8')))
+        stored = pool.EpochSource(h['scaled'],scaling['strata'],60,42,17)
+        for _ in range(3):
+            assert all(np.array_equal(a,b) for a,b in zip(raw(),stored(),strict=True))
+
+
+@pytest.mark.parametrize('cores,workers,threads',[(32,2,16),(72,1,72),(144,1,144),(144,2,72)])
+def test_wide_thread_budget(monkeypatch,cores,workers,threads):
+    import numba
+    monkeypatch.setenv('SLURM_CPUS_PER_TASK',str(cores))
+    monkeypatch.setattr(numba.config,'NUMBA_NUM_THREADS',cores)
+    a = SimpleNamespace(seed_workers=workers,seeds=[42,43],threads_per_seed=None)
+    assert pool.thread_budget(a)['threads_per_seed'] == threads
+
+
+def test_fit_collect_round_trip(tmp_path):
+    paths = inputs(tmp_path)
+    base = [sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),
+            '--inputs',*map(str,paths),'--anchor','1','--held-out','3',
+            '--rows-per-snapshot','60','--rows-per-epoch','60','--lattices','3x2',
+            '--seeds','42','43','--epochs','1','--chunk','29','--min-free-gb','0',
+            '--target-clusters','1','--threads-per-seed','1']
+    env = dict(os.environ,NUMBA_NUM_THREADS='2',NUMBA_CACHE_DIR=str(tmp_path/'cache'))
+    def run(out,*extra):
+        result = subprocess.run([*base,'--out',str(out),*map(str,extra)],env=env,capture_output=True,text=True)
+        assert result.returncode == 0,result.stdout+result.stderr
+        return out/'results'
+    prepared = run(tmp_path/'prepared','--pool-only')
+    with h5py.File(prepared/'pool.h5') as h: assert 'scaled' not in h
+    fits = [run(tmp_path/f'fit-{seed}','--reuse-pool',prepared,'--fit','3x2',seed) for seed in [42,43]]
+    before = [pool.digest(path/'3x2-s42.h5') if i==0 else pool.digest(path/'3x2-s43.h5') for i,path in enumerate(fits)]
+    final = run(tmp_path/'collected','--reuse-pool',prepared,'--collect',*fits)
+    manifest = json.loads((final/'freeze-manifest.json').read_text())
+    assert len(manifest['models']) == 2 and len(manifest['selection']) == 1
+    assert (final/'frozen-3x2.h5').exists()
+    assert before == [pool.digest(path/f'3x2-s{seed}.h5') for seed,path in zip([42,43],fits)]
+
+
+@pytest.mark.parametrize('threads',[1,2])
+def test_cpu_no_checkpoint_baseline(threads):
+    import numba
+    from aweSOM.stream import train_batch_stream
+    previous = numba.get_num_threads()
+    try:
+        numba.set_num_threads(threads)
+        with np.load(ROOT/'tests/fixtures/scale_out_cpu.npz') as fixture:
+            weights,_ = train_batch_stream(fixture['raw'],12,8,epochs=3,chunk=2048,
+                bmu='patch',seed=42,groups=64,r_min=2,final_pass='none')
+            assert np.array_equal(weights,fixture['weights'])
+    finally: numba.set_num_threads(previous)

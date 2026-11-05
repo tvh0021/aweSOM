@@ -1,0 +1,15 @@
+{
+  "baseline_commit": "82dee49",
+  "generator": "2026-11-03/Z-scale-1e9-gp/kit/scale_1e9.py Mixture and generate",
+  "data_seed": 20261103,
+  "rows": 8192,
+  "features": 7,
+  "lattice": [12, 8],
+  "epochs": 3,
+  "chunk": 2048,
+  "seed": 42,
+  "groups": 64,
+  "bmu": "patch",
+  "r_min": 2,
+  "weights_sha256": "2d15ad3cb7bc0b8f8babe3caa327fe54928ea76cdd99f615bceb953eb353a19d"
+}
