@@ -145,3 +145,18 @@ def test_merge_buffer_size_bitwise(tmp_path,monkeypatch,dtype):
         blocks = ((values[a:a+29],labels[a:a+29]) for a in range(0,len(values),29))
         results.append(statistics.summarize(blocks,counts,[.25,.5,.75],directory,29))
     for a,b in zip(*results,strict=True): assert a.tobytes() == b.tobytes()
+
+
+def test_full_run_checks_scratch_before_pooling(tmp_path,monkeypatch):
+    paths = inputs(tmp_path); a = args(tmp_path,paths)
+    scratch = tmp_path/'scratch'; scratch.mkdir()
+    usage = pool.shutil.disk_usage
+    def disk_usage(path):
+        return SimpleNamespace(free=0) if Path(path) == scratch else usage(path)
+    from pathlib import Path
+    monkeypatch.setattr(pool.shutil,'disk_usage',disk_usage)
+    command = ['--inputs',*map(str,paths),'--anchor','1','--held-out','3',
+               '--out',str(a.out),'--rows-per-snapshot','60','--rows-per-epoch','60',
+               '--scratch',str(scratch),'--min-free-gb','0','--threads-per-seed','1']
+    with pytest.raises(ValueError,match='Low scratch disk'): pool.main(command)
+    assert not a.out.exists()

@@ -965,15 +965,19 @@ def diagnostic_reasons(args, records=()):
     return reasons
 
 
-def fit_disk_budget(args, rows, features, itemsize=4):
-    """Check scratch and output capacity before a reused-pool fit starts."""
+def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True):
+    """Check scratch and output capacity before pooling or training starts."""
     from aweSOM.pool_statistics import scratch_root
     scratch = scratch_root(args.scratch,args.out.parent)
     output = args.out.parent.resolve()
     # Distance runs are removed before concurrent feature runs are formed.
     workers = min(args.threads_per_seed,features)
-    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)
+    concurrent = min(args.seed_workers,len(args.seeds)) if full_run else 1
+    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)*concurrent
     output_bytes = rows*16
+    if full_run:
+        pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
+        output_bytes = rows*(pool_bytes+4*len(args.lattices)*len(args.seeds)+12*concurrent)
     scratch_free = shutil.disk_usage(scratch).free
     output_free = shutil.disk_usage(output).free
     shared = scratch.stat().st_dev == output.stat().st_dev
@@ -1022,11 +1026,14 @@ def main(argv=None):
         if [str(p.resolve()) for p in args.inputs] != [r['path'] for r in state['records']]:
             raise ValueError('reused pool input paths differ')
         records,quota,disk,mismatches = state['records'],state['quota'],state['disk'],state['mismatches']
-        if args.fit:
+        if not (args.collect or args.pool_only):
             with h5py.File(directory/'pool.h5','r') as h:
-                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize)
+                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize,
+                                full_run=not bool(args.fit),pool_new=False)
     else:
         records,quota,disk,mismatches = inspect(args)
+        if not args.pool_only:
+            fit_disk_budget(args,quota*len(records),len(records[0]['names']),full_run=True)
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
