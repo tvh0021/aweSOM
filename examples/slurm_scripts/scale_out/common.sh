@@ -2,7 +2,8 @@
 # Paths: KIT (this directory, default $SLURM_SUBMIT_DIR), VENV (python with numpy/numba/h5py),
 # OUT (fresh output dir, default $KIT/runs/NAME-JOBID), OUT_ROOTS (allowed parents).
 # MPI: $KIT/mpi-site (pip --target dir holding mpi4py, fixed, not overridable; PYTHONPATH),
-# LAUNCH (auto | srun-pmix | srun-pmi2 | srun-pmix_v4 | mpirun), MPIRUN (path, mpirun mode).
+# LAUNCH (auto | srun-pmix | srun-pmi2 | srun-pmix_v4 | mpirun), MPIRUN (path, mpirun mode),
+# MPI_BUILD (probe only: wheel = binary mpi4py wheel, default; source = compile, needs a C compiler).
 
 kit_modules() {
   # Make `module` available in a batch shell; load the MPI module the probe recorded.
@@ -14,6 +15,8 @@ kit_modules() {
   if [ -f "$MPI_SITE/MODULE" ] && [ -s "$MPI_SITE/MODULE" ]; then
     module load "$(cat "$MPI_SITE/MODULE")" || echo "module load $(cat "$MPI_SITE/MODULE") failed" >&2
   fi
+  # The binary mpi4py wheel dlopens the MPI library named here (srun and mpirun -x pass it on).
+  if [ -s "$MPI_SITE/LIBMPI" ]; then MPI4PY_LIBMPI=$(cat "$MPI_SITE/LIBMPI"); export MPI4PY_LIBMPI; fi
 }
 
 kit_init() {
@@ -144,7 +147,8 @@ pick_launcher() {
                 $PY -m mpi4py.bench helloworld > "$out" 2>&1 || true;;
       mpirun) [ -n "$MPIRUN" ] || continue
               timeout 300 "$MPIRUN" -np "$nr" --host "$(hostlist "$nn" $((nr / nn)))" \
-                -x PYTHONPATH -x PATH -x LD_LIBRARY_PATH $PY -m mpi4py.bench helloworld > "$out" 2>&1 || true;;
+                -x PYTHONPATH -x PATH -x LD_LIBRARY_PATH ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI} \
+                $PY -m mpi4py.bench helloworld > "$out" 2>&1 || true;;
     esac
     ok=$(grep -c "of $nr on" "$out" 2>/dev/null || true)
     if [ "$ok" = "$nr" ]; then LAUNCH=$l; echo "$l" > "$OUT/launcher.txt"; echo "launcher: $l"; return 0; fi
@@ -181,7 +185,7 @@ run_one() {
     mpirun) NUMBA_NUM_THREADS=$cpus "$MPIRUN" -np "$nr" --host "$(hostlist "$nn" "$rpn")" --map-by "$mb" \
               --bind-to core -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x NUMBA_NUM_THREADS -x OMP_NUM_THREADS \
               -x OPENBLAS_NUM_THREADS -x MKL_NUM_THREADS -x SCALE_CACHE_ROOT -x HDF5_USE_FILE_LOCKING \
-              -x PYTHONUNBUFFERED -x PYTHONDONTWRITEBYTECODE -x TMPDIR -x MPLCONFIGDIR \
+              -x PYTHONUNBUFFERED -x PYTHONDONTWRITEBYTECODE -x TMPDIR -x MPLCONFIGDIR ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI} \
               $PY -m mpi4py "$KIT/scale_out.py" --mpi --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1;;
     *) echo "run_one: no launcher (LAUNCH=$LAUNCH)" >&2; return 2;;
   esac
@@ -189,47 +193,84 @@ run_one() {
 
 r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }
 
+# Write mpi4py's version, the MPI extension file, MPI4PY_LIBMPI and the MPI library version
+# to $1. Fails if `from mpi4py import MPI` fails, if the binary wheel picked its MPICH
+# flavour, or (when $2 is given) if the library is not Open MPI v$2.
+mpi_check() {
+  local f=$1 ver=$2
+  $PY - > "$f" 2>&1 <<'PY' || return 1
+import os, mpi4py
+from mpi4py import MPI
+print("mpi4py", mpi4py.__version__, mpi4py.__file__)
+print("MPI.__file__", MPI.__file__)
+print("MPI4PY_LIBMPI", os.environ.get("MPI4PY_LIBMPI", "(unset)"))
+print(MPI.Get_library_version()[:200].strip())
+if ".mpich." in os.path.basename(MPI.__file__):
+    raise SystemExit("mpi4py picked the MPICH flavour")
+PY
+  [ -z "$ver" ] || grep -q "Open MPI v$ver" "$f"
+}
+
 # Install mpi4py into MPI_SITE if the venv cannot import it. Runs once, on the batch node,
 # before any srun, so the nodes of a multi-node job never race on MPI_SITE.
-# Offline (compute nodes have no internet): build mpi4py from $KIT/wheels (sdist plus the
-# build-isolation wheels, see README) against the newest openmpi module, record the module
-# in MPI_SITE/MODULE, and check that MPI.Get_library_version() names that Open MPI version.
-# Online fallback, only if $KIT/wheels is absent: the same build from PyPI, then the PyPI
-# mpi4py + openmpi wheels. Writes probe/mpi-install.txt.
+# GP compute nodes have no internet and no C headers (probes 8401, 8407), so the default
+# (MPI_BUILD=wheel) installs the binary PyPI wheel from $KIT/wheels. That wheel dlopens the
+# MPI library at import: the path to the module's libmpi.so.40 goes into MPI_SITE/LIBMPI,
+# which kit_modules exports as MPI4PY_LIBMPI. MPI_BUILD=source compiles mpi4py from the sdist
+# in $KIT/wheels against the module's mpicc (for sites with a compiler). Either way the
+# module goes into MPI_SITE/MODULE and MPI.Get_library_version() must name its version.
+# Online fallback, only if $KIT/wheels is absent: the same install from PyPI, then the PyPI
+# mpi4py + openmpi wheels. Writes probe/mpi-install.txt and probe/mpi4py-version.txt.
 mpi_install() {
-  local log="$OUT/probe/mpi-install.txt" mod ver wheels="$KIT/wheels" rc=0
-  if $PY -c 'import mpi4py' > /dev/null 2>&1; then echo "mpi4py already importable" | tee "$log"; return 0; fi
-  mkdir -p "$MPI_SITE"
+  local log="$OUT/probe/mpi-install.txt" vfile="$OUT/probe/mpi4py-version.txt" mod ver
+  local wheels="$KIT/wheels" build=${MPI_BUILD:-wheel} rc=0
+  case $build in wheel|source) ;; *) echo "MPI_BUILD must be wheel or source, not $build" | tee "$log"; return 2;; esac
   mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)
   ver=${mod##*/}
+  # Skip only if MPI itself loads and names the module's Open MPI version (kit_init has
+  # already loaded MPI_SITE/MODULE and exported MPI4PY_LIBMPI); a bare `import mpi4py`
+  # would pass on a half-installed site.
+  if mpi_check "$vfile" "$ver"; then
+    { echo "mpi4py already works with ${mod:-the default MPI}; not reinstalling"; cat "$vfile"; } | tee "$log"
+    return 0
+  fi
+  : > "$log"
+  if [ -d "$MPI_SITE" ] && [ -n "$(ls -A "$MPI_SITE")" ]; then
+    mv "$MPI_SITE" "$MPI_SITE.stale-${SLURM_JOB_ID:-local}-$(date +%s)"
+    echo "moved a non-working mpi-site to $MPI_SITE.stale-*; reinstalling" >> "$log"
+  fi
+  mkdir -p "$MPI_SITE"
   # Subshell: its exit status is the result; the module load here does not leak (kit_modules loads it).
   (
-    echo "openmpi module: ${mod:-none}"
+    echo "openmpi module: ${mod:-none}; MPI_BUILD=$build"
     if [ -n "$mod" ] && module load "$mod" && command -v mpicc; then
+      lib=$(dirname "$(dirname "$(command -v mpicc)")")/lib/libmpi.so.40
+      [ "$(uname -s)" = Darwin ] && lib=${lib%/*}/libmpi.40.dylib
+      [ -f "$lib" ] || { echo "no MPI library at $lib"; echo "mpi4py install FAILED"; exit 1; }
+      export MPI4PY_LIBMPI=$lib
       if [ -d "$wheels" ]; then
-        echo "offline build from $wheels:"; ls -l "$wheels"
-        MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir --no-index --find-links "$wheels" \
-          --target "$MPI_SITE" --no-binary mpi4py mpi4py \
-          && echo "$mod" > "$MPI_SITE/MODULE" && echo "built mpi4py against $mod"
+        src=(--no-index --find-links "$wheels"); echo "offline install from $wheels:"; ls -l "$wheels"
       else
-        echo "FALLBACK (online, needs network from the node): no $wheels, building from PyPI"
-        MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir --target "$MPI_SITE" --no-binary mpi4py mpi4py \
-          && echo "$mod" > "$MPI_SITE/MODULE" && echo "built mpi4py against $mod"
+        src=(); echo "FALLBACK (online, needs network from the node): no $wheels, installing from PyPI"
       fi
+      if [ "$build" = wheel ]; then
+        $PY -m pip install --no-cache-dir "${src[@]}" --target "$MPI_SITE" --only-binary mpi4py mpi4py
+      else
+        MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir "${src[@]}" --target "$MPI_SITE" --no-binary mpi4py mpi4py
+      fi && echo "$mod" > "$MPI_SITE/MODULE" && echo "$lib" > "$MPI_SITE/LIBMPI" \
+        && echo "installed mpi4py ($build) for $mod, MPI4PY_LIBMPI=$lib"
     fi
     if ! $PY -c 'import mpi4py' > /dev/null 2>&1 && [ ! -d "$wheels" ]; then
       echo "FALLBACK (online, needs network from the node): PyPI mpi4py + openmpi wheels"
       $PY -m pip install --no-cache-dir --target "$MPI_SITE" mpi4py openmpi && : > "$MPI_SITE/MODULE"
     fi
-    $PY -c 'import mpi4py; from mpi4py import MPI; print(mpi4py.__version__, mpi4py.__file__); print(MPI.Get_library_version()[:200])' \
-      > "$OUT/probe/mpi4py-version.txt" 2>&1 || rc=1
-    cat "$OUT/probe/mpi4py-version.txt"
-    if [ "$rc" -eq 0 ] && [ -s "$MPI_SITE/MODULE" ] && ! grep -q "Open MPI v$ver" "$OUT/probe/mpi4py-version.txt"; then
-      echo "mpi4py is not linked against Open MPI $ver (module $mod)"; rc=1
-    fi
+    [ -s "$MPI_SITE/MODULE" ] || ver=""
+    mpi_check "$vfile" "$ver" || rc=1
+    cat "$vfile"
+    [ "$rc" -eq 0 ] || echo "check failed: MPI must import, not as the MPICH flavour, and name Open MPI v$ver"
     [ "$rc" -eq 0 ] && echo "mpi4py OK" || echo "mpi4py install FAILED"
     exit "$rc"
-  ) > "$log" 2>&1 < /dev/null
+  ) >> "$log" 2>&1 < /dev/null
   rc=$?
   if [ "$rc" -ne 0 ] && [ -d "$MPI_SITE" ]; then
     # Keep a failed or mislinked build out of PYTHONPATH; the next probe starts clean.

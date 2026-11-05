@@ -18,7 +18,7 @@ These jobs time the streaming SOM trainer on synthetic gmm_bbh7 rows. The genera
 | `summarize.py` | builds `summary.md` (rates, efficiencies, reduction, io_wait, RSS, I/O, and a labelled projection to 72 and 144 cores) and `gate.json` |
 | `probe.py` | node environment JSON and the file write/read rate tests |
 | `gmm_bbh7.npz` | generator parameters, copied from the Z-scale kit |
-| `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py build files, and the hashes of every file; only in a kit built by `make_kit.sh` |
+| `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py wheel (and source-build files), and the hashes of every file; only in a kit built by `make_kit.sh` |
 
 In the repository, `[WHEELS=DIR] make_kit.sh DEST [REVISION]` builds a kit from a committed revision. `scale_out.py` checks the vendored package against `kit-manifest.json` and records the result in `run.json` under `source.package_matches_manifest`.
 
@@ -61,23 +61,43 @@ Each file sets `--partition=debug`, as the brief asks. The 2026-10-28 `sinfo` li
 
 The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. Submit the probe with `--partition=gp-default --nodes=2`, as above, so the 2-node launcher test and the cold read run. mpi4py is installed once, by the batch shell on the first node, before any `srun`, so the two nodes never write `mpi-site/` at the same time. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
 
+## Cluster notes (probe 8407, 2026-11-05, gp-n0021 + gp-n0022)
+
+| Partition | Nodes | CPUs, memory per node | Time limit |
+| --- | --- | --- | --- |
+| gp-default / gp-long | 40, gp-n[0001-0040] | 32, 192 GB | 2 days / 20 days |
+| wl-default / wl-long | 24, wl-n[0001-0024] | 32, 192 GB | 2 days / 20 days |
+| all-default | 64, the gp and wl nodes | 32, 192 GB | none |
+| debug / lm-largemem | 1, lm-n0001 | 48, 770 GB | 12 h / 1 day |
+
+- GRES is `(null)` on every partition and node, so the cluster has no GPUs. The GPU probe cannot run here; it needs Tigris.
+- gp nodes: Xeon Gold 6130, 2 sockets x 16 cores, 2 NUMA nodes.
+- Compute nodes have no internet and no C headers, so pip cannot download and nothing can be compiled there (see MPI).
+- srun MPI plugins: `pmix` (`pmix_v4`) and `pmi2`.
+- I/O (20 GB files): lagoon cold read 1.5 GB/s, warm reread 3.5 GB/s, two nodes reading at once 1.4–1.5 GB/s each, lagoon write about 1 GB/s; node-local `/tmp` read 3.2–3.4 GB/s.
+
 ## MPI
 
-Compute nodes have no internet (probe 8401 could not resolve pypi.org). `probe.sbatch` therefore builds mpi4py offline:
+Compute nodes have no internet (probe 8401 could not resolve pypi.org) and no C headers (probe 8407: `stdlib.h: No such file or directory`), so nothing can be compiled there. `probe.sbatch` therefore installs the binary mpi4py wheel offline:
 
-1. If the venv cannot import mpi4py, it loads the newest `openmpi` module (`openmpi4/4.1.6` on GP) and runs `MPICC=$(command -v mpicc) pip install --no-index --find-links $KIT/wheels --target $KIT/mpi-site --no-binary mpi4py mpi4py`. It records the module in `mpi-site/MODULE` and checks that `MPI.Get_library_version()` names the module's Open MPI version. The other jobs load that module and put `mpi-site` on `PYTHONPATH`. A failed or mislinked build is moved to `mpi-site.failed-<job>-<time>`.
-2. Only if the kit has no `wheels/`, it tries the same build from PyPI, then the PyPI `mpi4py` and `openmpi` wheels. Both need network access from the node, which GP compute nodes do not have.
+1. Unless `from mpi4py import MPI` already works and names the module's Open MPI version (step 2), it moves any old `mpi-site/` to `mpi-site.stale-<job>-<time>`, loads the newest `openmpi` module (`openmpi4/4.1.6` on GP) and runs `pip install --no-index --find-links $KIT/wheels --target $KIT/mpi-site --only-binary mpi4py mpi4py`. The PyPI wheel holds an Open MPI and an MPICH build of `mpi4py.MPI` and dlopens the MPI library at import. The probe takes the library from the module (`$(dirname $(dirname $(command -v mpicc)))/lib/libmpi.so.40`), refuses to go on if it is missing, and records it in `mpi-site/LIBMPI`. It records the module in `mpi-site/MODULE`. Every job loads that module, exports `MPI4PY_LIBMPI` from `mpi-site/LIBMPI`, and puts `mpi-site` on `PYTHONPATH`. `srun` passes the whole environment to the ranks (nothing in the kit filters it), and the `mpirun` lines add `-x MPI4PY_LIBMPI`.
+2. The probe then checks that `MPI.Get_library_version()` names the module's Open MPI version and that `mpi4py.MPI.__file__` is not the MPICH build, and writes both to `probe/mpi4py-version.txt`. A failed or mislinked install is moved to `mpi-site.failed-<job>-<time>`.
+3. `MPI_BUILD=source` (in `--export`) compiles mpi4py from the sdist in `$KIT/wheels` against the module's `mpicc` instead. Use it only where compute nodes have a compiler, such as Tigris. PyPI also has aarch64 wheels (`manylinux2014_aarch64`), so on Tigris the default wheel route works too once that wheel is in `WHEELS`.
+4. Only if the kit has no `wheels/`, it tries the same install from PyPI, then the PyPI `mpi4py` and `openmpi` wheels. Both need network access from the node, which GP compute nodes do not have.
 
 Do not use the `py3-mpi4py` module: it is built for the system python, not the 3.11 venv.
 
 ### Offline wheels
 
-`make_kit.sh` copies `WHEELS` (default `/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels`) into the kit as `wheels/`, checks each file against `WHEELS/SHA256SUMS`, and lists each file's sha256 under `wheels` in `kit-manifest.json`. The wheels stay out of git. The directory holds the mpi4py sdist and its build-isolation requirements: `setuptools >= 42` and `build` (from mpi4py's `pyproject.toml`), their dependencies `packaging` and `pyproject_hooks`, and `cython >= 3.0.1`, which the build needs because the sdist has no generated `MPI.c`. Cython comes twice: the cp311 manylinux x86_64 wheel, which pip picks on the cluster, and the pure-Python wheel as a slower fallback.
+`make_kit.sh` copies `WHEELS` (default `/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels`) into the kit as `wheels/`, checks each file against `WHEELS/SHA256SUMS`, and lists each file's sha256 under `wheels` in `kit-manifest.json`. The wheels stay out of git. `make_kit.sh` requires the binary wheel `mpi4py-4.1.2-cp311-cp311-manylinux1_x86_64.manylinux_2_5_x86_64.whl`, which the default route installs on GP. The rest is the `MPI_BUILD=source` set and is optional: the mpi4py sdist and its build-isolation requirements, `setuptools >= 42` and `build` (from mpi4py's `pyproject.toml`), their dependencies `packaging` and `pyproject_hooks`, and `cython >= 3.0.1`, which the build needs because the sdist has no generated `MPI.c`. If the sdist is there, `make_kit.sh` requires a cython wheel too. Cython comes twice: the cp311 manylinux x86_64 wheel and the pure-Python wheel as a slower fallback. For Tigris, add the `manylinux2014_aarch64` mpi4py wheel (`--platform manylinux2014_aarch64` below).
 
 To rebuild the directory, run this on a machine with internet:
 
 ```bash
 W=/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels
+pip download --no-deps --only-binary :all: --python-version 3.11 --implementation cp --abi cp311 \
+  --platform manylinux1_x86_64 --platform manylinux_2_5_x86_64 -d $W mpi4py==4.1.2
+# optional, MPI_BUILD=source only:
 pip download --no-deps --no-binary :all: -d $W mpi4py==4.1.2
 pip download --no-deps --only-binary :all: -d $W setuptools==84.2.1 build==1.6.1 packaging==26.3 pyproject_hooks==1.3.3
 pip download --no-deps --only-binary :all: --python-version 3.11 --implementation cp --abi cp311 \
@@ -87,7 +107,7 @@ pip download --no-deps --only-binary :all: --python-version 3.11 --implementatio
 (cd $W && shasum -a 256 *.whl *.tar.gz > SHA256SUMS)
 ```
 
-To check that the set is complete, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py` on the laptop. It builds against Homebrew Open MPI if `mpicc` is on PATH.
+To check the source set on the laptop, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py`; it builds against Homebrew Open MPI if `mpicc` is on PATH. The Linux wheel cannot be installed on macOS; PyPI's macOS wheel of the same version (`--only-binary :all:` into a scratch directory) exercises the same dlopen route with `MPI4PY_LIBMPI=/opt/homebrew/lib/libmpi.40.dylib`.
 
 If the build still fails, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one.
 
