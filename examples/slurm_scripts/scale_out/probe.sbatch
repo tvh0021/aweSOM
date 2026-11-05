@@ -10,7 +10,9 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thccrg@rit.edu
 # Environment probe of the scale-out kit: sinfo, modules, lscpu, memory, disks, NUMA,
-# mpi4py (installed into $KIT/mpi-site if missing), MPI launchers (1 and 2 ranks per
+# mpi4py (built into $KIT/mpi-site if missing, offline from $KIT/wheels because compute
+# nodes have no internet; make_kit.sh copies the wheels in, and README "Offline wheels"
+# gives the pip download commands for a machine with internet), MPI launchers (1 and 2 ranks per
 # node), and the lagoon read test (IO_TEST_GB, default 20; cold read on the second node
 # when the job gets two). Submit this first; the other jobs use what it installs.
 # debug has one node (lm-n0001); submit with --partition=gp-default --nodes=2 (README).
