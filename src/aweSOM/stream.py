@@ -161,9 +161,10 @@ class _CallableSource:
 
     - ``n_feat`` or ``n_features``: number of columns. With the row count known
       as well (``n_samples``), no counting pass is made.
-    - ``rows(ix)``: rows ``ix`` of the callable's row order (the order of the
-      next call) without changing its state; used for the sampled initial
-      lattice instead of a pass over the data.
+    - ``rows(ix)``: rows ``ix`` of the callable's row order, used for the
+      sampled initial lattice instead of a pass over the data. It may change
+      the callable's state (every rank of a multi-process run calls it once,
+      in the same order; the result of rank 0 is used).
     - ``lazy_chunks()``: one call (same state change as ``fn()``) yielding
       ``(rows, read)`` pairs, where ``read()`` returns the chunk. A rank of a
       multi-process run reads only the chunks it owns.
@@ -783,10 +784,9 @@ def train_batch_stream(
                 w = np.random.default_rng(seed).uniform(0.0, 1.0, (n_nodes, n_feat))
             else:
                 ix = np.random.default_rng(seed).integers(0, n_total, n_nodes)
-                # A callable without rows() advances its state on a pass: every rank
-                # makes the same pass so that the ranks stay in step.
-                stateful = fn is not None and not callable(getattr(fn, "rows", None))
-                if root or stateful:
+                # A callable may change state when read: every rank makes the same
+                # call so that the ranks stay in step; rank 0's rows are broadcast.
+                if root or fn is not None:
                     w = np.asarray(source.rows(ix), np.float64)
             if red is not None:
                 w = red.bcast(w if root else None, (n_nodes, n_feat))
