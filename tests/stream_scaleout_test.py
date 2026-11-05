@@ -289,7 +289,8 @@ def test_mpi_callable_resume(tmp_path, ranks):
     outs = run_worker(ranks, tmp_path, "resume")
     o = outs[0]
     assert sha(o["resumed"]) == sha(o["uninterrupted"])  # bitwise for a fixed rank count
-    assert int(o["resumed_from"]) == 2 and int(o["calls"]) == 5
+    assert int(o["resumed_from"]) == 2 and int(o["calls"]) == 7  # 2 for rows(), 5 epochs
+    assert all(int(r["calls"]) == 7 for r in outs)
     w_single = wk.run_callable(wk.data(), None)
     d = rel_diff(o["uninterrupted"], w_single)
     _record(f"callable_P{ranks}_max_rel", d)

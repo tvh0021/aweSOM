@@ -25,8 +25,9 @@ class Stop(Exception):
 class Windows:
     """Stateful callable like production_pool.EpochSource: call k reads random windows."""
 
-    def __init__(self, x, rows, chunk, seed=7, fail_at_call=None):
+    def __init__(self, x, rows, chunk, seed=7, fail_at_call=None, rows_advance=0):
         self.x, self.rows_per_call, self.chunk, self.seed = x, rows, chunk, seed
+        self.rows_advance = rows_advance  # EpochSource.rows advances calls by 2
         self.calls = 0
         self.n_feat = x.shape[1]
         self.fail_at_call = fail_at_call
@@ -53,7 +54,9 @@ class Windows:
             yield read()
 
     def rows(self, ix):
-        stream_rows = np.concatenate([np.arange(a, a + n) for a, n in self._windows(self.calls)])
+        call = self.calls + (self.rows_advance - 1 if self.rows_advance else 0)
+        self.calls += self.rows_advance
+        stream_rows = np.concatenate([np.arange(a, a + n) for a, n in self._windows(call)])
         return self.x[stream_rows[ix]]
 
 
@@ -84,7 +87,7 @@ def run_sampled(x, comm):
 
 
 def run_callable(x, comm, checkpoint=None, resume=False, fail_at_call=None):
-    src = Windows(x, 12000, 3000, fail_at_call=fail_at_call)
+    src = Windows(x, 12000, 3000, fail_at_call=fail_at_call, rows_advance=2)
     w, info = train_batch_stream(src, *LATTICE, epochs=5, r_min=2, seed=SEED, n_samples=12000,
                                  final_pass="none", comm=comm, checkpoint=checkpoint, resume=resume)
     return (w, info, src) if comm is not None else w
@@ -109,7 +112,7 @@ def main(scenario, out):
     elif scenario == "resume":
         ck = str(Path(out) / "ck.npz")
         try:
-            run_callable(x, comm, checkpoint=ck, resume=True, fail_at_call=2)
+            run_callable(x, comm, checkpoint=ck, resume=True, fail_at_call=4)
             raise RuntimeError("the interrupted run did not stop")
         except Stop:
             pass
