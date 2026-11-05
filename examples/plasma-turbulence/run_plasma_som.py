@@ -26,11 +26,8 @@ def save_som_run(
     xdim, ydim = initialize_lattice(normalized_data, H)
     map = Lattice(xdim, ydim, alpha_0, train, sampling_type=sampling_type)
     map.train_lattice(normalized_data, feature_list)
-    projection_2d = map.map_data_to_lattice()
-    final_clusters = map.assign_cluster_to_lattice(
-        smoothing=None, merge_cost=merge_threshold
-    )
-    som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+    map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
+    som_labels = map.predict(normalized_data)
     save_cluster_labels(
         som_labels,
         xdim,

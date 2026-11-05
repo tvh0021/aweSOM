@@ -66,8 +66,10 @@ def test_predict_equals_map_then_assign(trained):
     som, data = trained
     with contextlib.redirect_stdout(io.StringIO()):
         clusters = som.assign_cluster_to_lattice(merge_cost=0.2)
-        projection_2d = som.map_data_to_lattice()
-        expected = som.assign_cluster_to_data(projection_2d, clusters)
+        with pytest.warns(DeprecationWarning):
+            projection_2d = som.map_data_to_lattice()
+        with pytest.warns(DeprecationWarning):
+            expected = som.assign_cluster_to_data(projection_2d, clusters)
         labels, dist = som.predict(data, return_distance=True, chunk=700)
     assert labels.dtype == np.int32
     assert np.array_equal(labels, expected.astype(np.int32))

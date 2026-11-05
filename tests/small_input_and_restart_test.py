@@ -3,8 +3,9 @@
 The expected arrays in fixtures/restart_training_v1.1.1.npz were produced by
 the released aweSOM 1.1.1 on the stored inputs with the stored sample order:
 one 500-step batch from a restart array passed as a fresh copy (1.1.1 trained
-it in place), and two 4-step batches where the second restarts from
-som.lattice.
+it in place). Since 1.5.0 a restart lattice is copied to float64 before
+training, so only the float64 reference still applies; the float32 and
+two-batch entries of the fixture describe 1.1.1 behaviour and are not used.
 
 The comparisons allow rtol=1e-5, atol=1e-6, because exp() in the
 neighbourhood function can round differently across platforms and library
@@ -44,7 +45,6 @@ def ref():
 def _train(ref, restart, monkeypatch):
     xdim, ydim, train = (int(v) for v in ref["params"])
     monkeypatch.setattr(np.random, "default_rng", lambda *a, **k: FixedOrder(ref["perm"]))
-    np.random.seed(0)
     som = Lattice(xdim, ydim, float(ref["alpha"]), train)
     with contextlib.redirect_stdout(io.StringIO()):
         som.train_lattice(ref["data"], list("abc"), restart_lattice=restart)
@@ -57,6 +57,21 @@ def _assert_matches_reference(actual, expected):
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
     if os.environ.get("AWESOM_EXACT_FIXTURES") == "1":
         assert actual.tobytes() == expected.tobytes()
+
+
+def _two_batches(ref, seed=None):
+    # two short batches; the second restarts from som.lattice
+    xdim, ydim, train, steps = (int(v) for v in ref["two_batch_params"])
+    som = Lattice(xdim, ydim, float(ref["alpha"]), train)
+    if seed is not None:
+        som.seed = seed
+    with contextlib.redirect_stdout(io.StringIO()):
+        som.train_lattice(ref["data"], list("abc"), number_of_steps=steps)
+        first_batch = som.lattice
+        som.train_lattice(
+            ref["data"], list("abc"), number_of_steps=steps, restart_lattice=first_batch
+        )
+    return som, first_batch
 
 
 @pytest.mark.parametrize("n", [1, 5, 9])
@@ -99,32 +114,41 @@ def test_restart_lattice_is_not_modified(ref, dtype, monkeypatch):
     assert not np.shares_memory(restart, som.lattice)
 
 
-@pytest.mark.parametrize("tag", ["32", "64"])
-def test_restart_training_matches_v1_1_1(ref, tag, monkeypatch):
-    restart = ref["restart" + tag]
-    expected = ref["expected" + tag]
-    som = _train(ref, restart, monkeypatch)
-
-    assert som.lattice.dtype == restart.dtype
-    _assert_matches_reference(som.lattice, expected)
+def test_float64_restart_training_matches_v1_1_1(ref, monkeypatch):
+    som = _train(ref, ref["restart64"], monkeypatch)
+    _assert_matches_reference(som.lattice, ref["expected64"])
 
 
-def test_restart_from_own_lattice_matches_v1_1_1(ref, monkeypatch):
-    # 1.1.1 trained som.lattice in place, so the final U-matrix read the trained
-    # weights; training on a copy must still give the same U-matrix and clusters
-    xdim, ydim, train, steps = (int(v) for v in ref["two_batch_params"])
-    monkeypatch.setattr(np.random, "default_rng", lambda *a, **k: FixedOrder(ref["perm"]))
-    np.random.seed(0)
-    som = Lattice(xdim, ydim, float(ref["alpha"]), train)
-    with contextlib.redirect_stdout(io.StringIO()):
-        som.train_lattice(ref["data"], list("abc"), number_of_steps=steps)
-        first_batch = som.lattice
-        som.train_lattice(
-            ref["data"], list("abc"), number_of_steps=steps, restart_lattice=first_batch
-        )
-        clusters = som.assign_cluster_to_lattice(merge_cost=0.0)
+def test_float32_restart_trains_in_float64(ref, monkeypatch):
+    # a float32 restart array is copied to float64: training from it equals
+    # training from its float64 cast, bit for bit
+    restart = ref["restart32"]
+    som32 = _train(ref, restart, monkeypatch)
+    som64 = _train(ref, restart.astype(np.float64), monkeypatch)
+    assert restart.dtype == np.float32
+    assert som32.lattice.dtype == np.float64
+    assert som32.lattice.tobytes() == som64.lattice.tobytes()
 
+
+def test_restart_from_own_lattice_uses_final_weights(ref):
+    # the second batch has no snapshot after its first step, so the U-matrix
+    # must come from the final weights, not from a stored snapshot
+    som, first_batch = _two_batches(ref)
     assert not np.shares_memory(first_batch, som.lattice)
-    _assert_matches_reference(som.lattice, ref["two_batch_lattice"])
-    _assert_matches_reference(som.umat, ref["two_batch_umat"])
-    assert np.array_equal(clusters, ref["two_batch_clusters"])
+    assert som.lattice.dtype == np.float64
+    np.testing.assert_array_equal(som.umat, som.compute_umat())
+    with contextlib.redirect_stdout(io.StringIO()):
+        clusters = som.assign_cluster_to_lattice(merge_cost=0.0).copy()
+        som.umat = som.compute_umat()
+        recomputed = som.assign_cluster_to_lattice(merge_cost=0.0)
+    assert np.array_equal(clusters, recomputed)
+
+
+def test_same_seed_and_data_reproduce_the_weights(ref):
+    som_a, _ = _two_batches(ref, seed=7)
+    som_b, _ = _two_batches(ref, seed=7)
+    som_c, _ = _two_batches(ref, seed=8)
+    assert som_a.seed == som_b.seed == 8  # the restart moved the seed on by one
+    assert som_a.lattice.tobytes() == som_b.lattice.tobytes()
+    assert som_a.umat.tobytes() == som_b.umat.tobytes()
+    assert som_a.lattice.tobytes() != som_c.lattice.tobytes()

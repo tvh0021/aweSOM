@@ -4,6 +4,62 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-05
+
+This release makes training reproducible for a given seed, computes the final
+U-matrix from the final lattice, and deprecates the old label route.
+
+**Three changes alter trained maps.** First, one generator seeded from
+`Lattice.seed` (42 by default) now draws both the initial lattice and the
+sample order, so the same seed and data give the same lattice, and a map
+trained with a given seed differs from the v1.4.0 map. Second, `Lattice.umat`
+at the end of training is computed from the final lattice. v1.4.0 computed it
+from the last saved snapshot, so U-matrices and clusters of a fresh training
+can differ from v1.4.0 unless the number of steps minus one is a multiple of
+`save_frequency`. Third, a float32 `restart_lattice` is copied to float64 and
+trained in float64; v1.4.0 trained it in float32. In addition, the sampled
+initial lattice (`sampling_type="sampling"`) can now draw the last data row,
+which v1.4.0 never picked. Pickled lattices from earlier versions load and
+work unchanged; their stored `umat` is not recomputed.
+
+### Added
+
+- Tests: `tests/deprecation_test.py`, a same-seed test in
+  `tests/regression_test.py` and `test_final_umat_uses_final_lattice` in
+  `tests/som_test.py`. `tests/small_input_and_restart_test.py` now checks the
+  float64 restart contract and same-seed restarts.
+
+### Changed
+
+- `Lattice.train_lattice` copies `restart_lattice` to float64 before
+  training. The array passed in is not modified, as in v1.1.2 and later.
+- `run_som.py`, the README walkthrough, the example scripts and the notebooks
+  now label data with `Lattice.predict`. The label files are unchanged. The
+  `som_object` pickle written by `run_som.py` no longer stores
+  `projection_1d` and `projection_2d`.
+- `Lattice.plot_heat` calls `best_match` directly instead of
+  `map_data_to_lattice`; it still sets `projection_1d` and `projection_2d`.
+
+### Deprecated
+
+- `Lattice.map_data_to_lattice` and `Lattice.assign_cluster_to_data` are
+  deprecated since 1.5.0 and emit a `DeprecationWarning`. Use
+  `Lattice.predict`, which returns the same labels. Both methods will be
+  removed in a future release. `Lattice.assign_cluster_to_lattice` and
+  `Lattice.best_match` are not deprecated.
+
+### Fixed
+
+- Training was not reproducible: the sample order came from an unseeded
+  `np.random.default_rng()` and the initial lattice from the global NumPy
+  stream. Both now come from `np.random.default_rng(Lattice.seed)`. A
+  restart that continues training (`epoch > 1`) moves the seed on by one, as
+  before.
+- The final `Lattice.umat` came from the last snapshot instead of the final
+  lattice.
+- The sampled initial lattice drew row indices from `0` to `N - 2`; it now
+  draws from `0` to `N - 1`.
+
 ## [1.4.0] - 2026-11-05
 
 This release adds CPU inference (`aweSOM.inference`, `Lattice.predict`) and
@@ -259,6 +315,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/tvh0021/aweSOM/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tvh0021/aweSOM/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tvh0021/aweSOM/compare/v1.1.3...v1.2.0

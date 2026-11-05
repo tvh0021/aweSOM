@@ -22,6 +22,15 @@ def _train(seed_data=0, train=500, **kw):
     return som, data
 
 
+def test_training_is_reproducible_for_a_given_seed():
+    # Before the fix, the sample order came from an unseeded Generator and the
+    # initial lattice from the global NumPy stream, so two identical calls
+    # produced different lattices despite seed=42.
+    som_a, _ = _train()
+    som_b, _ = _train()
+    assert np.array_equal(som_a.lattice, som_b.lattice)
+
+
 def test_short_training_runs_do_not_divide_by_zero():
     # train < 25 made alpha_freq == 0 and train < 10 made the progress
     # modulus zero, both raising ZeroDivisionError.

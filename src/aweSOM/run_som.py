@@ -360,15 +360,13 @@ if __name__ == "__main__":
 
     print(f"Random seed: {som.seed}", flush=True)
 
-    # map data to lattice
     som.data_array = data_transformed  # recover the full dataset instead of the batch
-    projection_2d = som.map_data_to_lattice()
 
     # assign cluster ids to the lattice
-    clusters = som.assign_cluster_to_lattice(smoothing=None, merge_cost=threshold)
+    som.assign_cluster_to_lattice(smoothing=None, merge_cost=threshold)
 
-    # assign cluster ids to the data
-    som_labels = som.assign_cluster_to_data(projection_2d, clusters)
+    # assign cluster ids to the data (uses the lattice clusters set above)
+    som_labels = som.predict(data_transformed)
 
     if init_lattice == "sampling":
         initial = "s"

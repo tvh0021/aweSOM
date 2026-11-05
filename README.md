@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.4.0
+Version: 1.5.0
 
 ## 1. Installation
 
@@ -114,6 +114,8 @@ map.train_lattice(iris_data_transformed, feature_names, true_labels)
 
 The trained SOM is saved at  `map.lattice`
 
+Since v1.5.0, training draws the initial lattice and the sample order from `map.seed` (42 by default; set it before `train_lattice`), so the same seed and data give the same lattice.
+
 To visualize the SOM with U-matrix, which is saved at the end of training at `map.umat`
 
 ```python
@@ -155,14 +157,15 @@ Now, we project each data point onto the lattice and get back cluster-id
 
 ```python
 final_clusters = map.assign_cluster_to_lattice(smoothing=None,merge_cost=merge_threshold)
-som_labels = map.assign_cluster_to_data(map.projection_2d, final_clusters)
+som_labels = map.predict(iris_data_transformed)
 ```
 
-For new data in the same scaled space, `map.predict(new_data)` returns the int32 cluster id of each point in one call, without the intermediate projection arrays.
+`map.predict(data)` returns the int32 cluster id of each point in one call, for the training data or for new data in the same scaled space.
 If the lattice has no cluster assignment yet, it calls `assign_cluster_to_lattice` first.
 `aweSOM.predict(weights, node_cluster, data)` does the same from a weight array and one cluster id per node.
+The older route, `map_data_to_lattice` followed by `assign_cluster_to_data`, gives the same labels but is deprecated since v1.5.0 and will be removed in a future release.
 
-`Lattice.best_match`, which `map_data_to_lattice` calls, takes a `backend` keyword.
+`Lattice.best_match` takes a `backend` keyword, and `Lattice.predict` takes one with the same default.
 **Since v1.4.0 the default is `backend="screen"`**: a float32 scan of all nodes whose winner is checked in float64, with distances accumulated in float64.
 `backend="numba"` runs the plain float64 scan and returns the same nodes.
 `backend="legacy"` and `full=True` run the kernel of v1.3.0 and earlier.
@@ -253,9 +256,8 @@ for xdim in parameters["xdim"]:
                 print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
                 map = Lattice(xdim, ydim, alpha_0, train, )
                 map.train_lattice(iris_data_transformed, feature_names, true_labels)
-                projection_2d = map.map_data_to_lattice()
-                final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
-                som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+                map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
+                som_labels = map.predict(iris_data_transformed)
                 save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
 ```
 
