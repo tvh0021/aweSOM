@@ -134,6 +134,9 @@ def main(argv=None):
     print(f"merge_cost {args.merge_cost}: {n_clusters} clusters", flush=True)
 
     proj = getattr(lat, "projection_1d", None)
+    if proj is None and da is not None and len(da) == len(X):
+        # pickles written by run_som.py 1.5.0 and later store no projection
+        proj = lat.best_match(lat.lattice, da)
     if proj is not None and len(proj) == len(X):
         lab = node_cluster[np.asarray(proj).ravel().astype(np.int64)]
     else:

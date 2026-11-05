@@ -340,10 +340,10 @@ class Lattice:
 
     def map_data_to_lattice(self):
         """
-        Deprecated since 1.5.0: use ``Lattice.predict``. This method will be
-        removed in a future release.
-
         After training, map each data point to the nearest node in the lattice.
+
+        .. deprecated:: 1.5.0
+            Use ``Lattice.predict``. This method will be removed in a future release.
 
         Returns:
                 np.ndarray[int]: A 2D array with the x and y coordinates of the best matching nodes for each data point.
@@ -455,10 +455,10 @@ class Lattice:
         projection_2d: np.ndarray, clusters_on_lattice: np.ndarray
     ) -> np.ndarray:
         """
-        Deprecated since 1.5.0: use ``Lattice.predict``. This method will be
-        removed in a future release.
-
         Given a lattice and cluster assignments on that lattice, return the cluster ids of the data (in a 1d array)
+
+        .. deprecated:: 1.5.0
+            Use ``Lattice.predict``. This method will be removed in a future release.
 
         Args:
                 projection_2d (np.ndarray): 2d array with x-y coordinates of the node associated with each data point
@@ -1586,7 +1586,6 @@ class Lattice:
                     plt.text(ix + 1, iy + 1, l)
 
         plt.show()
-
 
 
 @njit(parallel=True)
