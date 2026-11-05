@@ -7,6 +7,7 @@ import numpy as np
 from numba import njit
 
 DTYPE = np.dtype([('value', 'f8'), ('label', 'i8')])
+MERGE_BUFFER_RECORDS = 2**26
 
 
 def scratch_root(scratch=None, fallback=None):
@@ -54,7 +55,7 @@ def _drain(values, labels, positions, lengths, heap, size, output):
 def sorted_blocks(blocks, directory, chunk):
     """Write sorted runs once and consume them in one buffered k-way merge.
 
-    One file descriptor serves every run. Merge buffers hold at most 2**24
+    One file descriptor serves every run. Merge buffers hold at most 2**26
     records with at most 2**15 records buffered per run. Refuse more than
     2**18 runs to retain a fixed upper bound on buffers and metadata.
     """
@@ -82,7 +83,7 @@ def sorted_blocks(blocks, directory, chunk):
                 records['value'],records['label'] = values[idx], labels[idx]
                 records.tofile(dst)
     if not lengths: raise ValueError('empty statistics input')
-    runs = len(lengths); width = min(chunk,2**15,max(1,2**24//runs))
+    runs = len(lengths); width = min(chunk,2**15,max(1,MERGE_BUFFER_RECORDS//runs))
     values = np.empty((runs,width),dtype='f8'); labels = np.empty((runs,width),dtype='i8')
     positions = np.zeros(runs,dtype='i8'); available = np.zeros(runs,dtype='i8')
     remaining = np.array(lengths,dtype='i8'); offsets = np.array(offsets,dtype='i8')

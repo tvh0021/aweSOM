@@ -220,10 +220,12 @@ def inspect(args):
         raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
     # Raw float32 + scaled float64 + three label vectors, distance scratch and margin.
     bytes_per_row = len(records[0]['names'])*(4+8*args.write_scaled)
-    bytes_per_row += 4*len(args.lattices)*len(args.seeds) + 12*args.seed_workers
+    deferred = args.statistics == 'later'
+    fits = len(args.lattices)*len(args.seeds)
+    bytes_per_row += 4*fits + 12*(fits if deferred else args.seed_workers)
     if not (args.scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR')):
         threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
-        bytes_per_row += max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
+        bytes_per_row += 8 if deferred else max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
     need = max(args.min_free_gb*1e9, rows*bytes_per_row + 1e9)
     free = shutil.disk_usage(args.out.parent).free
     if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
@@ -640,6 +642,8 @@ def group_selection(out, recs, chunk):
     recs are the fit records of one lattice, in seed order, on the same pool rows."""
     import itertools
     from aweSOM import SOMModel
+    if any(r.get('statistics') == 'deferred' for r in recs):
+        raise ValueError('statistics are deferred; run --statistics-only before selection')
     seeds = [r['seed'] for r in recs]
     orders = {r['seed']: list(r['sheet_candidates']['order']) for r in recs}
     sizes = {r['seed']: len(r['cluster_effects']) for r in recs}
@@ -705,6 +709,40 @@ def execution_info():
                     'SLURM_CPUS_PER_TASK', 'SLURM_JOB_ID')})
 
 
+
+STATISTIC_FIELDS = ('cluster_medians','pooled_medians','cluster_effects','cluster_quartiles',
+                    'cluster_rows','cluster_share','cluster_joint_favorable_fraction','sheet_candidates',
+                    'legacy_threshold_rule_diagnostic','tube_rule','reject_distance')
+
+
+def statistics_fields(args, raw, nodes, distances, labels, n_nodes, n_clusters, names,
+                      strata, out, tag):
+    """Build identical model and JSON fields for inline and deferred statistics."""
+    q, reject, medians, described = export_statistics(
+        raw,nodes,distances,labels,n_nodes,out,tag,args.chunk,names=names,strata=strata,
+        n_clusters=n_clusters,scratch=args.scratch,workers=args.threads_per_seed or 1)
+    candidates = sheet_candidates(described['cluster_effects'],names)
+    chi, beta = names.index('log_chi_B'),names.index('log_beta_inv')
+    legacy = [c for c,m in medians.items()
+              if m[chi] > LEGACY_THRESHOLDS['log_chi_B_gt'] and m[beta] < LEGACY_THRESHOLDS['log_beta_inv_lt']]
+    bz = names.index('bz_frac') if 'bz_frac' in names else None
+    tubes = [c for c,m in medians.items()
+             if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
+    exports = {key:described[key] for key in ('cluster_effects','cluster_quartiles','cluster_rows',
+               'cluster_share','cluster_joint_favorable_fraction')}
+    exports['sheet_candidates'] = candidates
+    fields = dict(cluster_medians=medians,pooled_medians=described['pooled_medians'],**exports,
+                  legacy_threshold_rule_diagnostic=dict(
+                      role='diagnostic only; plays no part in selection',statistic='median',**LEGACY_THRESHOLDS,IDs=legacy),
+                  tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
+                  reject_distance=reject)
+    metadata = dict(**{key:one_line(value) for key,value in exports.items()},
+                    tube_clusters=','.join(map(str,tubes)),
+                    tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}')
+    return q,reject,fields,metadata
+
+
+
 def fit(args, shape, seed, scaling, out):
     from aweSOM import Lattice, SOMModel, Scaler
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
@@ -755,34 +793,32 @@ def fit(args, shape, seed, scaling, out):
             for mapped in (labels,nodes,distances): release_mapping(mapped)
         clock.finish('labelling')
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
-        q, reject, medians, described = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk,
-                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters, scratch=args.scratch, workers=args.threads_per_seed or 1)
-        candidates = sheet_candidates(described['cluster_effects'], names)
-        clock.finish('statistics')
+        deferred = args.statistics == 'later'
+        if deferred:
+            q, reject = np.full(len(w),np.nan), float('nan')
+            statistics = dict.fromkeys(STATISTIC_FIELDS)
+            statistic_metadata = dict(statistics='deferred')
+        else:
+            q,reject,statistics,statistic_metadata = statistics_fields(
+                args,raw,nodes,distances,labels,len(w),lat.n_clusters,names,scaling['strata'],out,tag)
+            clock.finish('statistics')
         del nodes, distances
-        chi, beta = names.index('log_chi_B'), names.index('log_beta_inv')
-        legacy = [c for c,m in medians.items()
-                  if m[chi] > LEGACY_THRESHOLDS['log_chi_B_gt'] and m[beta] < LEGACY_THRESHOLDS['log_beta_inv_lt']]
-        bz = names.index('bz_frac') if 'bz_frac' in names else None
-        tubes = [c for c,m in medians.items() if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
         merge_settings = dict(merge_cost_used=lat.merge_cost_used,
                               target_clusters=args.target_clusters, n_clusters=lat.n_clusters)
         # Selection is decided across the lattice's seeds in main(); until then nothing is selected.
         pending = dict(status='pending', reason='awaiting the other seeds of this lattice')
-        exports = dict(cluster_effects=described['cluster_effects'], cluster_quartiles=described['cluster_quartiles'],
-                       cluster_rows=described['cluster_rows'], cluster_share=described['cluster_share'],
-                       cluster_joint_favorable_fraction=described['cluster_joint_favorable_fraction'],
-                       sheet_candidates=candidates)
         meta = dict(**merge_settings, seed=str(seed), scale_unweighted=json.dumps(plain(scaling['scale_unweighted'])),
                     selection_rule=SELECTION_RULE, selected_sheet_clusters='', sheet_clusters='',
                     sheet_selection_status='pending', selection_audit=one_line(pending), seed_overlap='{}',
-                    effect_feature_order=one_line(names), **{k: one_line(v) for k, v in exports.items()},
-                    tube_clusters=','.join(map(str,tubes)), tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}',
+                    effect_feature_order=one_line(names), **statistic_metadata,
                     feature_settings=json.dumps(plain(args.anchor_attrs)),
                     feature_weights=json.dumps(plain(scaling['feature_weights'])),
                     b2_min=str(args.anchor_attrs['b2_min']), s_v=str(args.anchor_attrs['s_v']),
                     pipeline='v2', freeze_manifest='freeze-manifest.json', aweSOM_commit=args.code_commit)
         from aweSOM.features_grmhd import FeatureThresholds
+        if deferred:
+            meta.update(sheet_selection_status='deferred',
+                        selection_audit=one_line(dict(status='deferred',reason='awaiting statistics')))
         thresholds = FeatureThresholds.from_h5_attrs(args.anchor_attrs)
         thresholds.feature_names = tuple(names)
         thresholds.__post_init__()
@@ -809,10 +845,11 @@ def fit(args, shape, seed, scaling, out):
                           scaler=loaded.scaler.kind == scaler.kind and np.array_equal(scaler.offset,loaded.scaler.offset) and np.array_equal(scaler.scale,loaded.scaler.scale),
                           node_map=np.array_equal(nc,loaded.node_cluster),
                           distance_quantiles=np.array_equal(q,loaded.node_dist_q99,equal_nan=True),
-                          reject_distance=reject == loaded.reject_distance)
+                          reject_distance=reject == loaded.reject_distance or (np.isnan(reject) and np.isnan(loaded.reject_distance)))
         if mismatch or parity or scaler_error > 1e-4 or bmu_mismatches or not distance_parity or not all(components.values()):
             raise RuntimeError('freeze verification failed')
-        node_path.unlink(); distance_path.unlink()
+        if not deferred:
+            node_path.unlink(); distance_path.unlink()
         labels.flush()
         clock.finish('verification')
     rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, scratch=None if args.scratch is None else str(args.scratch), lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
@@ -820,18 +857,17 @@ def fit(args, shape, seed, scaling, out):
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
                execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
-               node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, cluster_medians=medians,
-               selection_rule=SELECTION_RULE, effect_feature_order=names, **exports,
-               pooled_medians=described['pooled_medians'],
+               node_to_cluster=nc, merge_cost=args.merge_cost, **merge_settings, statistics='deferred' if deferred else 'complete',
+               selection_rule=SELECTION_RULE, effect_feature_order=names, **statistics,
                selected_sheet_clusters=[], sheet_selection_status='pending', selection_audit=pending, seed_overlap={},
-               legacy_threshold_rule_diagnostic=dict(
-                   role='diagnostic only; plays no part in selection', statistic='median', **LEGACY_THRESHOLDS, IDs=legacy),
-               tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
-               reject_distance=reject, umat_file=f'{tag}-umat.npy',
+               umat_file=f'{tag}-umat.npy',
                verification=dict(reload_mismatches=mismatch,cluster_label_patch_screen_mismatches=parity,
                                  bmu_node_mismatches=bmu_mismatches, bmu_distance_rtol_1e6=distance_parity,
                                  saved_components_equal=components,
                                  parity_rows=len(probe),scaler_max_abs_error=scaler_error))
+    if deferred:
+        rec.update(selected_sheet_clusters=None,sheet_selection_status='deferred',selection_audit=None,seed_overlap=None)
+        rec['verification']['saved_components_equal'].update(distance_quantiles=None,reject_distance=None)
     dump(out / f'{tag}.json',rec)
     return plain(rec)
 
@@ -947,7 +983,9 @@ def medoid(paths,chunk):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--inputs',type=Path,nargs='+',required=True)
+    p.add_argument('--inputs',type=Path,nargs='+')
+    p.add_argument('--statistics',choices=['inline','later'],default='inline')
+    p.add_argument('--statistics-only',type=Path,metavar='FIT_OUT')
     p.add_argument('--pool-only',action='store_true')
     p.add_argument('--write-scaled',action='store_true')
     p.add_argument('--check-scaling',type=int,default=0)
@@ -958,7 +996,7 @@ def parser():
     p.add_argument('--reuse-pool',type=Path)
     p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
     p.add_argument('--collect',type=Path,nargs='+')
-    p.add_argument('--anchor',required=True); p.add_argument('--held-out',nargs='+',required=True)
+    p.add_argument('--anchor'); p.add_argument('--held-out',nargs='+')
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
     p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43],help='two or more seeds per lattice; the sheet-candidate selection needs at least two')
@@ -1009,15 +1047,22 @@ def diagnostic_reasons(args, records=()):
     return reasons
 
 
-def fit_disk_budget(args, rows, features, itemsize=4):
-    """Check scratch and output capacity before a reused-pool fit starts."""
+def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True, output_per_row=16):
+    """Check scratch and output capacity before pooling or training starts."""
     from aweSOM.pool_statistics import scratch_root
     scratch = scratch_root(args.scratch,args.out.parent)
     output = args.out.parent.resolve()
     # Distance runs are removed before concurrent feature runs are formed.
     workers = min(args.threads_per_seed,features)
-    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)
-    output_bytes = rows*16
+    concurrent = min(args.seed_workers,len(args.seeds)) if full_run else 1
+    deferred = getattr(args,'statistics','inline') == 'later'
+    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)*concurrent
+    if deferred: scratch_bytes = rows*8 if full_run and pool_new else 0
+    output_bytes = rows*output_per_row
+    if full_run:
+        pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
+        fits = len(args.lattices)*len(args.seeds)
+        output_bytes = rows*(pool_bytes+4*fits+12*(fits if deferred else concurrent))
     scratch_free = shutil.disk_usage(scratch).free
     output_free = shutil.disk_usage(output).free
     shared = scratch.stat().st_dev == output.stat().st_dev
@@ -1031,12 +1076,106 @@ def fit_disk_budget(args, rows, features, itemsize=4):
     return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=shared)
 
 
+
+def statistics_only(args):
+    """Complete deferred fits into a fresh OUT without changing the source."""
+    from aweSOM import SOMModel
+    from aweSOM.stream import peak_rss_bytes
+    started = time.perf_counter()
+    if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
+    source = args.statistics_only
+    source = source/'results' if (source/'results').is_dir() else source
+    bundle = json.loads((source/'fit-results.json').read_text())
+    state = json.loads((source/'pool-state.json').read_text())
+    records = bundle['models']
+    if not records or any(r.get('statistics') != 'deferred' for r in records):
+        raise ValueError('--statistics-only requires deferred fits')
+    args.seed_workers = 1
+    args.seeds = [r['seed'] for r in records]
+    args.threads_per_seed = thread_budget(args)['threads_per_seed']
+    for key in ('tube_bz','tube_beta'):
+        setattr(args,key,bundle['settings'][key])
+    with h5py.File(source/'pool.h5','r') as h:
+        rows,features = h['raw'].shape
+        fit_disk_budget(args,rows,features,h['raw'].dtype.itemsize,output_per_row=4*len(records))
+    for record in records:
+        tag = record['tag']
+        model = SOMModel.load(source/f'{tag}.h5')
+        if hashlib.sha256(model.weights.tobytes()).hexdigest() != record['weights_sha256']:
+            raise ValueError(f'saved weights differ for {tag}')
+        if json.loads((source/f'{tag}.json').read_text()) != record:
+            raise ValueError(f'fit JSON differs from bundle for {tag}')
+        for suffix in ('labels','nodes','distances'):
+            array = np.load(source/f'{tag}-{suffix}.npy',mmap_mode='r')
+            if array.shape != (rows,): raise ValueError(f'invalid {suffix} shape for {tag}')
+            del array
+    args.out.mkdir()
+    os.environ['NUMBA_CACHE_DIR'] = str(args.out/'numba-cache')
+    # Budget checks imported these dispatchers before OUT existed. Bind their caches
+    # to this job's directory before the parent performs the distance scan.
+    import numba
+    from aweSOM import pool_statistics
+    numba.config.reload_config()
+    for function in (pool_statistics._sift,pool_statistics._drain,pool_statistics._scan):
+        function.enable_caching()
+    out = args.out/'results.partial'; out.mkdir()
+    os.symlink((source/'pool.h5').resolve(),out/'pool.h5')
+    dump(out/'pool-state.json',state)
+    completed = []
+    with h5py.File(out/'pool.h5','r') as h:
+        for original in records:
+            record = copy.deepcopy(original); tag = record['tag']
+            model = SOMModel.load(source/f'{tag}.h5')
+            args.chunk = record['chunk']
+            labels = np.load(source/f'{tag}-labels.npy',mmap_mode='r')
+            nodes = np.load(source/f'{tag}-nodes.npy',mmap_mode='r')
+            distances = np.load(source/f'{tag}-distances.npy',mmap_mode='r')
+            clock = PhaseClock(tag)
+            q,reject,fields,metadata = statistics_fields(args,h['raw'],nodes,distances,labels,
+                len(model.weights),record['n_clusters'],model.feature_names,state['scaling']['strata'],out,tag)
+            clock.finish('statistics')
+            pending = dict(status='pending',reason='awaiting the other seeds of this lattice')
+            model.node_dist_q99,model.reject_distance = q,reject
+            model.metadata.pop('statistics',None)
+            model.metadata.update(metadata,selected_sheet_clusters='',sheet_clusters='',
+                sheet_selection_status='pending',selection_audit=one_line(pending),seed_overlap='{}')
+            temporary = out/f'{tag}.partial.h5'; model.save(temporary); publish(temporary,out/f'{tag}.h5')
+            loaded = SOMModel.load(out/f'{tag}.h5')
+            if (not np.array_equal(q,loaded.node_dist_q99,equal_nan=True)
+                    or reject != loaded.reject_distance or loaded.metadata != model.metadata):
+                raise RuntimeError('statistics model verification failed')
+            for suffix in ('-labels.npy','-umat.npy'):
+                shutil.copyfile(source/f'{tag}{suffix}',out/f'{tag}{suffix}')
+            record.update(fields,statistics='complete',selected_sheet_clusters=[],
+                          sheet_selection_status='pending',selection_audit=pending,seed_overlap={})
+            record['phase_timings']['statistics'] = clock.records['statistics']
+            record['wall_seconds'] += time.perf_counter()-clock.wall+clock.records['statistics']['wall_seconds']
+            record['verification']['saved_components_equal'].update(distance_quantiles=True,reject_distance=True)
+            dump(out/f'{tag}.json',record); completed.append(record)
+            del labels,nodes,distances
+    dump(out/'fit-results.json',dict(bundle,models=completed))
+    dump(out/'statistics-job.json',dict(git_commit=provenance(),rows=rows,threads=args.threads_per_seed,
+         ranks=1,hostname=os.uname().nodename,peak_rss_bytes=peak_rss_bytes(),
+         wall_seconds=time.perf_counter()-started,
+         models={r['tag']:r['phase_timings']['statistics'] for r in completed}))
+    os.rename(out,args.out/'results')
+    return completed
+
+
 def main(argv=None):
     started = time.perf_counter()
     cli = parser()
     args = cli.parse_args(argv)
+    if args.statistics_only:
+        if args.fit or args.collect or args.pool_only or args.reuse_pool or args.statistics != 'inline':
+            cli.error('--statistics-only cannot be combined with fit, collect, pool, or later modes')
+        return statistics_only(args)
+    if not args.inputs or not args.anchor or not args.held_out:
+        cli.error('--inputs, --anchor and --held-out are required for pool and fit modes')
     if args.collect and not args.reuse_pool:
         cli.error('--collect requires --reuse-pool')
+    if args.collect and args.statistics == 'later':
+        cli.error('--collect requires completed statistics')
     if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
     if args.chunk < 1 or args.epochs < 1 or not args.seeds: raise ValueError('invalid training settings')
     if not all(np.isfinite(v) and v > 0 for v in [args.bz_weight,args.pol_weight]):
@@ -1066,11 +1205,14 @@ def main(argv=None):
         if [str(p.resolve()) for p in args.inputs] != [r['path'] for r in state['records']]:
             raise ValueError('reused pool input paths differ')
         records,quota,disk,mismatches = state['records'],state['quota'],state['disk'],state['mismatches']
-        if args.fit:
+        if not (args.collect or args.pool_only):
             with h5py.File(directory/'pool.h5','r') as h:
-                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize)
+                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize,
+                                full_run=not bool(args.fit),pool_new=False)
     else:
         records,quota,disk,mismatches = inspect(args)
+        if not args.pool_only:
+            fit_disk_budget(args,quota*len(records),len(records[0]['names']),full_run=True)
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
@@ -1099,6 +1241,8 @@ def main(argv=None):
                 if key not in ('lattices','seeds') and value != getattr(args,key):
                     raise ValueError(f'collection fit settings differ: {key}')
             for record in bundle['models']:
+                if record.get('statistics') == 'deferred':
+                    raise ValueError(f"statistics are deferred for {record['tag']}; run --statistics-only first")
                 if record['tag'] in {r['tag'] for r in collected}: raise ValueError('duplicate collected fit')
                 collected.append(record)
                 for suffix in ('.h5','.json','-labels.npy','-umat.npy'):
@@ -1118,7 +1262,7 @@ def main(argv=None):
                 wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
                                                numba.config.NUMBA_NUM_THREADS)
             trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
-        if args.fit:
+        if args.fit or args.statistics == 'later':
             fits.extend(trio); continue
         # Decided once for the lattice and written into every seed's model before the frozen link.
         sheet_selection=group_selection(out,trio,args.chunk)
@@ -1128,7 +1272,7 @@ def main(argv=None):
         choices.append(dict(shape=shape,medoid_seed=chosen['seed'],model=f'frozen-{shape[0]}x{shape[1]}.h5',**band,
                             sheet_selection=sheet_selection))
         fits.extend(trio)
-    if args.fit:
+    if args.fit or args.statistics == 'later':
         dump(out/'fit-results.json',dict(models=fits,settings={k:getattr(args,k) for k in APPROVED},bmu=args.bmu))
         os.rename(out,args.out/'results'); return
     if args.collect and len(fits) != len(collected): raise ValueError('unexpected collected lattice')
