@@ -2,7 +2,7 @@ h5py
 # jax
 # jaxlib
 matplotlib
-numba
+numba>=0.60
 numpy
 pytest
 scikit-learn

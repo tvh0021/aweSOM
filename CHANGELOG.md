@@ -4,6 +4,45 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-05
+
+This release adds CPU inference (`aweSOM.inference`, `Lattice.predict`) and
+changes how `Lattice.best_match` searches by default.
+
+**`Lattice.best_match` now defaults to the float32 screen backend with float64
+distance accumulation (`backend="screen"`).** `backend="legacy"` and
+`full=True` keep the v1.3.0 behaviour. For finite float64 data the default
+returns the same nodes as v1.3.0. With a float32 lattice and float32 data, a
+point whose two nearest nodes are tied within float32 rounding can get the
+other node, and the default never selects a node with non-finite weights,
+where v1.3.0 returned the first NaN distance. `map_data_to_lattice` uses the
+default.
+
+**Label files are now uint8 or uint16.** `run_som.save_cluster_labels`
+writes uint8 when the largest cluster id is below 256 and uint16 when it is
+below 65536; the ids are unchanged.
+
+### Added
+
+- `aweSOM.inference` with `best_match_nodes` (float64 reference scan),
+  `best_match_nodes_screen` (float32 screen checked in float64, same labels
+  and distances bitwise) and `predict(weights, node_cluster, data)`, which
+  returns int32 cluster labels and optionally the distances. `predict` and
+  `best_match_nodes` are exported from `aweSOM`.
+- `Lattice.predict(data)`: cluster labels for new data in one call, equal to
+  `map_data_to_lattice` followed by `assign_cluster_to_data`.
+- `Lattice.best_match(..., backend=)` with `"screen"` (default), `"numba"`
+  and `"legacy"`; the original kernel stays as `Lattice._best_match_legacy`.
+- Tests: `inference_test.py`, `inference_screen_test.py`,
+  `lattice_wrappers_test.py`, `best_match_regression_test.py` (float32
+  lattice and data, exact ties, non-finite rows and nodes, fewer than ten
+  points) and a label dtype test in `run_som_test.py`.
+
+### Changed
+
+- `Lattice.best_match` default search, as above.
+- `run_som.save_cluster_labels` file dtype, as above.
+
 ## [1.3.0] - 2026-11-05
 
 This release adds clump helpers to the plasma turbulence example. The
@@ -220,6 +259,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.4.0]: https://github.com/tvh0021/aweSOM/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tvh0021/aweSOM/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tvh0021/aweSOM/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/tvh0021/aweSOM/compare/v1.1.2...v1.1.3

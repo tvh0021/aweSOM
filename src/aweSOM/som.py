@@ -532,7 +532,7 @@ class Lattice:
             else:
                 best_match_node[i] = np.argmin(s)
 
-            if i % int(obs.shape[0] // 10) == 0:
+            if i % max(1, obs.shape[0] // 10) == 0:
                 print("i = ", i)
 
         return best_match_node
