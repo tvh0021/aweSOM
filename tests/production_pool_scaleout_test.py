@@ -108,3 +108,12 @@ def test_reused_fit_disk_checks(tmp_path,monkeypatch,low):
         assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=160,shared_filesystem=True)
     assert calls == [scratch,tmp_path]
     assert not a.out.exists()
+
+
+def test_collect_requires_reused_pool(tmp_path,capsys):
+    with pytest.raises(SystemExit) as error:
+        pool.main(['--inputs','missing.h5','--anchor','1','--held-out','3',
+                   '--out',str(tmp_path/'fresh'),'--collect','missing-fit'])
+    assert error.value.code == 2
+    assert '--collect requires --reuse-pool' in capsys.readouterr().err
+    assert not (tmp_path/'fresh').exists()

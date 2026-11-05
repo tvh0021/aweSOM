@@ -989,7 +989,10 @@ def fit_disk_budget(args, rows, features, itemsize=4):
 
 def main(argv=None):
     started = time.perf_counter()
-    args = parser().parse_args(argv)
+    cli = parser()
+    args = cli.parse_args(argv)
+    if args.collect and not args.reuse_pool:
+        cli.error('--collect requires --reuse-pool')
     if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
     if args.chunk < 1 or args.epochs < 1 or not args.seeds: raise ValueError('invalid training settings')
     if not all(np.isfinite(v) and v > 0 for v in [args.bz_weight,args.pol_weight]):
