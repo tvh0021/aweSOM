@@ -4,6 +4,33 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-05
+
+This release adds clump helpers to the plasma turbulence example. The
+aweSOM package itself is unchanged apart from its version number.
+
+### Added
+
+- `examples/plasma-turbulence/combine_clumps.py`. `get_clumps` and
+  `label_clumps` split a 2D or 3D label array into connected clumps of equal
+  value; `label_clumps` returns one id per cell, in the order of the
+  `get_clumps` list, and can also join clumps across periodic boundaries.
+  `merge_double_sheets` merges each double sheet that touches both a
+  positive and a negative clump with the clumps it touches. It runs the
+  array version `merge_double_sheets_fast` by default (`fast=True`);
+  `fast=False` runs the original loop. Both return the same result. On the
+  128^3 plasma sheet arrays `label_clumps` took 0.06 to 0.10 s where
+  `get_clumps` took 5.5 to 21 s, with the same clumps.
+- `examples/plasma-turbulence/requirements.txt` with `tqdm`, which the script
+  imports. `tqdm` is not a dependency of the package.
+- `tests/combine_clumps_test.py`. It is skipped when `tqdm` is not
+  installed.
+
+### Changed
+
+- The test workflow installs `examples/plasma-turbulence/requirements.txt`,
+  so CI runs `tests/combine_clumps_test.py`.
+
 ## [1.2.0] - 2026-11-04
 
 This release rewrites the SCE ensemble loop in `sce.loop_over_all_clusters`
@@ -193,6 +220,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.3.0]: https://github.com/tvh0021/aweSOM/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tvh0021/aweSOM/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/tvh0021/aweSOM/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/tvh0021/aweSOM/compare/v1.1.1...v1.1.2
