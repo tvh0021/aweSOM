@@ -71,6 +71,7 @@ def test_override_and_strata(tmp_path):
     paths=inputs(tmp_path); a=args(tmp_path,paths)
     with h5py.File(paths[1],'r+') as h: h.attrs['s_v']=2.
     a.allow_independent_thresholds=True
+    a.write_scaled=True
     rec,quota,_,bad=pool.inspect(a); assert bad
     a.out.mkdir(); scaling=pool.pool(a,rec,quota,a.out)
     with h5py.File(a.out/'pool.h5') as h:
@@ -446,7 +447,7 @@ def test_export_statistics_production_pool_bitwise(tmp_path, monkeypatch, chunk)
         labels = np.load(a.out/'labels.npy', mmap_mode='r')
         distances = np.load(a.out/'distances.npy', mmap_mode='r')
         old = old_export(raw, nodes, distances, labels, 10, a.out, 'old', chunk)
-        # Statistics must never create a disk buffer or read individual columns.
+        # External sorts use ordinary files and bounded row reads, without a full-size memmap.
         def no_scratch(*args, **kwargs):
             raise AssertionError('statistics scratch allocation')
         monkeypatch.setattr(np.lib.format, 'open_memmap', no_scratch)

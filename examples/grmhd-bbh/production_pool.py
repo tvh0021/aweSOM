@@ -219,24 +219,33 @@ def inspect(args):
     if epoch_rows < len(records) or epoch_rows > rows or epoch_rows % len(records):
         raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
     # Raw float32 + scaled float64 + three label vectors, distance scratch and margin.
-    need = max(args.min_free_gb*1e9, rows*(len(NAMES)*12 + 40) + 1e9)
+    bytes_per_row = len(records[0]['names'])*(4+8*args.write_scaled)
+    bytes_per_row += 4*len(args.lattices)*len(args.seeds) + 12*args.seed_workers
+    if not (args.scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR')):
+        threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
+        bytes_per_row += max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
+    need = max(args.min_free_gb*1e9, rows*bytes_per_row + 1e9)
     free = shutil.disk_usage(args.out.parent).free
     if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
     return records, quota, dict(free_bytes=free, required_bytes=need), mismatches
 
 
-def quantiles(dataset, start=0, stop=None):
-    """Exact quartiles using one disk-backed column and chunked HDF5 reads."""
+def quantiles(dataset, start=0, stop=None, scratch=None):
+    """Exact quartiles using one scratch-backed float64 column."""
+    from aweSOM.pool_statistics import scratch_directory
     stop = len(dataset) if stop is None else stop
-    path = Path(dataset.file.filename).with_name('scaler-column.npy')
-    column = np.lib.format.open_memmap(path, mode='w+', dtype='f8', shape=(stop-start,))
     result = []
-    for j in range(dataset.shape[1]):
-        for a in range(start,stop,2**18):
-            column[a-start:min(a+2**18,stop)-start] = dataset[a:min(a+2**18,stop),j]
-        result.append(np.percentile(column, [25,50,75], overwrite_input=True))
-    del column
-    path.unlink()
+    with scratch_directory(scratch, Path(dataset.file.filename).parent) as directory:
+        column = np.lib.format.open_memmap(directory/'scaler-column.npy', mode='w+',
+                                          dtype='f8', shape=(stop-start,))
+        try:
+            for j in range(dataset.shape[1]):
+                for a in range(start,stop,2**18):
+                    b = min(a+2**18,stop)
+                    column[a-start:b-start] = dataset[a:b,j]
+                result.append(np.percentile(column,[25,50,75],overwrite_input=True))
+        finally:
+            column._mmap.close()
     return np.stack(result, axis=1)
 
 
@@ -284,7 +293,7 @@ def pool(args, records, quota, out):
                         extraction_probability=1/weight_summary['weight']['min'] if q else UNAVAILABLE,
                         selected_weights=weight_summary,
                         effective_weight_multiplier=float(rec['counts'][level]/q) if q else UNAVAILABLE)
-        q = quantiles(raw); center, unweighted = q[1], q[2]-q[0]
+        q = quantiles(raw, scratch=args.scratch); center, unweighted = q[1], q[2]-q[0]
         from aweSOM.model import Scaler
         feature_weights = np.array([args.bz_weight if n == 'bz_frac' else
                                     args.pol_weight if n == 'pol_frac' else 1
@@ -292,15 +301,16 @@ def pool(args, records, quota, out):
         scaler = Scaler('median-iqr', center, unweighted / feature_weights)
         drift = []
         for i, rec in enumerate(records):
-            sq = quantiles(raw, i*quota, (i+1)*quota)
+            sq = quantiles(raw, i*quota, (i+1)*quota, scratch=args.scratch)
             # Median drift relative to |pooled median|, with pooled IQR as zero guard.
             md = np.abs(sq[1]-center)/np.maximum(np.abs(center), np.maximum(unweighted, 1e-30)*1e-12)
             iq = np.abs(sq[2]-sq[0]-unweighted)/np.maximum(unweighted, 1e-30)
             drift.append(dict(snapshot=rec['snapshot'], median_relative=md, iqr_relative=iq,
                               flagged_features=np.array(records[0]['names'])[np.maximum(md,iq)>.05].tolist(),
                               quantiles=sq))
-        scaled = dst.create_dataset('scaled', raw.shape, dtype='f8')
-        for a in range(0, len(raw), args.chunk): scaled[a:a+args.chunk] = scaler.transform(raw[a:a+args.chunk])
+        if args.write_scaled:
+            scaled = dst.create_dataset('scaled', raw.shape, dtype='f8')
+            for a in range(0, len(raw), args.chunk): scaled[a:a+args.chunk] = scaler.transform(raw[a:a+args.chunk])
     return dict(center=center, scale=scaler.scale, scale_unweighted=unweighted,
                 feature_weights=feature_weights, kind='median-iqr', drift=drift,
                 strata=strata, row_order_sha256=order_hash.hexdigest())
@@ -316,8 +326,10 @@ class EpochSource:
     ``ix`` of call ``calls`` and counts as one call. ``train_batch_stream`` advances
     ``calls`` by one when it skips the counting pass, so the call numbering (and the
     weights) equal those of earlier drivers, which always made that pass.
+    ``transform`` (per-chunk scaling) is applied to every block either path returns.
     """
-    def __init__(self, data, strata, rows, seed, chunk):
+    def __init__(self, data, strata, rows, seed, chunk, *, transform=None):
+        self.transform = transform
         self.data, self.strata, self.seed, self.chunk = data, strata, seed, chunk
         self.calls = 0
         snapshots = list(dict.fromkeys(s['snapshot'] for s in strata))
@@ -351,7 +363,8 @@ class EpochSource:
         return windows, quotas
 
     def _read(self, start, n):
-        return self.data[start:start+n]
+        block = self.data[start:start+n]
+        return self.transform(block) if self.transform is not None else block
 
     def lazy_chunks(self):
         windows, self.quotas = self._windows(self.calls); self.calls += 1
@@ -372,9 +385,12 @@ class EpochSource:
         k = np.searchsorted(offsets, ix, side='right') - 1
         uniq, inv = np.unique(starts[k] + ix - offsets[k], return_inverse=True)
         got = self.data[uniq] if isinstance(self.data, np.ndarray) else self.data[uniq.tolist()]
-        return np.asarray(got)[inv]
+        got = np.asarray(got)[inv]
+        return self.transform(got) if self.transform is not None else got
 
 
+if 'NUMBA_NUM_THREADS' not in os.environ and 'SLURM_CPUS_PER_TASK' in os.environ:
+    os.environ['NUMBA_NUM_THREADS'] = os.environ['SLURM_CPUS_PER_TASK']
 from numba import njit
 
 
@@ -395,77 +411,63 @@ def grouped_order(keys, n_groups):
 
 
 def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
-                      names=None, strata=None, n_clusters=None):
-    """Exact float64 statistics with one sequential pass over the raw rows.
+                      names=None, strata=None, n_clusters=None, scratch=None, workers=1):
+    """Exact quartiles and tied ranks using bounded external sorts.
 
-    Stable grouping reproduces the old counting scatter's input order, including
-    its per-node partitioning before the global rejection percentile. Keep the
-    float64 column buffer separate from raw so median partitioning cannot change
-    another column. No scratch files are created.
-
-    The fourth result holds the per-cluster descriptors of the sheet-candidate
-    rule (opus.md D10): row counts and shares (all rows and per training
-    snapshot from ``strata``), the K x D one-vs-rest rank effects 2 AUC - 1,
-    the K x 3 x D quartiles, and, when ``names`` carries the three signature
-    features, the joint favourable fraction. Each feature costs one sort.
-
-    RAM is O(N*D + N + chunk*D + groups): raw retains its input dtype, one intp
-    permutation and one float64 column are live during feature statistics; the
-    rank effect adds, for one feature at a time, a packed uint64 sort key (8N),
-    its labels (8N) and the doubled ranks (8N), plus the labels (4N) and a
-    favourable-row mask (N) kept across features.
-    See statistics-performance.md for conservative production memory estimates.
+    Feature runs hold 8-byte packed float32/label keys; distance runs use
+    16-byte records. A single bounded-buffer k-way merge consumes each run.
+    File-backed features run concurrently within the fit thread budget.
+    Output keys match the in-memory implementation.
     """
-    order, edges = grouped_order(nodes, n_nodes)
-    buf = np.asarray(distances, dtype='f8')[order]
-    q = np.full(n_nodes, np.nan)
-    for i in range(n_nodes):
-        if edges[i+1] > edges[i]:
-            q[i] = np.percentile(buf[edges[i]:edges[i+1]], 99., overwrite_input=True)
-    reject = float(np.percentile(buf, 99.9, overwrite_input=True))
-    del buf, order
-
-    # Copy mapped labels once, then release them before loading the raw matrix.
-    keys = np.array(labels)
-    medians = {int(c): [] for a in range(0,len(keys),chunk) for c in np.unique(keys[a:a+chunk])}
-    K = max(int(max(medians))+1, int(n_clusters or 0))
-    order, edges = grouped_order(keys, K)
-    counts = np.diff(edges)
-    snapshot_rows = {}
-    for s in strata or ():
-        rows = snapshot_rows.setdefault(str(s['snapshot']), np.zeros(K, np.int64))
-        rows += np.bincount(keys[s['start']:s['start']+s['rows']], minlength=K)
-    values = np.empty(raw.shape, dtype=raw.dtype)
-    for a in range(0, len(raw), chunk):
-        values[a:a+chunk] = raw[a:a+chunk]
+    from aweSOM.pool_statistics import scratch_directory, summarize, read_slice
     n, D = raw.shape
-    effects = np.full((K, D), np.nan); quartiles = np.full((K, 3, D), np.nan)
+    K = int(n_clusters or 0)
+    for a in range(0,n,chunk): K = max(K, int(np.max(read_slice(labels,a,a+chunk)))+1)
+    counts = np.zeros(K, 'i8'); node_counts = np.zeros(n_nodes, 'i8')
+    for a in range(0,n,chunk):
+        counts += np.bincount(read_slice(labels,a,a+chunk), minlength=K)
+        node_counts += np.bincount(read_slice(nodes,a,a+chunk), minlength=n_nodes)
+    snapshot_rows = {}
+    for st in strata or ():
+        rows = snapshot_rows.setdefault(str(st['snapshot']), np.zeros(K, 'i8'))
+        for a in range(st['start'],st['start']+st['rows'],chunk):
+            rows += np.bincount(read_slice(labels,a,min(a+chunk,st['start']+st['rows'])), minlength=K)
+    effects = np.full((K,D),np.nan); quartiles = np.full((K,3,D),np.nan)
     pooled_medians = np.empty(D)
-    directions = dict(SIGNATURE) if names is not None and all(f in names for f, _ in SIGNATURE) else {}
-    favourable = np.ones(n, bool) if directions else None
-    buf = np.empty(len(raw), dtype='f8')
-    for j in range(D):
-        twice_rank_sums, pooled_medians[j] = rank_sums(values[:, j], keys, K)
-        effects[:, j] = effects_from_rank_sums(twice_rank_sums, counts, n)
-        sign = directions.get(names[j], 0) if directions else 0
-        if sign: favourable &= values[:, j] > pooled_medians[j] if sign > 0 else values[:, j] < pooled_medians[j]
-        for a in range(0, len(raw), chunk):
-            buf[a:a+chunk] = values[order[a:a+chunk], j]
-        for c in medians:
-            segment = buf[edges[c]:edges[c+1]]
-            medians[c].append(float(np.median(segment, overwrite_input=True)))
-            quartiles[c, [0, 2], j] = np.percentile(segment, [25, 75], overwrite_input=True)
-            quartiles[c, 1, j] = medians[c][-1]
+    medians = {int(c): [] for a in range(0,n,chunk) for c in np.unique(read_slice(labels,a,a+chunk))}
+    with scratch_directory(scratch, out) as directory:
+        blocks = ((read_slice(distances,a,a+chunk), read_slice(nodes,a,a+chunk)) for a in range(0,n,chunk))
+        qs, _, _ = summarize(blocks, node_counts, np.asarray([99.,99.9])/100, directory, chunk)
+        q, reject = qs[:-1,0], float(qs[-1,1])
+        if workers > 1 and isinstance(raw,h5py.Dataset) and raw.file.mode == 'r' and isinstance(labels,np.memmap):
+            from aweSOM.pool_statistics import parallel_features
+            summaries = parallel_features(raw,labels,counts,chunk,directory,workers)
+        else:
+            summaries = []
+            for j in range(D):
+                blocks = ((raw[a:a+chunk][:,j], read_slice(labels,a,a+chunk)) for a in range(0,n,chunk))
+                with scratch_directory(directory) as feature_directory:
+                    summaries.append(summarize(blocks,counts,[.25,.5,.75],feature_directory,chunk))
+        for j,(qs,mids,sums) in enumerate(summaries):
+            quartiles[:,:,j] = qs[:-1]; quartiles[:,1,j] = mids[:-1,1]
+            pooled_medians[j] = mids[-1,1]
+            effects[:,j] = effects_from_rank_sums(sums,counts,n)
+            for c in medians: medians[c].append(float(mids[c,1]))
+    directions = dict(SIGNATURE) if names is not None and all(f in names for f,_ in SIGNATURE) else {}
     joint = None
     if directions:
-        joint = np.bincount(keys, weights=favourable, minlength=K) / np.maximum(counts, 1)
-        joint[counts == 0] = np.nan
-    descriptors = dict(
-        cluster_rows=dict(all=counts, **snapshot_rows),
-        cluster_share=dict(all=counts/n, **{s: r/max(1, int(r.sum())) for s, r in snapshot_rows.items()}),
-        cluster_effects=effects, cluster_quartiles=quartiles, pooled_medians=pooled_medians,
+        hits = np.zeros(K)
+        for a in range(0,n,chunk):
+            values = raw[a:a+chunk]; favourable = np.ones(len(values),bool)
+            for feature, sign in directions.items():
+                j = names.index(feature)
+                favourable &= values[:,j] > pooled_medians[j] if sign > 0 else values[:,j] < pooled_medians[j]
+            hits += np.bincount(read_slice(labels,a,a+chunk),weights=favourable,minlength=K)
+        joint = hits/np.maximum(counts,1); joint[counts==0] = np.nan
+    return q, reject, medians, dict(cluster_rows=dict(all=counts,**snapshot_rows),
+        cluster_share=dict(all=counts/n,**{s:r/max(1,int(r.sum())) for s,r in snapshot_rows.items()}),
+        cluster_effects=effects,cluster_quartiles=quartiles,pooled_medians=pooled_medians,
         cluster_joint_favorable_fraction=joint)
-    return q, reject, medians, descriptors
 
 
 # Sheet-candidate signature (opus.md D1): the sign of each feature's rank effect, strict.
@@ -714,12 +716,26 @@ def fit(args, shape, seed, scaling, out):
     print(json.dumps(dict(tag=tag, execution=execution)), flush=True)
     scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
     with h5py.File(out / 'pool.h5', 'r') as h:
-        raw, scaled = h['raw'], h['scaled']
-        source = EpochSource(scaled, scaling['strata'], args.rows_per_epoch or len(raw), args.sample_seed, args.chunk)
+        raw = h['raw']
+        transform = lambda block: scaler.transform(np.asarray(block,dtype='f8'))
+        if args.check_scaling:
+            if 'scaled' not in h: raise ValueError('--check-scaling requires a pool built with --write-scaled')
+            for a in range(0,min(args.check_scaling,len(raw)),args.chunk):
+                b = min(a+args.chunk,args.check_scaling,len(raw))
+                if not np.array_equal(transform(raw[a:b]),h['scaled'][a:b]):
+                    raise RuntimeError('per-chunk scaling differs from stored scaled rows')
+        source = EpochSource(raw, scaling['strata'], args.rows_per_epoch or len(raw), args.sample_seed, args.chunk, transform=transform)
+        import inspect as signature_inspect
+        parameters = signature_inspect.signature(train_batch_stream).parameters
+        checkpoint_args = {}
+        if 'checkpoint' in parameters: checkpoint_args['checkpoint'] = out / f'{tag}-checkpoint.npz'
+        if args.resume is not None:
+            if 'resume' not in parameters: raise ValueError('installed trainer does not support resume')
+            checkpoint_args['resume'] = args.resume
         w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
-                                    bmu='patch', seed=seed, groups=args.groups, r_max=args.r_max,
+                                    bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
                                     r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
-                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True)
+                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True, **checkpoint_args)
         clock.finish('training')
         if w.dtype != np.float64 or not np.isfinite(w).all():
             raise RuntimeError('training returned invalid float64 weights')
@@ -733,12 +749,14 @@ def fit(args, shape, seed, scaling, out):
         distances = np.lib.format.open_memmap(distance_path, mode='w+', dtype='f8', shape=(len(raw),))
         for a in range(0, len(raw), args.chunk):
             b = min(a+args.chunk, len(raw))
-            nodes[a:b], d2 = best_match_nodes_patch(w, scaled[a:b], *shape)
+            nodes[a:b], d2 = best_match_nodes_patch(w, transform(raw[a:b]), *shape)
             labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
+            from aweSOM.pool_statistics import release_mapping
+            for mapped in (labels,nodes,distances): release_mapping(mapped)
         clock.finish('labelling')
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         q, reject, medians, described = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk,
-                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters)
+                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters, scratch=args.scratch, workers=args.threads_per_seed or 1)
         candidates = sheet_candidates(described['cluster_effects'], names)
         clock.finish('statistics')
         del nodes, distances
@@ -774,10 +792,11 @@ def fit(args, shape, seed, scaling, out):
         clock.finish('export')
         loaded = SOMModel.load(out / f'{tag}.h5')
         mismatch = parity = 0; scaler_error = 0.
-        for a in range(0,len(raw),args.chunk):
-            block = raw[a:a+args.chunk]
+        for a in range(0,len(raw) if args.verify_labels else min(len(raw),1_000_000),args.chunk):
+            stop = min(a+args.chunk,len(raw) if args.verify_labels else 1_000_000)
+            block = raw[a:stop]
             mismatch += int(np.count_nonzero(loaded.predict(block,backend='patch') != labels[a:a+len(block)]))
-            scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-scaled[a:a+len(block)]))))
+            scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-transform(block)))))
         probe = raw[np.unique(np.linspace(0,len(raw)-1,min(8192,len(raw)),dtype=int))]
         parity = int(np.count_nonzero(loaded.predict(probe,backend='patch') != loaded.predict(probe,backend='screen')))
         from aweSOM.inference import best_match_nodes_screen
@@ -796,7 +815,7 @@ def fit(args, shape, seed, scaling, out):
         node_path.unlink(); distance_path.unlink()
         labels.flush()
         clock.finish('verification')
-    rec = dict(tag=tag, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
+    rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, scratch=None if args.scratch is None else str(args.scratch), lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
                execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
@@ -819,8 +838,12 @@ def fit(args, shape, seed, scaling, out):
 
 def worker(conn, *args):
     try:
+        config = args[0]
+        for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','BLIS_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
+            os.environ[key] = '1'
+        os.environ['NUMBA_CACHE_DIR'] = str(args[-1] / f'numba-cache-{os.getpid()}')
         import numba
-        numba.set_num_threads(args[0].threads_per_seed)
+        numba.set_num_threads(config.threads_per_seed)
         conn.send(('ok',fit(*args)))
     except BaseException: conn.send(('error',traceback.format_exc()))
     finally: conn.close()
@@ -865,7 +888,13 @@ def run_wave(jobs, target=worker, exit_grace=60):
         for job in jobs:
             receive, send = ctx.Pipe(duplex=False)
             with send:  # closed even if start() fails; receive is closed in finally
-                process = ctx.Process(target=target, args=(send, *job)); running.append((receive, process)); process.start()
+                process = ctx.Process(target=target, args=(send, *job)); running.append((receive, process))
+                previous_threads = os.environ.get('NUMBA_NUM_THREADS')
+                if target is worker: os.environ['NUMBA_NUM_THREADS'] = str(job[0].threads_per_seed)
+                try: process.start()
+                finally:
+                    if previous_threads is None: os.environ.pop('NUMBA_NUM_THREADS',None)
+                    else: os.environ['NUMBA_NUM_THREADS'] = previous_threads
             readers.append(threading.Thread(target=read, args=(len(readers), receive), daemon=True)); readers[-1].start()
         while waiting:
             dead = [j for j in waiting if not readers[j].is_alive()]  # checked before pump: a finished reader's event is already queued
@@ -919,6 +948,16 @@ def medoid(paths,chunk):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--inputs',type=Path,nargs='+',required=True)
+    p.add_argument('--pool-only',action='store_true')
+    p.add_argument('--write-scaled',action='store_true')
+    p.add_argument('--check-scaling',type=int,default=0)
+    p.add_argument('--scratch',type=Path)
+    p.add_argument('--bmu',default='auto')
+    p.add_argument('--verify-labels',action='store_true')
+    p.add_argument('--resume',type=Path)
+    p.add_argument('--reuse-pool',type=Path)
+    p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
+    p.add_argument('--collect',type=Path,nargs='+')
     p.add_argument('--anchor',required=True); p.add_argument('--held-out',nargs='+',required=True)
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
@@ -970,13 +1009,45 @@ def diagnostic_reasons(args, records=()):
     return reasons
 
 
+def fit_disk_budget(args, rows, features, itemsize=4):
+    """Check scratch and output capacity before a reused-pool fit starts."""
+    from aweSOM.pool_statistics import scratch_root
+    scratch = scratch_root(args.scratch,args.out.parent)
+    output = args.out.parent.resolve()
+    # Distance runs are removed before concurrent feature runs are formed.
+    workers = min(args.threads_per_seed,features)
+    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)
+    output_bytes = rows*16
+    scratch_free = shutil.disk_usage(scratch).free
+    output_free = shutil.disk_usage(output).free
+    shared = scratch.stat().st_dev == output.stat().st_dev
+    floor = args.min_free_gb*1e9
+    scratch_need = max(floor,scratch_bytes+output_bytes if shared else scratch_bytes)
+    output_need = max(floor,scratch_bytes+output_bytes if shared else output_bytes)
+    if scratch_free < scratch_need:
+        raise ValueError(f'Low scratch disk: {scratch_free} bytes free; need {scratch_need}')
+    if output_free < output_need:
+        raise ValueError(f'Low output disk: {output_free} bytes free; need {output_need}')
+    return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=shared)
+
+
 def main(argv=None):
     started = time.perf_counter()
-    args = parser().parse_args(argv)
+    cli = parser()
+    args = cli.parse_args(argv)
+    if args.collect and not args.reuse_pool:
+        cli.error('--collect requires --reuse-pool')
     if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
     if args.chunk < 1 or args.epochs < 1 or not args.seeds: raise ValueError('invalid training settings')
     if not all(np.isfinite(v) and v > 0 for v in [args.bz_weight,args.pol_weight]):
         raise ValueError('feature weights must be finite and positive')
+    if args.fit:
+        lattice, seed = args.fit
+        args.lattices, args.seeds, args.seed_workers = [lattice], [int(seed)], 1
+    if sum([bool(args.fit),bool(args.collect),args.pool_only]) > 1:
+        raise ValueError('--fit, --collect and --pool-only are exclusive')
+    if args.fit and not args.reuse_pool: raise ValueError('--fit requires --reuse-pool')
+    if args.check_scaling < 0: raise ValueError('--check-scaling must be nonnegative')
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
@@ -984,18 +1055,62 @@ def main(argv=None):
     execution_plan = thread_budget(args)
     args.threads_per_seed = execution_plan['threads_per_seed']
     args.code_commit = provenance()
-    records,quota,disk,mismatches = inspect(args)
+    state = None
+    if args.reuse_pool:
+        directory = args.reuse_pool if args.reuse_pool.is_dir() else args.reuse_pool.parent
+        state = json.loads((directory/'pool-state.json').read_text())
+        for key in ('rows_per_snapshot','sample_seed','bz_weight','pol_weight'):
+            if state['settings'][key] != getattr(args,key): raise ValueError(f'reused pool setting differs: {key}')
+        if state['anchor'] != args.anchor or state['held_out'] != args.held_out:
+            raise ValueError('reused pool snapshot selection differs')
+        if [str(p.resolve()) for p in args.inputs] != [r['path'] for r in state['records']]:
+            raise ValueError('reused pool input paths differ')
+        records,quota,disk,mismatches = state['records'],state['quota'],state['disk'],state['mismatches']
+        if args.fit:
+            with h5py.File(directory/'pool.h5','r') as h:
+                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize)
+    else:
+        records,quota,disk,mismatches = inspect(args)
     args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
     args.anchor_attrs=next(r['attrs'] for r in records if r['snapshot']==args.anchor)
     out=args.out/'results.partial'; out.mkdir()
-    scaling=pool(args,records,quota,out)
+    if state is None:
+        scaling=pool(args,records,quota,out)
+        state = dict(records=records,quota=quota,disk=disk,mismatches=mismatches,scaling=scaling,
+                     settings={k:getattr(args,k) for k in APPROVED},anchor=args.anchor,held_out=args.held_out)
+    else:
+        scaling=state['scaling']
+        os.symlink((directory/'pool.h5').resolve(),out/'pool.h5')
+    dump(out/'pool-state.json',state)
+    if args.pool_only:
+        os.rename(out,args.out/'results'); return
+    collected=[]
+    if args.collect:
+        identity = one_line(state)
+        for location in args.collect:
+            location = location/'results' if (location/'results').is_dir() else location
+            if one_line(json.loads((location/'pool-state.json').read_text())) != identity:
+                raise ValueError('collection pools differ')
+            bundle = json.loads((location/'fit-results.json').read_text())
+            if bundle['bmu'] != args.bmu: raise ValueError('collection BMU backends differ')
+            for key,value in bundle['settings'].items():
+                if key not in ('lattices','seeds') and value != getattr(args,key):
+                    raise ValueError(f'collection fit settings differ: {key}')
+            for record in bundle['models']:
+                if record['tag'] in {r['tag'] for r in collected}: raise ValueError('duplicate collected fit')
+                collected.append(record)
+                for suffix in ('.h5','.json','-labels.npy','-umat.npy'):
+                    shutil.copyfile(location/(record['tag']+suffix),out/(record['tag']+suffix))
     fits=[]; choices=[]
     for shape in shapes:
-        trio=[]
+        trio=[r for r in collected if tuple(r['lattice_shape']) == shape]
+        trio.sort(key=lambda r: args.seeds.index(r['seed']) if r['seed'] in args.seeds else len(args.seeds))
+        if args.collect and {r['seed'] for r in trio} != set(args.seeds):
+            raise ValueError(f'incomplete collected seeds for {shape}')
         width=execution_plan['seed_workers']
-        for start in range(0,len(args.seeds),width):
+        for start in range(0,0 if args.collect else len(args.seeds),width):
             seeds=args.seeds[start:start+width]
             wave_args=copy.copy(args)
             if auto_threads:
@@ -1003,6 +1118,8 @@ def main(argv=None):
                 wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
                                                numba.config.NUMBA_NUM_THREADS)
             trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
+        if args.fit:
+            fits.extend(trio); continue
         # Decided once for the lattice and written into every seed's model before the frozen link.
         sheet_selection=group_selection(out,trio,args.chunk)
         idx,band=medoid([out/f"{r['tag']}-labels.npy" for r in trio],args.chunk)
@@ -1011,6 +1128,10 @@ def main(argv=None):
         choices.append(dict(shape=shape,medoid_seed=chosen['seed'],model=f'frozen-{shape[0]}x{shape[1]}.h5',**band,
                             sheet_selection=sheet_selection))
         fits.extend(trio)
+    if args.fit:
+        dump(out/'fit-results.json',dict(models=fits,settings={k:getattr(args,k) for k in APPROVED},bmu=args.bmu))
+        os.rename(out,args.out/'results'); return
+    if args.collect and len(fits) != len(collected): raise ValueError('unexpected collected lattice')
     attrs=args.anchor_attrs
     physics={k:attrs.get(k,UNAVAILABLE) for k in ['b2_min','s_v','accuracy','epsilon','exponent','gamma_K','C_B_box',
                                                'direction_norm','horizon_mask','horizon_centres','horizon_radius','horizon_mass','horizon_spin']}
