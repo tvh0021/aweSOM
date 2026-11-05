@@ -37,16 +37,16 @@ Keep the kit on lagoon. OUT defaults to `$KIT/runs/<job>-<jobid>`, which puts th
 ```bash
 K=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit
 cd $K
-sbatch --chdir=$K --export=ALL,KIT=$K $K/probe.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K $K/probe.sbatch
 # after the probe: read runs/probe-<id>/probe/{mpi-install.txt,hello-*.txt,sinfo.txt}
-sbatch --chdir=$K --export=ALL,KIT=$K,LATTICE=91x64 $K/threads.sbatch
-sbatch --chdir=$K --export=ALL,KIT=$K,LATTICE=160x100 $K/threads.sbatch
-sbatch --chdir=$K --export=ALL,KIT=$K $K/rows.sbatch
-sbatch --chdir=$K --partition=gp-default --export=ALL,KIT=$K $K/nodes.sbatch
-sbatch --chdir=$K --export=ALL,KIT=$K,LATTICE=91x64 $K/rows_1e9.sbatch
-sbatch --chdir=$K --export=ALL,KIT=$K,LATTICE=160x100 $K/rows_1e9.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=91x64 $K/threads.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=160x100 $K/threads.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K $K/rows.sbatch
+sbatch --output=$K/%x-%j.out --partition=gp-default --export=ALL,KIT=$K $K/nodes.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=91x64 $K/rows_1e9.sbatch
+sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=160x100 $K/rows_1e9.sbatch
 # only if the gate passes: $VENV/bin/python $K/summarize.py --check-gate $K/runs/nodes-<id>/summary/gate.json
-sbatch --chdir=$K --partition=gp-default --export=ALL,KIT=$K,GATE=$K/runs/nodes-<id>/summary/gate.json,REF_DIRS=$K/runs/rows1e9-91x64-<id>:$K/runs/rows1e9-160x100-<id> $K/nodes_1e9.sbatch
+sbatch --output=$K/%x-%j.out --partition=gp-default --export=ALL,KIT=$K,GATE=$K/runs/nodes-<id>/summary/gate.json,REF_DIRS=$K/runs/rows1e9-91x64-<id>:$K/runs/rows1e9-160x100-<id> $K/nodes_1e9.sbatch
 ```
 
 Before you submit, run `env -u SCALE_N -u LATTICES -u LATTICE -u OUT -u FORCE -u RESUME_RUN` so stray test settings stay out of the jobs. Each job refuses to start if its OUT already exists.
