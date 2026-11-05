@@ -736,6 +736,9 @@ def statistics_fields(args, raw, nodes, distances, labels, n_nodes, n_clusters, 
                       role='diagnostic only; plays no part in selection',statistic='median',**LEGACY_THRESHOLDS,IDs=legacy),
                   tube_rule=dict(status='characterisation only',bz_frac_gt=args.tube_bz,log_beta_inv_gt=args.tube_beta,IDs=tubes),
                   reject_distance=reject)
+    if set(fields) != set(STATISTIC_FIELDS):
+        raise ValueError('statistics fields differ from STATISTIC_FIELDS')
+    fields = {key: fields[key] for key in STATISTIC_FIELDS}
     metadata = dict(**{key:one_line(value) for key,value in exports.items()},
                     tube_clusters=','.join(map(str,tubes)),
                     tube_rule=f'characterisation only: median bz_frac > {args.tube_bz} and median log_beta_inv > {args.tube_beta}')

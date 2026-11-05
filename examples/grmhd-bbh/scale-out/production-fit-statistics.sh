@@ -9,8 +9,21 @@ case "$OUT" in /*) ;; *) echo 'OUT must be absolute' >&2; exit 2;; esac
 [ -d "$(dirname "$OUT")" ] || { echo 'OUT parent missing' >&2; exit 2; }
 [ -d "$FIT_OUT" ] || { echo 'FIT_OUT missing' >&2; exit 2; }
 [ -x "$VENV/bin/python" ] || { echo 'VENV python missing' >&2; exit 2; }
-# Three concurrent feature workers need 24 bytes/row of scratch; one needs 16.
-THREADS=${THREADS:-3}
+# Match feature concurrency to this fit, within the scheduler's CPU allocation.
+if [ -z "${THREADS:-}" ]; then
+  THREADS=$("$VENV/bin/python" - "$FIT_OUT" "${SLURM_CPUS_PER_TASK:?}" <<'PYTHON'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+if (source / 'results').is_dir():
+    source /= 'results'
+state = json.loads((source / 'pool-state.json').read_text())
+print(min(len(state['records'][0]['names']), int(sys.argv[2])))
+PYTHON
+  )
+fi
 [ "$THREADS" -ge 1 ] && [ "$THREADS" -le "${SLURM_CPUS_PER_TASK:?}" ] || { echo 'invalid thread budget' >&2; exit 2; }
 export NUMBA_NUM_THREADS=$THREADS OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export HDF5_USE_FILE_LOCKING=FALSE PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
