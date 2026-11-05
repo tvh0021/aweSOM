@@ -225,10 +225,21 @@ mpi_install() {
   local log="$OUT/probe/mpi-install.txt" vfile="$OUT/probe/mpi4py-version.txt" mod ver
   local wheels="$KIT/wheels" build=${MPI_BUILD:-wheel} rc=0
   case $build in wheel|source) ;; *) echo "MPI_BUILD must be wheel or source, not $build" | tee "$log"; return 2;; esac
-  if $PY -c 'import mpi4py' > /dev/null 2>&1; then echo "mpi4py already importable" | tee "$log"; return 0; fi
-  mkdir -p "$MPI_SITE"
   mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)
   ver=${mod##*/}
+  # Skip only if MPI itself loads and names the module's Open MPI version (kit_init has
+  # already loaded MPI_SITE/MODULE and exported MPI4PY_LIBMPI); a bare `import mpi4py`
+  # would pass on a half-installed site.
+  if mpi_check "$vfile" "$ver"; then
+    { echo "mpi4py already works with ${mod:-the default MPI}; not reinstalling"; cat "$vfile"; } | tee "$log"
+    return 0
+  fi
+  : > "$log"
+  if [ -d "$MPI_SITE" ] && [ -n "$(ls -A "$MPI_SITE")" ]; then
+    mv "$MPI_SITE" "$MPI_SITE.stale-${SLURM_JOB_ID:-local}-$(date +%s)"
+    echo "moved a non-working mpi-site to $MPI_SITE.stale-*; reinstalling" >> "$log"
+  fi
+  mkdir -p "$MPI_SITE"
   # Subshell: its exit status is the result; the module load here does not leak (kit_modules loads it).
   (
     echo "openmpi module: ${mod:-none}; MPI_BUILD=$build"
@@ -259,7 +270,7 @@ mpi_install() {
     [ "$rc" -eq 0 ] || echo "check failed: MPI must import, not as the MPICH flavour, and name Open MPI v$ver"
     [ "$rc" -eq 0 ] && echo "mpi4py OK" || echo "mpi4py install FAILED"
     exit "$rc"
-  ) > "$log" 2>&1 < /dev/null
+  ) >> "$log" 2>&1 < /dev/null
   rc=$?
   if [ "$rc" -ne 0 ] && [ -d "$MPI_SITE" ]; then
     # Keep a failed or mislinked build out of PYTHONPATH; the next probe starts clean.
