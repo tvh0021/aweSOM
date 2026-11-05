@@ -210,9 +210,12 @@ def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
         record = json.loads(pool.one_line(record))
         record.pop('phase_timings'); record.pop('wall_seconds')
         info = record['training_info']
-        # stream.train_batch_stream documents exactly these elapsed-second fields.
+        # stream.train_batch_stream documents exactly these elapsed-second fields
+        # (per epoch, plus the per-rank lists of the scale-out trainer).
         # Unknown future fields stay in the comparison, even if named *time*.
-        for key in ('epoch_time','io_wait','bmu_time','acc_time','update_time','final_time'):
+        for key in ('epoch_time','io_wait','bmu_time','acc_time','update_time','final_time',
+                    'reduce_time','checkpoint_time','rank_io_wait','rank_bmu','rank_acc',
+                    'rank_pass_time'):
             info.pop(key)
         return record
     assert without_timings(actual) == without_timings(expected)
