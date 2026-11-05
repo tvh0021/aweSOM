@@ -4,6 +4,25 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Deprecated
+
+- `Lattice.map_data_to_lattice` and `Lattice.assign_cluster_to_data` are
+  deprecated since 1.5.0 and emit a `DeprecationWarning`. Use
+  `Lattice.predict`, which returns the same labels. Both methods will be
+  removed in a future release. `Lattice.assign_cluster_to_lattice` and
+  `Lattice.best_match` are not deprecated.
+
+### Changed
+
+- `run_som.py`, the README walkthrough, the example scripts and the notebooks
+  now label data with `Lattice.predict`. The label files are unchanged. The
+  `som_object` pickle written by `run_som.py` no longer stores
+  `projection_1d` and `projection_2d`.
+- `Lattice.plot_heat` calls `best_match` directly instead of
+  `map_data_to_lattice`; it still sets `projection_1d` and `projection_2d`.
+
 ## [1.4.0] - 2026-11-05
 
 This release adds CPU inference (`aweSOM.inference`, `Lattice.predict`) and

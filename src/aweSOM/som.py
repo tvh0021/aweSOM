@@ -4,6 +4,7 @@
 ## with modifications by Trung Ha (2024) for aweSOM
 
 import sys
+import warnings
 from collections import Counter
 
 import numpy as np
@@ -339,12 +340,21 @@ class Lattice:
 
     def map_data_to_lattice(self):
         """
+        Deprecated since 1.5.0: use ``Lattice.predict``. This method will be
+        removed in a future release.
+
         After training, map each data point to the nearest node in the lattice.
 
         Returns:
                 np.ndarray[int]: A 2D array with the x and y coordinates of the best matching nodes for each data point.
         """
 
+        warnings.warn(
+            "Lattice.map_data_to_lattice is deprecated since 1.5.0: use "
+            "Lattice.predict. This method will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         print("Begin matching points with nodes", flush=True)
         data_to_lattice_1d = self.best_match(self.lattice, self.data_array)
 
@@ -441,11 +451,13 @@ class Lattice:
         return clusters
 
     @staticmethod
-    @njit(parallel=True)
     def assign_cluster_to_data(
         projection_2d: np.ndarray, clusters_on_lattice: np.ndarray
     ) -> np.ndarray:
         """
+        Deprecated since 1.5.0: use ``Lattice.predict``. This method will be
+        removed in a future release.
+
         Given a lattice and cluster assignments on that lattice, return the cluster ids of the data (in a 1d array)
 
         Args:
@@ -455,12 +467,13 @@ class Lattice:
         Returns:
                 np.ndarray: cluster_id of each data point
         """
-        cluster_id = np.zeros(projection_2d.shape[0], dtype=np.int32)
-        for i in prange(projection_2d.shape[0]):
-            cluster_id[i] = clusters_on_lattice[
-                int(projection_2d[i, 0]), int(projection_2d[i, 1])
-            ]
-        return cluster_id
+        warnings.warn(
+            "Lattice.assign_cluster_to_data is deprecated since 1.5.0: use "
+            "Lattice.predict. This method will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _assign_cluster_to_data_kernel(projection_2d, clusters_on_lattice)
 
     @staticmethod
     def best_match(
@@ -549,8 +562,9 @@ class Lattice:
 
         Uses the trained ``lattice`` and ``lattice_assigned_clusters``; if the
         latter does not exist yet, ``assign_cluster_to_lattice`` is called with
-        ``merge_cost`` (0.0 if None). Equivalent to ``map_data_to_lattice`` +
-        ``assign_cluster_to_data`` without the two full-size intermediates
+        ``merge_cost`` (0.0 if None). Replaces the deprecated
+        ``map_data_to_lattice`` + ``assign_cluster_to_data`` route and gives
+        the same labels without the two full-size intermediates
         (exactly with the default ``"screen"`` and with ``"numba"``; ``"kdtree"``
         can resolve exact ties differently).
 
@@ -1532,12 +1546,19 @@ class Lattice:
 
         # put the labels on the map if available
         if not (self.labels is None) and (len(self.labels) != 0):
-            self.map_data_to_lattice()  # obtain the projection_1d array
+            # best-matching node of each training point; projection_1d and
+            # projection_2d stay set as before for the deprecated
+            # assign_cluster_to_data route
+            projection_1d = self.best_match(self.lattice, self.data_array)
+            self.projection_1d = projection_1d
+            self.projection_2d = self.coordinate(
+                np.reshape(projection_1d, (len(projection_1d), 1)), self.xdim
+            )
 
             # count the labels in each map cell
             for i in range(nobs):
 
-                nix = self.projection_1d[i]
+                nix = projection_1d[i]
                 c = self.coordinate(
                     np.reshape(nix, (1, 1)), self.xdim
                 )  # NOTE: slow code
@@ -1550,7 +1571,7 @@ class Lattice:
             for i in range(nobs):
 
                 c = self.coordinate(
-                    np.reshape(self.projection_1d[i], (1, 1)), self.xdim
+                    np.reshape(projection_1d[i], (1, 1)), self.xdim
                 )  # NOTE: slow code
                 ix = int(c[0, 0])
                 iy = int(c[0, 1])
@@ -1566,6 +1587,19 @@ class Lattice:
 
         plt.show()
 
+
+
+@njit(parallel=True)
+def _assign_cluster_to_data_kernel(
+    projection_2d: np.ndarray, clusters_on_lattice: np.ndarray
+) -> np.ndarray:
+    """Cluster id of each data point from its node's x-y coordinates (int32)."""
+    cluster_id = np.zeros(projection_2d.shape[0], dtype=np.int32)
+    for i in prange(projection_2d.shape[0]):
+        cluster_id[i] = clusters_on_lattice[
+            int(projection_2d[i, 0]), int(projection_2d[i, 1])
+        ]
+    return cluster_id
 
 @njit()
 def _som_schedule(

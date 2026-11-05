@@ -48,7 +48,8 @@ def trained_map(map: Lattice):
 
 @pytest.fixture
 def map_after_mapping(trained_map: Lattice):
-    trained_map.map_data_to_lattice()
+    with pytest.warns(DeprecationWarning):
+        trained_map.map_data_to_lattice()
     trained_map.assign_cluster_to_lattice()
     # add more here
     return trained_map
@@ -127,9 +128,10 @@ def test_assign_cluster_to_lattice(map_after_mapping: Lattice):
 
 def test_assign_cluster_to_data(map_after_mapping: Lattice):
     print("Testing assigning cluster ids to data", flush=True)
-    som_labels = map_after_mapping.assign_cluster_to_data(
-        map_after_mapping.projection_2d, map_after_mapping.lattice_assigned_clusters
-    )
+    with pytest.warns(DeprecationWarning):
+        som_labels = map_after_mapping.assign_cluster_to_data(
+            map_after_mapping.projection_2d, map_after_mapping.lattice_assigned_clusters
+        )
     assert som_labels.shape == (data_dims[0],)
 
 

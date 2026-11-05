@@ -51,6 +51,7 @@ How do I assign clusters to new data?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Scale the new data like the training data and call ``map.predict(new_data)``. It returns the int32 cluster id of each point,
 the same result as ``map_data_to_lattice`` followed by ``assign_cluster_to_data``, without the intermediate arrays.
+That two-step route is deprecated since v1.5.0 and will be removed in a future release; use ``predict`` instead.
 ``aweSOM.predict(weights, node_cluster, data)`` does the same from a weight array and one cluster id per node.
 
 Which search does ``best_match`` use?
