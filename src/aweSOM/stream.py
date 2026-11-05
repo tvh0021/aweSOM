@@ -758,12 +758,16 @@ def train_batch_stream(
         qe_initial = math.nan
         start = 0
         expect = dict(xdim=int(xdim), ydim=int(ydim), n_feat=int(n_feat), n_samples=int(n_total),
-                      epochs=int(epochs), sample_fraction=float(sample_fraction))
+                      epochs=int(epochs), sample_fraction=float(sample_fraction), chunk=int(chunk),
+                      groups=int(groups))
         if sample_fraction < 1.0:
             expect.update(sample_seed=int(s_seed), sample_block=int(sample_block))
 
         if resume and os.path.exists(checkpoint):
             meta, arrays = read_checkpoint(checkpoint)
+            if meta.get("ranks") != size:
+                raise ValueError(f"checkpoint was written by a run with {meta.get('ranks')} rank(s), this run has "
+                                 f"{size}; resume with the same number of ranks")
             for k, v in expect.items():
                 if meta.get(k) != v:
                     raise ValueError(f"checkpoint has {k}={meta.get(k)!r}, this run {v!r}")
@@ -803,8 +807,7 @@ def train_batch_stream(
         def save(e: int) -> None:
             calls = getattr(fn, "calls", None) if fn is not None else None
             meta = dict(format=CHECKPOINT_FORMAT, epoch=e + 1, **expect)
-            meta.update(sample_seed=int(s_seed), sample_block=int(sample_block), seed=int(seed), chunk=int(chunk),
-                        groups=int(groups), bmu=bmu, bmu_kind=bmu_kinds, qe_initial=qe_initial,
+            meta.update(sample_seed=int(s_seed), sample_block=int(sample_block), seed=int(seed), bmu=bmu, bmu_kind=bmu_kinds, qe_initial=qe_initial,
                         calls=None if calls is None else int(calls), ranks=size,
                         rank_records=rank_rec, git_commit=commit, version=_version())
             arrays = dict(weights=w, radius=radii, qe=qe_after, rows_per_epoch=rows,

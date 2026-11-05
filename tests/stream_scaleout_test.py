@@ -188,6 +188,17 @@ def test_resume_without_file_starts_fresh_and_checks_settings(tmp_path, small):
     assert info["resumed_from"] == 0 and sha(w0) == sha(w1)
     with pytest.raises(ValueError, match="xdim"):
         train_batch_stream(small, 4, 5, epochs=3, chunk=4096, checkpoint=ck, resume=True)
+    with pytest.raises(ValueError, match="chunk"):
+        train_batch_stream(small, 5, 4, epochs=3, chunk=2048, checkpoint=ck, resume=True)
+    with pytest.raises(ValueError, match="groups"):
+        train_batch_stream(small, 5, 4, epochs=3, chunk=4096, groups=32, checkpoint=ck, resume=True)
+    meta, arrays = read_checkpoint(ck)
+    meta["ranks"] = 2
+    stream._write_checkpoint(ck, arrays, meta)
+    with pytest.raises(ValueError, match="2 rank"):
+        train_batch_stream(small, 5, 4, epochs=3, chunk=4096, checkpoint=ck, resume=True)
+    meta["ranks"] = 1
+    stream._write_checkpoint(ck, arrays, meta)
     with pytest.raises(ValueError, match="radius"):
         train_batch_stream(small, 5, 4, epochs=3, r_min=1, chunk=4096, checkpoint=ck, resume=True)
     with pytest.raises(ValueError, match="checkpoint path"):
