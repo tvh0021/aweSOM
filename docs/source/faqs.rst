@@ -47,6 +47,10 @@ This will identify/merge cluster centroids, then assign each node to the nearest
 A more subtle way to control the number of clusters is to modify the SOM hyperparameters, such as the aspect ratio of the lattice, the learning rate, and the number of epochs. These parameters are less trivial
 in how they modify the number of clusters, so it is recommended to start with the three main ways mentioned above.
 
+Is training reproducible?
+~~~~~~~~~~~~~~~~~~~~~~~~~
+Since v1.5.0, ``train_lattice`` draws the initial lattice and the sample order from ``map.seed`` (42 by default; set it before training), so the same seed and data give the same lattice.
+
 How do I assign clusters to new data?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Scale the new data like the training data and call ``map.predict(new_data)``. It returns the int32 cluster id of each point,

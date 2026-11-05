@@ -13,19 +13,13 @@ data = np.random.default_rng(2024).random(data_dims)
 
 
 @pytest.fixture
-def map(monkeypatch):
+def map():
     print("Setting up the test", flush=True)
 
-    # Training draws the initial lattice from the global NumPy state and
-    # shuffles the data with an unseeded np.random.default_rng(). Fix both so
-    # the trained map, and the cluster counts tested below, are the same on
-    # every run.
-    unseeded_default_rng = np.random.default_rng
-    monkeypatch.setattr(
-        np.random,
-        "default_rng",
-        lambda seed=None: unseeded_default_rng(2024 if seed is None else seed),
-    )
+    # Training seeds the initial lattice and the sample order from
+    # Lattice.seed (42), so the trained map, and the cluster counts tested
+    # below, are the same on every run. The global seed fixes the random
+    # nodes the tests below pick with np.random.
     np.random.seed(42)
 
     # Initialize the lattice
@@ -241,6 +235,23 @@ def test_compute_umat(map_after_mapping: Lattice):
 
     for k in range(10):
         assert diff_arr[k] < 1e-5
+
+
+def test_final_umat_uses_final_lattice():
+    # 1003 steps with save_frequency 5: the last snapshot is step 1000, so the
+    # final lattice differs from the last entry of lattice_history
+    lattice = Lattice(
+        xdim=6,
+        ydim=5,
+        alpha_0=0.5,
+        train=1003,
+        alpha_type="static",
+        sampling_type="uniform",
+    )
+    assert lattice.save_frequency == 5
+    lattice.train_lattice(data, features_names)
+    assert not np.array_equal(lattice.lattice_history[-1], lattice.lattice)
+    np.testing.assert_array_equal(lattice.umat, lattice.compute_umat())
 
 
 if __name__ == "__main__":
