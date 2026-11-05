@@ -4,12 +4,13 @@
 ## https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning
 ## If GPU-enabled, capable of handling 1000^3 data with 1 A100-80GB GPU.
 ##
-## loop_over_all_clusters works on per-run contingency tables (cluster-pair cell counts
-## from np.bincount), so the cost is O(runs^2 * cells) instead of O(clusters^2 * cells)
-## and the ensemble loop runs on the CPU in seconds (28 maps x 128^3 cells: 10 s against
-## 411 s CPU / 230 s Metal for the original mask-by-mask loop). Outputs are bitwise
-## identical to the mask-by-mask loop on the NumPy backend. compute_SQ / create_mask are
-## kept (JAX-accelerated when a GPU or Metal backend is present) for direct use.
+## loop_over_all_clusters works on per-run-pair contingency tables (cluster-pair cell
+## counts from a Numba kernel or np.bincount), so the cost is O(runs^2 * cells) instead of
+## O(clusters^2 * cells) and the ensemble loop runs on the CPU in seconds (28 maps x 128^3
+## cells on a laptop: 2.6 s with float32 masks, 5.0 s with float64, 0.47 s without masks,
+## against 338 s for the v1.1.3 mask-by-mask loop). With mask_dtype=np.float64 the outputs
+## are bitwise identical to the mask-by-mask loop on the NumPy backend. compute_SQ and
+## create_mask are kept (JAX-accelerated when a GPU or Metal backend is present) for direct use.
 
 import os
 import glob
@@ -265,6 +266,7 @@ def loop_over_all_clusters(
     dimensions: np.ndarray,
     subfolder: str = "SCE",
     write_masks: bool = True,
+    mask_dtype=np.float32,
 ) -> int:
     """
     Loops over all clusters in the given data, compute goodness-of-fit, then save Gsum values to file.
@@ -273,8 +275,9 @@ def loop_over_all_clusters(
     done on contingency tables (one ``np.bincount`` per pair of runs) instead
     of on full-size masks. Each pair's quality index depends only on the two
     cluster sizes and their overlap (``pair_quality_from_counts``), and the
-    saved per-cell map is the cluster mask times its total Gsum, so the output
-    files are identical bit for bit to the original mask-by-mask loop while
+    saved per-cell map is the cluster mask times its total Gsum, so with
+    ``mask_dtype=np.float64`` the output files are identical bit for bit to
+    the original mask-by-mask loop while
     the work drops from O(clusters^2 x cells) to O(runs^2 x cells). This path
     always runs in NumPy; ``create_mask`` and ``compute_SQ`` remain available
     (and JAX-jitted on a GPU) for callers that want per-pair maps.
@@ -284,16 +287,19 @@ def loop_over_all_clusters(
         number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
         dimensions (np.ndarray): A 1d array representing the dimensions of the clusters (can be any dimension but nx*ny*nz has to be equal to number of data points).
         subfolder (str): The name of the subfolder to save the results to.
-        write_masks (bool): write one full-size float64 ``mask-<run>-id<cid>.npy`` per cluster
+        write_masks (bool): write one full-size ``mask-<run>-id<cid>.npy`` per cluster
             (the default). Each is the run's cluster mask times its Gsum, so
             ``make_sce_clusters.combine_separated_clusters_from_labels`` can rebuild the
             combined map from the label files and ``multimap_mappings.txt`` alone; pass
-            False to skip these writes (8 bytes per cell per cluster).
+            False to skip these writes (4 bytes per cell per cluster in float32).
+        mask_dtype (np.dtype or str): dtype of the mask files; the default float32 rounds the Gsum
+            at about 6e-8 relative, and ``mask_dtype=np.float64`` restores the v1.1.3 files exactly.
 
     Returns:
         Save Gsum value of each cluster C to a file.
     """
     runs = list(all_files)
+    mask_dtype = np.dtype(mask_dtype)
     nids = [int(n) for n in np.asarray(number_of_clusters).reshape(-1)]
     dimensions = tuple(int(d) for d in np.asarray(dimensions).reshape(-1))
     labels = [_load_labels(run) for run in runs]
@@ -360,7 +366,7 @@ def loop_over_all_clusters(
             total_SQ_scalar = totals[cid]
             # every cell of this cluster accumulated exactly the same SQ values in the same order
             if write_masks:
-                total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).reshape(dimensions)
+                total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).astype(mask_dtype, copy=False).reshape(dimensions)
                 np.save(subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid), total_mask)
             with open(subfolder + "/multimap_mappings.txt", "a") as f:
                 f.write("{} {}\n".format(cid, total_SQ_scalar))
@@ -418,6 +424,13 @@ def parse_args():
         help="Do not write the full-size mask-*.npy files; make_sce_clusters --labels_path rebuilds the combined map from the label files",
     )
 
+    parser.add_argument(
+        "--mask_dtype",
+        choices=["float32", "float64"],
+        default="float32",
+        help="dtype of the mask-*.npy files; float64 writes the same files as v1.1.3",
+    )
+
     return parser.parse_args()
 
 
@@ -460,4 +473,6 @@ if __name__ == "__main__":
     # --------------------------------------------------
     # loop over data files reading image by image and do pairwise comparisons
     # all wrapped inside the loop_over_all_clusters function, which uses JAX for fast computation
-    loop_over_all_clusters(cluster_files, nids_array, data_dims, subfolder, write_masks=args.write_masks)
+    loop_over_all_clusters(
+        cluster_files, nids_array, data_dims, subfolder, write_masks=args.write_masks, mask_dtype=args.mask_dtype
+    )

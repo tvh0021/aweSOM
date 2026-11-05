@@ -220,7 +220,6 @@ def combine_separated_clusters(
             flush=True,
         )
 
-        # cannot use jax here because it uses too much memory; cannot use numba because it does not support np.load; loading all binary maps in each cluster at once will use more memory, but is also ~30% faster than loading them sequentially and adding to total every step.
         this_cluster_signal_map = np.zeros(
             ([len(remapped_clusters[cluster])] + dims), dtype=np.float32
         )
@@ -238,7 +237,7 @@ def combine_separated_clusters(
 
 
 def combine_separated_clusters_from_labels(
-    map_list: list, cluster_ranges: list[list[int]], dims: list[int], labels_path: str
+    map_list: list, cluster_ranges: list[list[int]], dims: list[int], labels_path: str, mask_dtype=np.float32
 ) -> np.ndarray:
     """Same result as ``combine_separated_clusters``, built from the label files.
 
@@ -248,14 +247,16 @@ def combine_separated_clusters_from_labels(
     zeros of non-matching masks is exact, and ``np.sum(axis=0)`` adds the stack
     in order whenever there is more than one cell (a one-cell map repeats
     NumPy's pairwise reduction), so the result is bitwise identical to
-    summing the mask files, without writing or reading them (mask files take 8
-    bytes per cell per SCE cluster).
+    summing the mask files, without writing or reading them (mask files take 4
+    bytes per cell per SCE cluster in float32, 8 in float64).
 
     Args:
         map_list (list): ``[Gsum, cid, run_name]`` entries from ``get_gsum_values``.
         cluster_ranges (list[list[int]]): start and end indices of each combined cluster.
         dims (list[int]): dimensions of the label maps.
         labels_path (str): folder holding ``<run_name>.npy`` label files.
+        mask_dtype (np.dtype or str): the ``mask_dtype`` the mask files were written with; each Gsum is
+            rounded to it (float32 rounds at about 6e-8 relative, ``np.float64`` as in v1.1.3) before the sum.
 
     Returns:
         np.ndarray: float32 array of shape ``[len(cluster_ranges)] + dims``.
@@ -280,7 +281,8 @@ def combine_separated_clusters_from_labels(
         inst = map_list[start_pointer:end_pointer]
         runs = np.array([run_index[name] for _, _, name in inst], dtype=np.int64)
         cids = np.array([int(cid) for _, cid, _ in inst], dtype=np.int64)
-        gsums = np.array([np.float32(np.float64(g)) for g, _, _ in inst], dtype=np.float32)
+        # the mask files hold Gsum in mask_dtype and combine_separated_clusters copies them into float32
+        gsums = np.array([np.float64(g) for g, _, _ in inst], dtype=np.float64).astype(mask_dtype).astype(np.float32)
         if n_cells == 1:
             # NumPy sums a one-cell stack pairwise rather than in order; repeat its reduction
             vals = np.where(labels[runs, 0] == cids, gsums, np.float32(0.0))

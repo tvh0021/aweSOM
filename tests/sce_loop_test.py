@@ -89,7 +89,8 @@ def _assert_same(out):
 def _run_both(tmp_path, files, dims):
     nids = sce.find_number_of_clusters(files)
     out = {}
-    for name, fn in (("new", sce.loop_over_all_clusters), ("ref", reference_loop)):
+    new_loop = lambda *a: sce.loop_over_all_clusters(*a, mask_dtype=np.float64)  # the reference writes float64
+    for name, fn in (("new", new_loop), ("ref", reference_loop)):
         sub = tmp_path / name
         sub.mkdir()
         open(sub / "multimap_mappings.txt", "w").close()
@@ -204,3 +205,39 @@ def test_loop_paths_match_reference(tmp_path, monkeypatch, cache_bytes):
     dims = (11, 13, 5)
     files = _write_runs(str(tmp_path), rng, dims, [(4, np.uint8, None), (6, np.int32, 1), (5, np.int64, None), (3, np.int16, None)])
     _assert_same(_run_both(tmp_path, files, dims))
+
+
+def test_default_float32_masks(tmp_path, monkeypatch):
+    """Default mask files are float32 roundings of the float64 ones; the combined maps do not change."""
+    from aweSOM import make_sce_clusters as msc
+
+    monkeypatch.chdir(tmp_path)
+    rng = np.random.default_rng(5)
+    dims = [9, 10, 11]
+    files = []
+    for k, f in enumerate(_write_runs(str(tmp_path), rng, dims, [(5, np.int64, None), (6, np.int32, 3), (4, np.uint8, None)])):
+        os.rename(f, f"labels.run-{k}.npy")  # get_gsum_values needs a '-' in run names
+        files.append(f"labels.run-{k}.npy")
+    nids = sce.find_number_of_clusters(files)
+    for sub, kw in (("f32", {}), ("f64", {"mask_dtype": np.float64})):
+        os.mkdir(sub)
+        open(sub + "/multimap_mappings.txt", "w").close()
+        with contextlib.redirect_stdout(io.StringIO()):
+            sce.loop_over_all_clusters(files, nids, np.array(dims), sub, **kw)
+    assert open("f32/multimap_mappings.txt").read() == open("f64/multimap_mappings.txt").read()
+    _, map_list = msc.get_gsum_values("f32/multimap_mappings.txt")
+    assert len(map_list) == int(np.sum(nids))
+    for gsum, cid, run in map_list:
+        m32 = np.load(f"f32/mask-{run}-id{cid}.npy")
+        m64 = np.load(f"f64/mask-{run}-id{cid}.npy")
+        assert m32.dtype == np.float32 and m64.dtype == np.float64 and m32.shape == m64.shape
+        assert np.allclose(m32.astype(np.float64), m64, rtol=1e-6, atol=0)
+        assert np.all(m32[m32 != 0] == np.float32(gsum))
+    ranges = [[0, 4], [4, 9], [9, len(map_list)]]
+    with contextlib.redirect_stdout(io.StringIO()):
+        from_f32 = msc.combine_separated_clusters(map_list, ranges, dims, "f32")
+        from_f64 = msc.combine_separated_clusters(map_list, ranges, dims, "f64")
+    from_labels = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, ".")
+    from_labels_f64 = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, ".", mask_dtype=np.float64)
+    assert from_labels.tobytes() == from_f32.tobytes()
+    assert from_labels_f64.tobytes() == from_f64.tobytes() == from_f32.tobytes()

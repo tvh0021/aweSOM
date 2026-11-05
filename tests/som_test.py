@@ -13,8 +13,20 @@ data = np.random.default_rng(2024).random(data_dims)
 
 
 @pytest.fixture
-def map():
+def map(monkeypatch):
     print("Setting up the test", flush=True)
+
+    # Training draws the initial lattice from the global NumPy state and
+    # shuffles the data with an unseeded np.random.default_rng(). Fix both so
+    # the trained map, and the cluster counts tested below, are the same on
+    # every run.
+    unseeded_default_rng = np.random.default_rng
+    monkeypatch.setattr(
+        np.random,
+        "default_rng",
+        lambda seed=None: unseeded_default_rng(2024 if seed is None else seed),
+    )
+    np.random.seed(42)
 
     # Initialize the lattice
     map = Lattice(
