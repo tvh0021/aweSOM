@@ -854,15 +854,26 @@ def train_batch_stream(
                     + (f", reduce {t1 - t_red:.3f}, ranks {size}" if red is not None else "") + ")",
                     flush=True,
                 )
-            if checkpoint is not None:
-                if root:
-                    t3 = time.perf_counter()
-                    save(e)
-                    rec["checkpoint_time"][e] = time.perf_counter() - t3
-                if red is not None:
-                    red.barrier()  # the file is complete before any rank can read it
-            if callback is not None and root:
-                callback(e, w.copy())
+            # Checkpoint and callback run on rank 0 only. Its outcome is broadcast, so a
+            # failure or a stop raised by the callback ends every rank, not only rank 0;
+            # the broadcast also keeps the other ranks until the file is complete.
+            stop = None
+            if root:
+                try:
+                    if checkpoint is not None:
+                        t3 = time.perf_counter()
+                        save(e)
+                        rec["checkpoint_time"][e] = time.perf_counter() - t3
+                    if callback is not None:
+                        callback(e, w.copy())
+                except BaseException as exc:
+                    stop = exc
+            if red is not None and (checkpoint is not None or callback is not None):
+                status = red.bcast_object(None if stop is None else repr(stop))
+                if status is not None and not root:
+                    raise RuntimeError(f"rank 0 stopped training after epoch {e + 1}: {status}")
+            if stop is not None:
+                raise stop
 
         t0 = time.perf_counter()
         hits = np.zeros(0, np.int64)

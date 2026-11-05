@@ -315,3 +315,14 @@ def test_mpi_fixed_rank_count_is_bitwise_reproducible(tmp_path):
     a = run_worker(3, tmp_path / "a", "array64")
     b = run_worker(3, tmp_path / "b", "array64")
     assert sha(a[0]["weights"]) == sha(b[0]["weights"])
+
+
+@needs_mpi
+def test_mpi_rank0_stop_or_failure_ends_every_rank(tmp_path):
+    """A callback stop or checkpoint failure on rank 0 must not leave rank 1 in a collective."""
+    outs = run_worker(2, tmp_path, "stop")
+    assert len(outs) == 2
+    r0, r1 = (list(o["outcome"]) for o in outs)
+    assert r0 == ["Stop", "OSError"]
+    assert r1[0].startswith("rank 0 stopped training after epoch 1: Stop(")
+    assert r1[1].startswith("rank 0 stopped training after epoch 1: FileNotFoundError(")

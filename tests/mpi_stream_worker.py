@@ -119,6 +119,24 @@ def main(scenario, out):
         w, info, src = run_callable(x, comm, checkpoint=ck, resume=True)
         w_full, _, _ = run_callable(x, comm)
         res.update(resumed=w, uninterrupted=w_full, resumed_from=info["resumed_from"], calls=src.calls)
+    elif scenario == "stop":
+        # Rank 0's callback stops the run after epoch 1; then rank 0's checkpoint write fails.
+        def cb(e, w):
+            if e == 0:
+                raise Stop
+
+        outcome = []
+        for kw in (dict(callback=cb), dict(checkpoint=str(Path(out) / "missing-dir" / "ck.npz"))):
+            try:
+                train_batch_stream(x, *LATTICE, epochs=3, chunk=2048, seed=SEED, final_pass="none", comm=comm, **kw)
+                outcome.append("finished")
+            except Stop:
+                outcome.append("Stop")
+            except OSError:
+                outcome.append("OSError")
+            except RuntimeError as exc:
+                outcome.append(str(exc))
+        res.update(outcome=np.array(outcome))
     else:
         raise SystemExit(f"unknown scenario {scenario}")
     np.savez(Path(out) / f"rank{rank}.npz", **res)
