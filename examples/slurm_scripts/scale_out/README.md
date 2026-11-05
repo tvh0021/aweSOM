@@ -18,9 +18,9 @@ These jobs time the streaming SOM trainer on synthetic gmm_bbh7 rows. The genera
 | `summarize.py` | builds `summary.md` (rates, efficiencies, reduction, io_wait, RSS, I/O, and a labelled projection to 72 and 144 cores) and `gate.json` |
 | `probe.py` | node environment JSON and the file write/read rate tests |
 | `gmm_bbh7.npz` | generator parameters, copied from the Z-scale kit |
-| `aweSOM-src/`, `kit-manifest.json` | vendored aweSOM source and the hashes of every file; only in a kit built by `make_kit.sh` |
+| `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py build files, and the hashes of every file; only in a kit built by `make_kit.sh` |
 
-In the repository, `make_kit.sh DEST [REVISION]` builds a kit from a committed revision. `scale_out.py` checks the vendored package against `kit-manifest.json` and records the result in `run.json` under `source.package_matches_manifest`.
+In the repository, `[WHEELS=DIR] make_kit.sh DEST [REVISION]` builds a kit from a committed revision. `scale_out.py` checks the vendored package against `kit-manifest.json` and records the result in `run.json` under `source.package_matches_manifest`.
 
 ## Copy to the cluster (run on the laptop)
 
@@ -37,7 +37,7 @@ Keep the kit on lagoon. OUT defaults to `$KIT/runs/<job>-<jobid>`, which puts th
 ```bash
 K=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit
 cd $K
-sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K $K/probe.sbatch
+sbatch --output=$K/%x-%j.out --partition=gp-default --nodes=2 --export=ALL,KIT=$K $K/probe.sbatch
 # after the probe: read runs/probe-<id>/probe/{mpi-install.txt,hello-*.txt,sinfo.txt}
 sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=91x64 $K/threads.sbatch
 sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=160x100 $K/threads.sbatch
@@ -56,19 +56,40 @@ Before you submit, run `env -u SCALE_N -u LATTICES -u LATTICE -u OUT -u FORCE -u
 Each file sets `--partition=debug`, as the brief asks. The 2026-10-28 `sinfo` listed one debug node, lm-n0001 (48 cores, 770 GB). On debug:
 
 - `nodes.sbatch` and `nodes_1e9.sbatch` cannot start, because they need 4 nodes.
-- `probe.sbatch` asks for 1 or 2 nodes and gets 1, which leaves no second node for the cold read.
+- `probe.sbatch` asks for 1 or 2 nodes and gets 1, which leaves no second node for the 2-node launcher test or the cold read (job 8401).
 - the single-node jobs run on a different CPU from jobs 8238 and 8243 (gp-n0013, Xeon Gold 6130).
 
-The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. For the cold read on a second node, also submit the probe with `--partition=gp-default`. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
+The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. Submit the probe with `--partition=gp-default --nodes=2`, as above, so the 2-node launcher test and the cold read run. mpi4py is installed once, by the batch shell on the first node, before any `srun`, so the two nodes never write `mpi-site/` at the same time. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
 
 ## MPI
 
-`probe.sbatch` installs MPI support in two steps:
+Compute nodes have no internet (probe 8401 could not resolve pypi.org). `probe.sbatch` therefore builds mpi4py offline:
 
-1. If the venv cannot import mpi4py, it builds mpi4py into `$KIT/mpi-site` (`pip install --target`) against the newest `openmpi` module and records that module in `mpi-site/MODULE`. The other jobs load that module and put `mpi-site` on `PYTHONPATH`.
-2. If no module builds, it installs the PyPI `mpi4py` and `openmpi` wheels instead. This needs network access from the compute node.
+1. If the venv cannot import mpi4py, it loads the newest `openmpi` module (`openmpi4/4.1.6` on GP) and runs `MPICC=$(command -v mpicc) pip install --no-index --find-links $KIT/wheels --target $KIT/mpi-site --no-binary mpi4py mpi4py`. It records the module in `mpi-site/MODULE` and checks that `MPI.Get_library_version()` names the module's Open MPI version. The other jobs load that module and put `mpi-site` on `PYTHONPATH`. A failed or mislinked build is moved to `mpi-site.failed-<job>-<time>`.
+2. Only if the kit has no `wheels/`, it tries the same build from PyPI, then the PyPI `mpi4py` and `openmpi` wheels. Both need network access from the node, which GP compute nodes do not have.
 
-If both steps fail, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one.
+Do not use the `py3-mpi4py` module: it is built for the system python, not the 3.11 venv.
+
+### Offline wheels
+
+`make_kit.sh` copies `WHEELS` (default `/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels`) into the kit as `wheels/`, checks each file against `WHEELS/SHA256SUMS`, and lists each file's sha256 under `wheels` in `kit-manifest.json`. The wheels stay out of git. The directory holds the mpi4py sdist and its build-isolation requirements: `setuptools >= 42` and `build` (from mpi4py's `pyproject.toml`), their dependencies `packaging` and `pyproject_hooks`, and `cython >= 3.0.1`, which the build needs because the sdist has no generated `MPI.c`. Cython comes twice: the cp311 manylinux x86_64 wheel, which pip picks on the cluster, and the pure-Python wheel as a slower fallback.
+
+To rebuild the directory, run this on a machine with internet:
+
+```bash
+W=/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels
+pip download --no-deps --no-binary :all: -d $W mpi4py==4.1.2
+pip download --no-deps --only-binary :all: -d $W setuptools==84.2.1 build==1.6.1 packaging==26.3 pyproject_hooks==1.3.3
+pip download --no-deps --only-binary :all: --python-version 3.11 --implementation cp --abi cp311 \
+  --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 -d $W cython==3.3.1
+pip download --no-deps --only-binary :all: --python-version 3.11 --implementation py --abi none \
+  --platform any -d $W cython==3.3.1
+(cd $W && shasum -a 256 *.whl *.tar.gz > SHA256SUMS)
+```
+
+To check that the set is complete, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py` on the laptop. It builds against Homebrew Open MPI if `mpicc` is on PATH.
+
+If the build still fails, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one.
 
 ## Time estimates
 
@@ -94,5 +115,5 @@ If rows_1e9 hits its limit at 160x100, resubmit it with `RESUME_RUN=$K/runs/rows
 | `runs/<run>/run.json` | settings; per-epoch seconds, rows, rows/s, BMU, accumulate, update, reduction and checkpoint times; per-rank rows and pass times; nodes; peak RSS per rank; git commit; manifest check |
 | `summary/summary.md`, `summary/gate.json` | tables and the 1e9 gate |
 | `parity/parity.md` | max rel diff of each multi-rank run against its 1-rank reference |
-| `probe/` | sinfo, modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs |
+| `probe/` | sinfo (job nodes, then every partition and node with gres), modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs |
 | `logs/<run>.log`, `status/<job>-<restart>/final.tsv` | run logs; VALIDATED or FAILED |
