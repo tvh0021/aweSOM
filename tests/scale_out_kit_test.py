@@ -1,4 +1,4 @@
-"""examples/slurm_scripts/scale_out: the 1e9 gate of summarize.py."""
+"""examples/slurm_scripts/scale_out: the 1e9 gate and the projection label of summarize.py."""
 import importlib.util
 import json
 from pathlib import Path
@@ -30,3 +30,11 @@ def test_gate_file_from_one_lattice_sweep_fails_a_two_lattice_job(tmp_path):
     g.write_text(json.dumps(dict(threshold=0.7, efficiency={"91x64": {"2": 0.8, "4": 0.8}}, passed=True)))
     assert summarize.main(["--check-gate", str(g), "--lattices", "91x64", "160x100"]) == 1
     assert summarize.main(["--check-gate", str(g), "--lattices", "91x64"]) == 0
+
+
+def test_projection_label_is_the_recorded_baseline():
+    r = dict(environment=dict(lscpu={"Model name": "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz"},
+                              slurm={"SLURM_JOB_PARTITION": "gp-default"}), nodes=["gp-n0013"])
+    assert summarize.baseline_label(r) == "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz, gp-default, gp-n0013"
+    r = dict(environment=dict(lscpu={}, slurm={}, platform="macOS-arm64"), nodes=[])
+    assert summarize.baseline_label(r) == "macOS-arm64, no partition, unknown node"

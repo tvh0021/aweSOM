@@ -62,6 +62,15 @@ def setup(r):
     return s["lattice"], int(s["n"])
 
 
+def baseline_label(r):
+    """CPU model, partition and node of a run, as recorded in its run.json."""
+    env = r.get("environment", {})
+    cpu = env.get("lscpu", {}).get("Model name") or env.get("platform") or "unknown CPU"
+    part = env.get("slurm", {}).get("SLURM_JOB_PARTITION") or "no partition"
+    nodes = ",".join(r.get("nodes", [])) or "unknown node"
+    return f"{cpu}, {part}, {nodes}"
+
+
 def fmt(x, spec):
     return "" if x is None else format(x, spec)
 
@@ -123,17 +132,20 @@ def main(argv=None):
                        f"{x.get('seconds', 0):.1f} | {x.get('gb_per_s', 0):.3f} | {x.get('note', '')} |")
     out += ["", "# PROJECTION (not measured): 72 and 144 Arm cores", "",
             "Per-core rate = measured 1-node 32-thread rate / 32, times cores, times a per-core speed factor "
-            "(1x, 1.5x, 2x of a Xeon Gold 6130 core). Assumes linear thread scaling beyond 32 threads; compare "
-            "with the measured thread efficiency above. Hours = 40 epochs x N rows / rate.", "",
-            "| lattice | n measured | cores | factor | projected Mrows/s | 40 epochs at 1e9, h | 40 epochs at 1e10, h |",
-            "|---|---|---|---|---|---|---|"]
+            "(1x, 1.5x, 2x of one core of the baseline run, whose CPU, partition and node are in the last "
+            "column). Assumes linear thread scaling beyond 32 threads; compare with the measured thread "
+            "efficiency above. Hours = 40 epochs x N rows / rate.", "",
+            "| lattice | n measured | cores | factor | projected Mrows/s | 40 epochs at 1e9, h | 40 epochs at 1e10, h "
+            "| baseline CPU, partition, node |",
+            "|---|---|---|---|---|---|---|---|"]
     for k, r in sorted(base.items()):
         per_core = r["rows_per_second"] / 32
+        label = baseline_label(r)
         for cores in (72, 144):
             for factor in (1.0, 1.5, 2.0):
                 rate = per_core * cores * factor
                 out.append(f"| {k[0]} | {k[1]:.0e} | {cores} | {factor:g}x | {rate / 1e6:.2f} | "
-                           f"{40 * 1e9 / rate / 3600:.2f} | {40 * 1e10 / rate / 3600:.1f} |")
+                           f"{40 * 1e9 / rate / 3600:.2f} | {40 * 1e10 / rate / 3600:.1f} | {label} |")
     ok, reasons = gate_check(gate)
     out += ["", f"# Gate for nodes_1e9.sbatch: node efficiency >= {GATE} at 1e8 rows on 2 and 4 nodes, "
             f"lattices {', '.join(LATTICES)}", "", json.dumps(gate), "", "PASS" if ok else "NOT MET"] + reasons
