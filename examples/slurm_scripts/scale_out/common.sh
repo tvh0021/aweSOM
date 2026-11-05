@@ -87,6 +87,10 @@ env_probe() {
   local d="$OUT/probe"
   { sinfo -Nel -n "$SLURM_JOB_NODELIST"; echo; sinfo -p "$SLURM_JOB_PARTITION" -o '%P %D %c %m %l %N'; } \
     > "$d/sinfo.txt" 2>&1 || true
+  # Cluster-wide: every partition (availability, nodes, cpus, mem, limit, gres) and every node
+  # (gres and features), to see whether any partition has GPUs and how big gp-default is.
+  { echo; echo '== all partitions'; sinfo -a -o '%P %a %D %c %m %l %G %N';
+    echo; echo '== all nodes'; sinfo -a -N -o '%N %P %c %m %G %f'; } >> "$d/sinfo.txt" 2>&1 || true
   { module -t avail 2>&1 | grep -iE 'mpi|cuda|pmix|ucx' ; } > "$d/modules.txt" 2>&1 || true
   srun --mpi=list > "$d/srun-mpi-list.txt" 2>&1 || true
   srun --nodes="${#NODES[@]}" --ntasks="${#NODES[@]}" --ntasks-per-node=1 --cpus-per-task=1 --mem=4G \

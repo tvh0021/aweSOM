@@ -94,5 +94,5 @@ If rows_1e9 hits its limit at 160x100, resubmit it with `RESUME_RUN=$K/runs/rows
 | `runs/<run>/run.json` | settings; per-epoch seconds, rows, rows/s, BMU, accumulate, update, reduction and checkpoint times; per-rank rows and pass times; nodes; peak RSS per rank; git commit; manifest check |
 | `summary/summary.md`, `summary/gate.json` | tables and the 1e9 gate |
 | `parity/parity.md` | max rel diff of each multi-rank run against its 1-rank reference |
-| `probe/` | sinfo, modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs |
+| `probe/` | sinfo (job nodes, then every partition and node with gres), modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs |
 | `logs/<run>.log`, `status/<job>-<restart>/final.tsv` | run logs; VALIDATED or FAILED |
