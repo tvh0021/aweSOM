@@ -16,7 +16,7 @@ kit_modules() {
     module load "$(cat "$MPI_SITE/MODULE")" || echo "module load $(cat "$MPI_SITE/MODULE") failed" >&2
   fi
   # The binary mpi4py wheel dlopens the MPI library named here (srun and mpirun -x pass it on).
-  if [ -s "$MPI_SITE/LIBMPI" ]; then export MPI4PY_LIBMPI="$(cat "$MPI_SITE/LIBMPI")"; fi
+  if [ -s "$MPI_SITE/LIBMPI" ]; then MPI4PY_LIBMPI=$(cat "$MPI_SITE/LIBMPI"); export MPI4PY_LIBMPI; fi
 }
 
 kit_init() {
