@@ -45,7 +45,8 @@ def test_wide_thread_budget(monkeypatch,cores,workers,threads):
     assert pool.thread_budget(a)['threads_per_seed'] == threads
 
 
-def test_fit_collect_round_trip(tmp_path):
+@pytest.mark.parametrize('statistics',['inline','later'])
+def test_fit_collect_round_trip(tmp_path,statistics):
     paths = inputs(tmp_path)
     base = [sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),
             '--inputs',*map(str,paths),'--anchor','1','--held-out','3',
@@ -60,14 +61,22 @@ def test_fit_collect_round_trip(tmp_path):
     prepared = run(tmp_path/'prepared','--pool-only')
     with h5py.File(prepared/'pool.h5') as h: assert 'scaled' not in h
     (tmp_path/'scratch').mkdir()
-    fits = [run(tmp_path/f'fit-{seed}','--reuse-pool',prepared,'--fit','3x2',seed,'--scratch',tmp_path/'scratch')
+    fits = [run(tmp_path/f'fit-{seed}','--reuse-pool',prepared,'--fit','3x2',seed,'--scratch',tmp_path/'scratch','--statistics',statistics)
             for seed in [42,43]]
     before = [pool.digest(path/'3x2-s42.h5') if i==0 else pool.digest(path/'3x2-s43.h5') for i,path in enumerate(fits)]
+    sources = list(fits)
+    if statistics == 'later':
+        refused = subprocess.run([*base,'--out',str(tmp_path/'refused'),'--reuse-pool',str(prepared),
+                                  '--collect',*map(str,fits)],env=env,capture_output=True,text=True)
+        assert refused.returncode != 0
+        assert 'statistics are deferred' in refused.stderr
+        fits = [run(tmp_path/f'complete-{seed}','--statistics-only',path)
+                for seed,path in zip([42,43],fits)]
     final = run(tmp_path/'collected','--reuse-pool',prepared,'--collect',*fits)
     manifest = json.loads((final/'freeze-manifest.json').read_text())
     assert len(manifest['models']) == 2 and len(manifest['selection']) == 1
     assert (final/'frozen-3x2.h5').exists()
-    assert before == [pool.digest(path/f'3x2-s{seed}.h5') for seed,path in zip([42,43],fits)]
+    assert before == [pool.digest(path/f'3x2-s{seed}.h5') for seed,path in zip([42,43],sources)]
 
 
 @pytest.mark.parametrize('threads',[1,2])
@@ -160,3 +169,77 @@ def test_full_run_checks_scratch_before_pooling(tmp_path,monkeypatch):
                '--scratch',str(scratch),'--min-free-gb','0','--threads-per-seed','1']
     with pytest.raises(ValueError,match='Low scratch disk'): pool.main(command)
     assert not a.out.exists()
+
+
+def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
+    from aweSOM import SOMModel
+    from aweSOM import stream
+    paths = inputs(tmp_path); a = args(tmp_path,paths)
+    a.threads_per_seed = 2; a.code_commit = '0'*40; a.bmu = 'patch'
+    records,quota,*_ = pool.inspect(a)
+    a.anchor_attrs = records[0]['attrs']
+    a.out.mkdir(); scaling = pool.pool(a,records,quota,a.out)
+    state = dict(records=records,quota=quota,disk={},mismatches=[],scaling=scaling,
+                 settings={key:getattr(a,key) for key in pool.APPROVED},anchor=a.anchor,held_out=a.held_out)
+    monkeypatch.setattr(pool,'execution_info',lambda:dict(test_execution=True))
+    monkeypatch.setattr(stream,'peak_rss_bytes',lambda:123456)
+    inline = tmp_path/'inline'; inline.mkdir()
+    deferred = tmp_path/'deferred'; deferred.mkdir()
+    for location in (inline,deferred):
+        (location/'pool.h5').symlink_to(a.out/'pool.h5')
+        pool.dump(location/'pool-state.json',state)
+    a.statistics = 'inline'; expected = pool.fit(a,(3,2),42,scaling,inline)
+    a.statistics = 'later'; pending = pool.fit(a,(3,2),42,scaling,deferred)
+    assert pending['statistics'] == 'deferred'
+    assert all(pending[key] is None for key in pool.STATISTIC_FIELDS)
+    assert (deferred/'3x2-s42-nodes.npy').exists()
+    assert (deferred/'3x2-s42-distances.npy').exists()
+    deferred_model = SOMModel.load(deferred/'3x2-s42.h5')
+    assert deferred_model.metadata['statistics'] == 'deferred'
+    assert 'cluster_effects' not in deferred_model.metadata
+    pool.dump(deferred/'fit-results.json',dict(models=[pending],settings=state['settings'],bmu=a.bmu))
+    with pytest.raises(ValueError,match='statistics are deferred'):
+        pool.group_selection(deferred,[pending],a.chunk)
+    result = pool.main(['--statistics-only',str(deferred),'--out',str(tmp_path/'completed'),
+                       '--threads-per-seed','2','--min-free-gb','0'])
+    actual = result[0]
+    assert actual['statistics'] == 'complete'
+    for key in pool.STATISTIC_FIELDS:
+        assert pool.one_line(actual[key]) == pool.one_line(expected[key])
+    def without_timings(record):
+        record = json.loads(pool.one_line(record))
+        record.pop('phase_timings'); record.pop('wall_seconds')
+        info = record['training_info']
+        # stream.train_batch_stream documents exactly these elapsed-second fields.
+        # Unknown future fields stay in the comparison, even if named *time*.
+        for key in ('epoch_time','io_wait','bmu_time','acc_time','update_time','final_time'):
+            info.pop(key)
+        return record
+    assert without_timings(actual) == without_timings(expected)
+    # Check serialized bytes too: dict equality ignores insertion order.
+    assert pool.one_line(without_timings(actual)) == pool.one_line(without_timings(expected))
+    finished = tmp_path/'completed/results'
+    final_model = SOMModel.load(finished/'3x2-s42.h5')
+    inline_model = SOMModel.load(inline/'3x2-s42.h5')
+    assert final_model.node_dist_q99.tobytes() == inline_model.node_dist_q99.tobytes()
+    assert final_model.reject_distance == inline_model.reject_distance
+    assert final_model.metadata == inline_model.metadata
+    assert 'statistics' not in final_model.metadata
+    with h5py.File(finished/'3x2-s42.h5') as final_h5, h5py.File(inline/'3x2-s42.h5') as inline_h5:
+        def compare(name, item):
+            if isinstance(item,h5py.Dataset):
+                other = inline_h5[name]
+                assert item.dtype == other.dtype and item.shape == other.shape
+                if item.dtype.hasobject:
+                    assert item[()].tolist() == other[()].tolist()
+                else:
+                    assert item[()].tobytes() == other[()].tobytes()
+        final_h5.visititems(compare)
+    assert (finished/'3x2-s42-umat.npy').read_bytes() == (inline/'3x2-s42-umat.npy').read_bytes()
+    assert (finished/'3x2-s42-labels.npy').read_bytes() == (inline/'3x2-s42-labels.npy').read_bytes()
+    assert not (inline/'3x2-s42-nodes.npy').exists()
+    assert not (inline/'3x2-s42-distances.npy').exists()
+    for suffix in ('nodes','distances'):
+        assert (deferred/f'3x2-s42-{suffix}.npy').exists()
+        assert not (finished/f'3x2-s42-{suffix}.npy').exists()
+    assert pool.digest(deferred/'3x2-s42-labels.npy') == pool.digest(finished/'3x2-s42-labels.npy')
