@@ -14,7 +14,7 @@ aweSOM - Accelerated Self-organizing Map and Statistically Combined Ensemble
 ============================================================================
 
 The `aweSOM <https://github.com/tvh0021/aweSOM>`_ package combines a JIT-accelerated and parallelized implementation of self-organizing map (SOM),
-integrating parts of `POPSOM <https://github.com/njali2001/popsom>`_, and a GPU-accelerated implementation of
+integrating parts of `POPSOM <https://github.com/njali2001/popsom>`_, and a contingency-table, optionally GPU-accelerated implementation of
 statistically combined ensemble (SCE) using `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_.  
 
 .. aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations 
@@ -22,7 +22,7 @@ statistically combined ensemble (SCE) using `ensemble learning <https://github.c
 
 aweSOM was developed for machine-learning clustering and classification tasks, with a focus on identifying intermittent structures in 3D plasma simulations (`link to arXiv pre-print <https://doi.org/10.48550/arXiv.2410.01878>`_).
 Past implementations of SOM and SCE were single-threaded and not optimized for large datasets, so aweSOM was developed to address this issue.
-Using a combination of JIT-accelerated and parallelized SOM and GPU-accelerated SCE, aweSOM can handle datasets with up to :math:`\sim 10^8` points running on a single GPU/CPU node.
+Using a combination of JIT-accelerated and parallelized SOM and a contingency-table SCE (optionally GPU-accelerated), aweSOM can handle datasets with up to :math:`\sim 10^8` points running on a single GPU/CPU node.
 
 Additionally, aweSOM has been designed to be general-purpose, so it can be used for a variety of clustering and classification tasks beyond its original purpose.
 See the :doc:`notebook <notebooks/iris>` for an example application on the classic Iris dataset.
@@ -33,7 +33,7 @@ See the :doc:`notebook <notebooks/iris>` for an example application on the class
 `Joonas Nättilä <https://natj.github.io>`_ - University of Helsinki,
 and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
-Current version: 1.1.3
+Current version: 1.2.0
 
 .. [![status](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1/status.svg)](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1)
 

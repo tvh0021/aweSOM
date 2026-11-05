@@ -14,7 +14,7 @@ What is the purpose of this project?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 aweSOM was developed for machine-learning clustering and classification tasks, with a focus on identifying intermittent structures in 3D plasma simulations.
 Past implementations of Self-organizing Maps (SOM) and Statistically Combined Ensemble (SCE) were not optimized for large datasets, so aweSOM was developed to address this issue.
-Using a combination of JIT-accelerated and parallelized SOM and GPU-accelerated SCE, aweSOM can handle datasets with up to :math:`\sim 10^8` points running on a single GPU/CPU node.
+Using a combination of JIT-accelerated and parallelized SOM and a contingency-table SCE (optionally GPU-accelerated), aweSOM can handle datasets with up to :math:`\sim 10^8` points running on a single GPU/CPU node.
 
 Additionally, aweSOM is designed to be general-purpose, so it can be used for a variety of clustering and classification tasks beyond its original purpose.
 See the :doc:`notebook <notebooks/iris>` for an example application on the classic Iris dataset.

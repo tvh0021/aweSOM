@@ -28,6 +28,8 @@ Two tests in ``sce_test.py`` import JAX.
 Without JAX, ``test_jax_gpu_available`` and ``test_jax_cpu_available`` fail with ``ModuleNotFoundError``, and the other four tests pass.
 With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`` issues a warning.
 SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
+The ensemble loop itself works on integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it
+against the original mask-by-mask loop (bitwise on NumPy, to float32 precision on a JAX device).
 
 Performance tests
 -----------------
@@ -90,6 +92,11 @@ This should be cleaned up manually.
 
 If you are running a long-duration test that requires dedicated node(s), you can refer to ``examples/slurm_scripts/submit_sce_bench.cpu``
 and ``examples/slurm_scripts/submit_sce_bench.gpu`` for example SLURM scripts to run this benchmark.
+
+NOTE: the numbers below were measured with the original mask-by-mask ensemble loop. Since v1.2.0 the loop builds
+integer contingency tables with a Numba kernel. On 28 plasma label maps of :math:`128^3` cells on an M-series
+laptop, the v1.1.3 loop took 338 to 345 s on the CPU; the v1.2.0 loop takes 5.0 s with float64 masks, 2.6 s with
+float32 masks (the default) and 0.47 s without masks. The GPU is no longer required for the ensemble step.
 
 In general, the Numpy version of aweSOM is around :math:`2 \times` faster than the legacy implementation. However, the GPU version of
 aweSOM is slower than the legacy implementation due to the overhead for small datasets (:math:`N < 5\times10^4`). The GPU 
