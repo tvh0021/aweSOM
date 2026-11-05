@@ -129,6 +129,34 @@ def test_reused_fit_disk_checks(tmp_path,monkeypatch,low):
     assert not a.out.exists()
 
 
+
+@pytest.mark.parametrize('full_run,pool_new,statistics,seed_workers,workers,output_per_row,scratch_bpr,output_bpr',[
+    (False,False,'inline',1,7,16,56,16),
+    (False,False,'later',1,7,16,0,16),
+    (True,True,'inline',1,7,16,56,56),
+    (True,True,'inline',2,7,16,112,68),
+    (True,False,'inline',2,7,16,112,40),
+    (True,True,'later',2,7,16,8,92),
+    (False,False,'inline',1,1,4,16,4),
+    (False,False,'inline',1,3,4,24,4),
+    (False,False,'inline',1,7,4,56,4),
+])
+def test_fit_disk_budget_figures(tmp_path,monkeypatch,full_run,pool_new,statistics,
+                                 seed_workers,workers,output_per_row,scratch_bpr,output_bpr):
+    # Hand-counted B/row: pool 28, four labels 16, live nodes/distances 12/seed.
+    # Deferred full runs retain all four 16-byte fits and need an 8-byte scaler column.
+    # Statistics-only copies one 4-byte label array; one worker has a 16-byte floor.
+    scratch = tmp_path/'scratch'; scratch.mkdir()
+    output = tmp_path/'output'; output.mkdir()
+    a = SimpleNamespace(scratch=scratch,out=output/'fresh',threads_per_seed=workers,
+                        seed_workers=seed_workers,seeds=[42,43],lattices=['91x64','48x34'],
+                        statistics=statistics,write_scaled=False,min_free_gb=0)
+    monkeypatch.setattr(pool.shutil,'disk_usage',lambda path: SimpleNamespace(free=10**15))
+    budget = pool.fit_disk_budget(a,10**9,7,itemsize=4,full_run=full_run,
+                                  pool_new=pool_new,output_per_row=output_per_row)
+    assert budget['scratch_bytes'] == scratch_bpr*10**9
+    assert budget['output_bytes'] == output_bpr*10**9
+
 def test_collect_requires_reused_pool(tmp_path,capsys):
     with pytest.raises(SystemExit) as error:
         pool.main(['--inputs','missing.h5','--anchor','1','--held-out','3',
