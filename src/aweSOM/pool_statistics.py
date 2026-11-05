@@ -9,9 +9,15 @@ from numba import njit
 DTYPE = np.dtype([('value', 'f8'), ('label', 'i8')])
 
 
+def scratch_root(scratch=None, fallback=None):
+    """Resolve the same scratch root for capacity checks and temporary files."""
+    return Path(scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR')
+                or fallback or tempfile.gettempdir()).resolve()
+
+
 @contextmanager
 def scratch_directory(scratch=None, fallback=None):
-    root = scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR') or fallback
+    root = scratch_root(scratch,fallback)
     with tempfile.TemporaryDirectory(prefix='awesom-stat-', dir=root) as directory:
         yield Path(directory)
 

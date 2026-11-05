@@ -89,3 +89,22 @@ def test_parallel_statistics_bitwise(tmp_path):
         parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
                                           names=pool.NAMES,n_clusters=4,workers=2)
     assert pool.one_line(serial) == pool.one_line(parallel)
+
+
+@pytest.mark.parametrize('low',['scratch','output','floor',None])
+def test_reused_fit_disk_checks(tmp_path,monkeypatch,low):
+    scratch = tmp_path/'scratch'; scratch.mkdir()
+    a = SimpleNamespace(scratch=scratch,out=tmp_path/'fresh',threads_per_seed=7,
+                        min_free_gb=1 if low == 'floor' else 0)
+    calls = []
+    def disk_usage(path):
+        calls.append(path)
+        free = 100 if (low == 'scratch' and path == scratch) or (low == 'output' and path == tmp_path) else 10000
+        return SimpleNamespace(free=free)
+    monkeypatch.setattr(pool.shutil,'disk_usage',disk_usage)
+    if low:
+        with pytest.raises(ValueError,match='Low .*disk'): pool.fit_disk_budget(a,10,7)
+    else:
+        assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=160,shared_filesystem=True)
+    assert calls == [scratch,tmp_path]
+    assert not a.out.exists()

@@ -221,7 +221,8 @@ def inspect(args):
     bytes_per_row = len(records[0]['names'])*(4+8*args.write_scaled)
     bytes_per_row += 4*len(args.lattices)*len(args.seeds) + 12*args.seed_workers
     if not (args.scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR')):
-        bytes_per_row += 32*args.seed_workers
+        threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
+        bytes_per_row += max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
     need = max(args.min_free_gb*1e9, rows*bytes_per_row + 1e9)
     free = shutil.disk_usage(args.out.parent).free
     if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
@@ -964,6 +965,28 @@ def diagnostic_reasons(args, records=()):
     return reasons
 
 
+def fit_disk_budget(args, rows, features, itemsize=4):
+    """Check scratch and output capacity before a reused-pool fit starts."""
+    from aweSOM.pool_statistics import scratch_root
+    scratch = scratch_root(args.scratch,args.out.parent)
+    output = args.out.parent.resolve()
+    # Distance runs are removed before concurrent feature runs are formed.
+    workers = min(args.threads_per_seed,features)
+    scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)
+    output_bytes = rows*16
+    scratch_free = shutil.disk_usage(scratch).free
+    output_free = shutil.disk_usage(output).free
+    shared = scratch.stat().st_dev == output.stat().st_dev
+    floor = args.min_free_gb*1e9
+    scratch_need = max(floor,scratch_bytes+output_bytes if shared else scratch_bytes)
+    output_need = max(floor,scratch_bytes+output_bytes if shared else output_bytes)
+    if scratch_free < scratch_need:
+        raise ValueError(f'Low scratch disk: {scratch_free} bytes free; need {scratch_need}')
+    if output_free < output_need:
+        raise ValueError(f'Low output disk: {output_free} bytes free; need {output_need}')
+    return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=shared)
+
+
 def main(argv=None):
     started = time.perf_counter()
     args = parser().parse_args(argv)
@@ -996,6 +1019,9 @@ def main(argv=None):
         if [str(p.resolve()) for p in args.inputs] != [r['path'] for r in state['records']]:
             raise ValueError('reused pool input paths differ')
         records,quota,disk,mismatches = state['records'],state['quota'],state['disk'],state['mismatches']
+        if args.fit:
+            with h5py.File(directory/'pool.h5','r') as h:
+                fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize)
     else:
         records,quota,disk,mismatches = inspect(args)
     args.out.mkdir()
