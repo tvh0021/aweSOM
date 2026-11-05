@@ -185,27 +185,53 @@ run_one() {
 
 r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }
 
-# Install mpi4py into MPI_SITE if the venv cannot import it. First choice: build against
-# the newest openmpi module (records the module in MPI_SITE/MODULE). Fallback: PyPI
-# wheels of mpi4py + openmpi (needs network from the node). Writes probe/mpi-install.txt.
+# Install mpi4py into MPI_SITE if the venv cannot import it. Runs once, on the batch node,
+# before any srun, so the nodes of a multi-node job never race on MPI_SITE.
+# Offline (compute nodes have no internet): build mpi4py from $KIT/wheels (sdist plus the
+# build-isolation wheels, see README) against the newest openmpi module, record the module
+# in MPI_SITE/MODULE, and check that MPI.Get_library_version() names that Open MPI version.
+# Online fallback, only if $KIT/wheels is absent: the same build from PyPI, then the PyPI
+# mpi4py + openmpi wheels. Writes probe/mpi-install.txt.
 mpi_install() {
-  local log="$OUT/probe/mpi-install.txt" mod
+  local log="$OUT/probe/mpi-install.txt" mod ver wheels="$KIT/wheels" rc=0
   if $PY -c 'import mpi4py' > /dev/null 2>&1; then echo "mpi4py already importable" | tee "$log"; return 0; fi
   mkdir -p "$MPI_SITE"
   mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)
-  {
+  ver=${mod##*/}
+  # Subshell: its exit status is the result; the module load here does not leak (kit_modules loads it).
+  (
     echo "openmpi module: ${mod:-none}"
     if [ -n "$mod" ] && module load "$mod" && command -v mpicc; then
-      MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir --target "$MPI_SITE" --no-binary mpi4py mpi4py \
-        && echo "$mod" > "$MPI_SITE/MODULE" && echo "built mpi4py against $mod"
+      if [ -d "$wheels" ]; then
+        echo "offline build from $wheels:"; ls -l "$wheels"
+        MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir --no-index --find-links "$wheels" \
+          --target "$MPI_SITE" --no-binary mpi4py mpi4py \
+          && echo "$mod" > "$MPI_SITE/MODULE" && echo "built mpi4py against $mod"
+      else
+        echo "FALLBACK (online, needs network from the node): no $wheels, building from PyPI"
+        MPICC=$(command -v mpicc) $PY -m pip install --no-cache-dir --target "$MPI_SITE" --no-binary mpi4py mpi4py \
+          && echo "$mod" > "$MPI_SITE/MODULE" && echo "built mpi4py against $mod"
+      fi
     fi
-    if ! $PY -c 'import mpi4py' > /dev/null 2>&1; then
-      echo "falling back to PyPI mpi4py + openmpi wheels"
+    if ! $PY -c 'import mpi4py' > /dev/null 2>&1 && [ ! -d "$wheels" ]; then
+      echo "FALLBACK (online, needs network from the node): PyPI mpi4py + openmpi wheels"
       $PY -m pip install --no-cache-dir --target "$MPI_SITE" mpi4py openmpi && : > "$MPI_SITE/MODULE"
     fi
-    $PY -c 'import mpi4py; from mpi4py import MPI; print(mpi4py.__file__, MPI.Get_library_version()[:200])'
-  } > "$log" 2>&1
-  local rc=$?
+    $PY -c 'import mpi4py; from mpi4py import MPI; print(mpi4py.__version__, mpi4py.__file__); print(MPI.Get_library_version()[:200])' \
+      > "$OUT/probe/mpi4py-version.txt" 2>&1 || rc=1
+    cat "$OUT/probe/mpi4py-version.txt"
+    if [ "$rc" -eq 0 ] && [ -s "$MPI_SITE/MODULE" ] && ! grep -q "Open MPI v$ver" "$OUT/probe/mpi4py-version.txt"; then
+      echo "mpi4py is not linked against Open MPI $ver (module $mod)"; rc=1
+    fi
+    [ "$rc" -eq 0 ] && echo "mpi4py OK" || echo "mpi4py install FAILED"
+    exit "$rc"
+  ) > "$log" 2>&1 < /dev/null
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ -d "$MPI_SITE" ]; then
+    # Keep a failed or mislinked build out of PYTHONPATH; the next probe starts clean.
+    mv "$MPI_SITE" "$MPI_SITE.failed-${SLURM_JOB_ID:-local}-$(date +%s)" \
+      && echo "moved the failed install to $MPI_SITE.failed-*" >> "$log"
+  fi
   cat "$log"
   return $rc
 }
