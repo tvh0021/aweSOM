@@ -151,7 +151,20 @@ def save_cluster_labels(
         batch (int, optional): The batch size. Defaults to 1.
         initial (str, optional): The type of initialization. Defaults to "s".
         name_of_dataset (str, optional): The name of the dataset. Defaults to "".
+
+    Non-negative integer labels are written as the smallest unsigned dtype that
+    holds the largest id (uint8 below 256, uint16 below 65536); the values are
+    unchanged. Other labels keep their dtype.
     """
+
+    som_labels = np.asarray(som_labels)
+    if np.issubdtype(som_labels.dtype, np.integer) and som_labels.size:
+        if som_labels.min() >= 0:
+            top = som_labels.max()
+            for dtype in (np.uint8, np.uint16):
+                if top <= np.iinfo(dtype).max:
+                    som_labels = som_labels.astype(dtype)
+                    break
 
     np.save(
         f"labels.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.npy",

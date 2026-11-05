@@ -40,6 +40,15 @@ aweSOM.som
    :show-inheritance:
 
 
+aweSOM.inference
+----------------
+
+.. automodule:: aweSOM.inference
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
 aweSOM.run_som
 --------------
 

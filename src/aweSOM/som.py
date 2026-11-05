@@ -14,6 +14,9 @@ from sklearn.metrics.pairwise import euclidean_distances
 from numba import njit, prange
 from scipy.ndimage import map_coordinates
 
+from .inference import DEFAULT_CHUNK, best_match_nodes, best_match_nodes_screen
+from .inference import predict as _predict_nodes
+
 seed = 42
 np.random.seed(seed)
 
@@ -440,10 +443,50 @@ class Lattice:
         return cluster_id
 
     @staticmethod
-    @njit(parallel=True)
-    def best_match(lattice: np.ndarray, obs: np.ndarray, full=False) -> np.ndarray:
+    def best_match(
+        lattice: np.ndarray, obs: np.ndarray, full=False, backend: str = "screen"
+    ) -> np.ndarray:
         """
         Given input vector inp[n,f] (where n is number of different observations, f is number of features per observation), return the best matching node.
+
+        The single-best search delegates to ``aweSOM.inference``: by default the
+        float32 screen certified in float64 (``best_match_nodes_screen``), whose
+        node indices are bitwise those of the float64 reference scan
+        (``backend="numba"``, ``best_match_nodes``); distances are accumulated
+        in float64. For finite float64 input both return the same node indices
+        as the original per-point kernel, which is kept as
+        ``_best_match_legacy`` (``backend="legacy"``) and is always used for
+        ``full=True``. The original kernel computes in the dtype of its inputs
+        and returns the first NaN distance, so with a float32 lattice and
+        float32 observations it can pick another node where two nodes are tied
+        within float32 rounding, and it can pick a node with non-finite
+        weights, which the default never selects.
+
+        Args:
+                lattice (np.ndarray): weight values of the lattice
+                obs (np.ndarray): observations (input vectors)
+                full (bool, optional): indicate whether to return first and second best match. Defaults to False.
+                backend (str, optional): ``"screen"`` (default), ``"numba"`` or ``"legacy"`` (the original kernel). Ignored if ``full``.
+
+        Returns:
+                np.ndarray: float array of shape (n, 1) with the 1d index of the best-matched node for each observation, or (n, 2) with the two best if ``full``.
+        """
+
+        if full or backend == "legacy":
+            return Lattice._best_match_legacy(lattice, obs, full)
+        if backend == "screen":
+            idx, _ = best_match_nodes_screen(lattice, obs)
+        elif backend == "numba":
+            idx, _ = best_match_nodes(lattice, obs)
+        else:
+            raise ValueError('backend must be "screen", "numba" or "legacy"')
+        return idx.astype(np.float64).reshape(-1, 1)
+
+    @staticmethod
+    @njit(parallel=True)
+    def _best_match_legacy(lattice: np.ndarray, obs: np.ndarray, full=False) -> np.ndarray:
+        """
+        Original per-point kernel (allocates per observation). Kept for ``full=True`` and as the reference in tests.
 
         Args:
                 lattice (np.ndarray): weight values of the lattice
@@ -478,6 +521,48 @@ class Lattice:
                 print("i = ", i)
 
         return best_match_node
+
+    def predict(
+        self,
+        data: np.ndarray,
+        merge_cost: float = None,
+        chunk: int = DEFAULT_CHUNK,
+        return_distance: bool = False,
+        backend: str = "screen",
+    ):
+        """Assign cluster ids to new data already in the lattice's scaled space.
+
+        Uses the trained ``lattice`` and ``lattice_assigned_clusters``; if the
+        latter does not exist yet, ``assign_cluster_to_lattice`` is called with
+        ``merge_cost`` (0.0 if None). Equivalent to ``map_data_to_lattice`` +
+        ``assign_cluster_to_data`` without the two full-size intermediates
+        (exactly, with either backend).
+
+        Args:
+                data (np.ndarray): [N, F] float64 or float32 points in the same space as the training data.
+                merge_cost (float, optional): Merge threshold used only if the lattice has no cluster assignment yet.
+                chunk (int, optional): Points per kernel call. Defaults to 2**20.
+                return_distance (bool, optional): Also return the Euclidean BMU distance. Defaults to False.
+                backend (str, optional): ``"screen"`` or ``"numba"``; see :func:`aweSOM.inference.predict`. Defaults to ``"screen"``.
+
+        Returns:
+                np.ndarray: int32 [N] cluster labels, plus float64 [N] distances if ``return_distance``.
+        """
+        clusters = getattr(self, "lattice_assigned_clusters", None)
+        if clusters is None:
+            clusters = self.assign_cluster_to_lattice(
+                merge_cost=0.0 if merge_cost is None else merge_cost
+            )
+        # clusters is indexed [x, y]; node index = x + y * xdim (Fortran order)
+        node_cluster = np.asarray(clusters).ravel(order="F").astype(np.int32)
+        return _predict_nodes(
+            self.lattice,
+            node_cluster,
+            data,
+            chunk=chunk,
+            return_distance=return_distance,
+            backend=backend,
+        )
 
     @staticmethod
     @njit(parallel=True)

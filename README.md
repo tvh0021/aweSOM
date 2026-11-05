@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.3.0
+Version: 1.4.0
 
 ## 1. Installation
 
@@ -158,6 +158,17 @@ final_clusters = map.assign_cluster_to_lattice(smoothing=None,merge_cost=merge_t
 som_labels = map.assign_cluster_to_data(map.projection_2d, final_clusters)
 ```
 
+For new data in the same scaled space, `map.predict(new_data)` returns the int32 cluster id of each point in one call, without the intermediate projection arrays.
+If the lattice has no cluster assignment yet, it calls `assign_cluster_to_lattice` first.
+`aweSOM.predict(weights, node_cluster, data)` does the same from a weight array and one cluster id per node.
+
+`Lattice.best_match`, which `map_data_to_lattice` calls, takes a `backend` keyword.
+**Since v1.4.0 the default is `backend="screen"`**: a float32 scan of all nodes whose winner is checked in float64, with distances accumulated in float64.
+`backend="numba"` runs the plain float64 scan and returns the same nodes.
+`backend="legacy"` and `full=True` run the kernel of v1.3.0 and earlier.
+For finite float64 data the default returns the same nodes as that kernel.
+With a float32 lattice and float32 data, a point whose two nearest nodes are tied within float32 rounding can get the other node, and the default never selects a node with non-finite weights.
+
 Finally, we compare the aweSOM result to the ground truth
 
 ```python
@@ -247,6 +258,8 @@ for xdim in parameters["xdim"]:
                 som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
                 save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
 ```
+
+Since v1.4.0, `save_cluster_labels` writes the label files as uint8 when the largest cluster id is below 256 and as uint16 when it is below 65536; the ids are unchanged.
 
 This saves 36 realizations to the current working directory, so start the Python session in a fresh scratch directory rather than inside the repository. (The repository ships the same outputs in `examples/iris/som_results/`; to use those instead, run the rest of this section from `examples/iris/` and skip the next two shell steps.)
 
