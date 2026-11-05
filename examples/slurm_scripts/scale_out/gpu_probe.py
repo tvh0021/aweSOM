@@ -91,7 +91,8 @@ def main():
                 for overlap in [False, True]:
                     search = GpuSearcher(w, xdim, ydim, overlap=overlap)
                     idx, d2 = np.empty(len(data), np.int32), np.empty(len(data))
-                    search(data[:1024], idx[:1024], d2[:1024])
+                    warm = min(len(data), 2 * search.chunk)
+                    search(data[:warm], idx[:warm], d2[:warm])
                     start = time.perf_counter()
                     search(data, idx, d2)
                     seconds = time.perf_counter() - start
