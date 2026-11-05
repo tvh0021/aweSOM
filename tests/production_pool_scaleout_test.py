@@ -129,3 +129,19 @@ def test_collect_requires_reused_pool(tmp_path,capsys):
     assert error.value.code == 2
     assert '--collect requires --reuse-pool' in capsys.readouterr().err
     assert not (tmp_path/'fresh').exists()
+
+
+@pytest.mark.parametrize('dtype',['f4','f8'])
+def test_merge_buffer_size_bitwise(tmp_path,monkeypatch,dtype):
+    from aweSOM import pool_statistics as statistics
+    rng = np.random.default_rng(81)
+    values = np.round(rng.normal(size=1003),1).astype(dtype)
+    labels = rng.integers(0,3,len(values),dtype='i4')
+    counts = np.bincount(labels,minlength=4)
+    results = []
+    for name,cap in [('small',16),('large',2**26)]:
+        directory = tmp_path/name; directory.mkdir()
+        monkeypatch.setattr(statistics,'MERGE_BUFFER_RECORDS',cap)
+        blocks = ((values[a:a+29],labels[a:a+29]) for a in range(0,len(values),29))
+        results.append(statistics.summarize(blocks,counts,[.25,.5,.75],directory,29))
+    for a,b in zip(*results,strict=True): assert a.tobytes() == b.tobytes()

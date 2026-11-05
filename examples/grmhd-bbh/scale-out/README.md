@@ -29,6 +29,9 @@ With W=min(threads-per-seed, features) concurrent features, peak scratch is
 max(16, 8*W) bytes per row for float32 pools, or 56 bytes per row with seven
 concurrent features. Serial features need 16 bytes per row including the
 separate float64 distance stage. Scaler selection needs 8 bytes per row.
+Each worker reserves at most 1 GiB for merge value/label buffers, plus a
+4 MiB output buffer, bounded run-formation arrays and its Python/Numba runtime.
+Seven concurrent workers can reserve 7 GiB of merge buffers alone.
 Merge buffers and metadata have fixed ceilings; more than 2**18 runs requires
 a larger --chunk. Each statistics process uses one Numba/BLAS thread.
 The driver removes its private scratch directory after success or an exception.
