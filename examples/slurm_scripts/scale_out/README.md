@@ -11,7 +11,7 @@ These jobs time the streaming SOM trainer on synthetic gmm_bbh7 rows. The genera
 | `nodes.sbatch` | 1e8 rows, both lattices, 1, 2 and 4 nodes, 1 rank x 32 threads per node; runs parity, the summary and `gate.json` |
 | `rows.sbatch` | 1 node, 32 threads, both lattices, 1e7 and 1e8 rows |
 | `rows_1e9.sbatch` | 1 node, 32 threads, 1e9 rows, one lattice per job; supplies the parity reference for `nodes_1e9` |
-| `nodes_1e9.sbatch` | 1e9 rows, 2 and 4 nodes, both lattices; refuses to start unless `gate.json` passes (or `FORCE=1`) |
+| `nodes_1e9.sbatch` | 1e9 rows, 2 and 4 nodes, both lattices; refuses to start unless `gate.json` shows >= 70 % node efficiency at 2 and 4 nodes for every lattice in `LATTICES` (or `FORCE=1`) |
 | `common.sh` | shared code: OUT guards, environment, probes, launcher choice, `run_one` |
 | `scale_out.py` | one timed run, 1 or more ranks; writes `run.json`, `rank<r>.json`, `weights.npy`, `checkpoint.npz` and `progress.log` |
 | `parity.py` | compares multi-rank weights with the 1-rank weights of the same setup at rtol 1e-4 and atol 1e-12; exits 1 on failure |
@@ -45,7 +45,7 @@ sbatch --export=ALL,KIT=$K $K/rows.sbatch
 sbatch --partition=gp-default --export=ALL,KIT=$K $K/nodes.sbatch
 sbatch --export=ALL,KIT=$K,LATTICE=91x64 $K/rows_1e9.sbatch
 sbatch --export=ALL,KIT=$K,LATTICE=160x100 $K/rows_1e9.sbatch
-# only if runs/nodes-<id>/summary/gate.json says "passed": true
+# only if the gate passes: $VENV/bin/python $K/summarize.py --check-gate $K/runs/nodes-<id>/summary/gate.json
 sbatch --partition=gp-default --export=ALL,KIT=$K,GATE=$K/runs/nodes-<id>/summary/gate.json,REF_DIRS=$K/runs/rows1e9-91x64-<id>:$K/runs/rows1e9-160x100-<id> $K/nodes_1e9.sbatch
 ```
 

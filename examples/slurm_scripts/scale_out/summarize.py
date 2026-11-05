@@ -9,8 +9,10 @@ per-core speed; it is arithmetic, not a measurement.
 
 Writes ``summary.md`` and ``gate.json`` (node efficiency at 1e8 rows, 2 and 4
 nodes, >= 0.70 for every lattice: the condition for submitting nodes_1e9.sbatch).
+``--check-gate`` re-evaluates a gate.json for the lattices a 1e9 job will run.
 
 Usage: python summarize.py --out DIR ROOT [ROOT ...]
+       python summarize.py --check-gate gate.json --lattices 91x64 160x100
 """
 import argparse
 import json
@@ -18,6 +20,29 @@ import sys
 from pathlib import Path
 
 GATE = 0.70
+GATE_NODES = (2, 4)
+LATTICES = ("91x64", "160x100")
+
+
+def gate_check(efficiency, lattices=LATTICES, threshold=GATE, nodes=GATE_NODES):
+    """``(passed, reasons)``: every lattice needs a measured 1e8 node efficiency >= threshold
+    at every node count in ``nodes``. ``efficiency`` maps lattice -> {nodes: efficiency}."""
+    reasons = []
+    for lat in lattices:
+        got = {int(k): v for k, v in (efficiency.get(lat) or {}).items()}
+        for nn in nodes:
+            if got.get(nn) is None:
+                reasons.append(f"{lat}: no {nn}-node run at 1e8 rows")
+            elif not got[nn] >= threshold:
+                reasons.append(f"{lat}: {nn}-node efficiency {got[nn]:.3f} < {threshold}")
+    return not reasons and bool(lattices), reasons
+
+
+def check_gate_file(path, lattices):
+    g = json.loads(Path(path).read_text())
+    ok, reasons = gate_check(g.get("efficiency", {}), lattices, g.get("threshold", GATE))
+    print(f"gate {'PASS' if ok else 'NOT MET'} for {' '.join(lattices)}" + "".join(f"\n  {r}" for r in reasons))
+    return 0 if ok else 1
 
 
 def load(roots):
@@ -43,9 +68,15 @@ def fmt(x, spec):
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--out", type=Path, required=True)
-    p.add_argument("roots", nargs="+")
+    p.add_argument("--out", type=Path)
+    p.add_argument("--check-gate", type=Path, help="exit 0 if this gate.json passes for --lattices")
+    p.add_argument("--lattices", nargs="+", default=list(LATTICES))
+    p.add_argument("roots", nargs="*")
     a = p.parse_args(argv)
+    if a.check_gate is not None:
+        return check_gate_file(a.check_gate, a.lattices)
+    if a.out is None or not a.roots:
+        p.error("--out and at least one ROOT are required")
     runs, io = load(a.roots)
     base = {}  # 1 node, 1 rank, 32 threads
     fewest = {}  # 1 rank, fewest threads
@@ -103,12 +134,13 @@ def main(argv=None):
                 rate = per_core * cores * factor
                 out.append(f"| {k[0]} | {k[1]:.0e} | {cores} | {factor:g}x | {rate / 1e6:.2f} | "
                            f"{40 * 1e9 / rate / 3600:.2f} | {40 * 1e10 / rate / 3600:.1f} |")
-    ok = bool(gate) and all(len(v) == 2 and min(v.values()) >= GATE for v in gate.values())
-    out += ["", f"# Gate for nodes_1e9.sbatch: node efficiency >= {GATE} at 1e8 rows on 2 and 4 nodes", "",
-            json.dumps(gate), "", "PASS" if ok else "NOT MET (or 1e8 node sweep missing)"]
+    ok, reasons = gate_check(gate)
+    out += ["", f"# Gate for nodes_1e9.sbatch: node efficiency >= {GATE} at 1e8 rows on 2 and 4 nodes, "
+            f"lattices {', '.join(LATTICES)}", "", json.dumps(gate), "", "PASS" if ok else "NOT MET"] + reasons
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "summary.md").write_text("\n".join(out) + "\n")
-    (a.out / "gate.json").write_text(json.dumps(dict(threshold=GATE, efficiency=gate, passed=ok), indent=1) + "\n")
+    (a.out / "gate.json").write_text(json.dumps(dict(threshold=GATE, nodes=list(GATE_NODES), lattices=list(LATTICES),
+                                                         efficiency=gate, passed=ok, reasons=reasons), indent=1) + "\n")
     print("\n".join(out))
     return 0
 

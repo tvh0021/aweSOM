@@ -10,7 +10,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thccrg@rit.edu
 # 1e9 rows on 2 and 4 nodes, one rank per node, 32 threads, both lattices. Submit only
-# when nodes.sbatch wrote gate.json with passed=true: GATE=<nodes OUT>/summary/gate.json
+# when the nodes.sbatch gate passes for every lattice it runs: GATE=<nodes OUT>/summary/gate.json
 # (FORCE=1 skips the check). REF_DIRS = the rows_1e9 OUT dirs (1-node reference
 # weights, colon separated); parity fails the job above 1e-4. Estimated 1.5 h.
 set -eo pipefail
@@ -18,9 +18,10 @@ set -eo pipefail
 LATTICES=${LATTICES:-"91x64 160x100"}; N=1e9
 if [ "${FORCE:-0}" != 1 ]; then
   [ -f "$GATE" ] || { echo "set GATE=<nodes OUT>/summary/gate.json (or FORCE=1)" >&2; exit 2; }
-  "${VENV:-/lagoon/trungha/bbh-output/for-awesom-2026-10-28/check7-venv}/bin/python" -c \
-    'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["passed"] else 1)' "$GATE" \
-    || { echo "gate.json: node efficiency < 70 % at 1e8; not running 1e9 (FORCE=1 overrides)" >&2; exit 2; }
+  # Every lattice this job runs needs >= 70 % node efficiency at 2 and 4 nodes in the gate.
+  "${VENV:-/lagoon/trungha/bbh-output/for-awesom-2026-10-28/check7-venv}/bin/python" \
+    "${KIT:-$SLURM_SUBMIT_DIR}/summarize.py" --check-gate "$GATE" --lattices $LATTICES \
+    || { echo "gate not met for LATTICES=$LATTICES; not running 1e9 (FORCE=1 overrides)" >&2; exit 2; }
 fi
 [ -n "$REF_DIRS" ] || { echo "set REF_DIRS to the rows_1e9 OUT dir(s), colon separated" >&2; exit 2; }
 IFS=: read -r -a REFS <<< "$REF_DIRS"
