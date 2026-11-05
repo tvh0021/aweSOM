@@ -1,0 +1,35 @@
+{
+ "date": "2026-11-05",
+ "machine": "arm64",
+ "device": "Apple M1 Max",
+ "mlx": "0.32.4",
+ "numba": "0.68.1",
+ "numpy": "2.5.4",
+ "python": "3.12.7",
+ "numba_threads": 8,
+ "nodes": 5824,
+ "features": 7,
+ "input": "float32 normal(0, 1); weights sampled from the rows",
+ "results": [
+  {
+   "rows": 1000000,
+   "metal_rows_per_s": 18426796.755636763,
+   "metal_s": 0.05426879198057577,
+   "metal_serial_rows_per_s": 18550767.64827221,
+   "metal_kernel_only_rows_per_s": 19375704.777936306,
+   "numba_bruteforce_f64_rows_per_s": 637128.3351849411,
+   "numba_bruteforce_s": 1.5695424999576062,
+   "numba_screen_rows_per_s": 1628344.3742211352
+  },
+  {
+   "rows": 10000000,
+   "metal_rows_per_s": 19484761.223024353,
+   "metal_s": 0.5132215830381028,
+   "metal_serial_rows_per_s": 18579712.55585411,
+   "metal_kernel_only_rows_per_s": 19391993.636839,
+   "numba_bruteforce_f64_rows_per_s": 529504.2434186315,
+   "numba_bruteforce_s": 18.88558991602622,
+   "numba_screen_rows_per_s": 1308858.2297934343
+  }
+ ]
+}
