@@ -94,7 +94,8 @@ def test_staging(monkeypatch, overlap):
     def raw(source, name, options):
         sources.append(source)
         assert '--fmad=false' in options
-        assert 'INFINITY' in source
+        assert '#include' not in source
+        assert '__longlong_as_double(0x7ff0000000000000LL)' in source
         def launch(grid, block, args, **kwargs):
             w, x, idx, d2, n, nodes, tile = args
             _bmu_kernel(w.a, x.a[:n], idx.a[:n], d2.a[:n])
@@ -129,7 +130,9 @@ def test_staging(monkeypatch, overlap):
     _gpu._kernels.cache_clear()
 
 
-def test_cpu_reference():
+@pytest.mark.parametrize('bmu', ['numba', 'auto', 'screen', 'patch'])
+def test_cpu_reference(bmu):
+    """Every CPU search kind reproduces the weights stored from the base commit."""
     import json
     from pathlib import Path
     from aweSOM.stream import train_batch_stream
@@ -138,9 +141,23 @@ def test_cpu_reference():
     ref = np.load(root / 'scale_out_cpu.npz')
     meta = json.loads((root / 'scale_out_cpu.json').read_text())
     for threads in [1, 4]:
-        options = dict(meta['options'], n_threads=threads)
+        options = dict(meta['options'], n_threads=threads, bmu=bmu)
         w, _ = train_batch_stream(ref['data'], initial_weights=ref['initial'], **options)
         np.testing.assert_array_equal(w.view(np.uint64), ref['expected'].view(np.uint64))
+
+
+def test_cpu_reference_sampled_init():
+    """The default sampled initialisation (seed from the fixture) is pinned too."""
+    import json
+    from pathlib import Path
+    from aweSOM.stream import train_batch_stream
+
+    root = Path(__file__).parent / 'fixtures'
+    ref = np.load(root / 'scale_out_cpu.npz')
+    meta = json.loads((root / 'scale_out_cpu.json').read_text())
+    options = dict(meta['options'], bmu='auto', seed=meta['sampled_seed'])
+    w, _ = train_batch_stream(ref['data'], **options)
+    np.testing.assert_array_equal(w.view(np.uint64), ref['expected_sampled'].view(np.uint64))
 
 
 def test_training_dispatch(monkeypatch):

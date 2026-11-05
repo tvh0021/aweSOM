@@ -10,30 +10,32 @@ def _kernels(features):
 
     # Explicit round-to-nearest operations preserve the CPU feature order,
     # signed zero and float64 subnormals. No fast math or FMA contraction.
-    source = '#define F %d\n' % features + r'''
-    #include <math.h>
+    # No #include: NVRTC does not search system headers. +inf is built from
+    # its bit pattern instead of INFINITY, and the feature count macro has a
+    # prefixed name so it cannot rewrite anything else.
+    source = '#define AWESOM_F %d\n' % features + r'''
     template <typename T>
     __device__ void search(const double* w, const T* x, int* idx, double* d2,
                           int rows, int nodes, int tile, double* sw) {
         const int p = blockIdx.x * blockDim.x + threadIdx.x;
-        double row[F];
+        double row[AWESOM_F];
         if (p < rows) {
             #pragma unroll
-            for (int f = 0; f < F; ++f) row[f] = (double)x[p * F + f];
+            for (int f = 0; f < AWESOM_F; ++f) row[f] = (double)x[p * AWESOM_F + f];
         }
-        double best = INFINITY;
+        double best = __longlong_as_double(0x7ff0000000000000LL);
         int best_i = 0;
         for (int base = 0; base < nodes; base += tile) {
             int count = min(tile, nodes - base);
-            for (int k = threadIdx.x; k < count * F; k += blockDim.x)
-                sw[k] = w[base * F + k];
+            for (int k = threadIdx.x; k < count * AWESOM_F; k += blockDim.x)
+                sw[k] = w[base * AWESOM_F + k];
             __syncthreads();
             if (p < rows) {
                 for (int j = 0; j < count; ++j) {
                     double acc = 0.0;
                     #pragma unroll
-                    for (int f = 0; f < F; ++f) {
-                        double d = __dsub_rn(sw[j * F + f], row[f]);
+                    for (int f = 0; f < AWESOM_F; ++f) {
+                        double d = __dsub_rn(sw[j * AWESOM_F + f], row[f]);
                         acc = __dadd_rn(acc, __dmul_rn(d, d));
                     }
                     if (acc < best) { best = acc; best_i = base + j; }
@@ -167,11 +169,15 @@ class GpuSearcher:
 
 
 def best_match_nodes_cuda(weights, data, chunk=2**20):
-    """Return exact int32 BMU indices and float64 squared distances."""
+    """Return exact int32 BMU indices and float64 squared distances.
+
+    ``chunk`` only bounds the staging buffers; larger values are capped at
+    2**20 rows, as the other backends accept any chunk size.
+    """
     from .inference import _check_inputs
 
     w, x = _check_inputs(weights, data)
-    search = GpuSearcher(w, len(w), 1, chunk=chunk)
+    search = GpuSearcher(w, len(w), 1, chunk=min(int(chunk), 2**20))
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x), np.float64)
     search(x, idx, d2)
     return idx, d2

@@ -39,8 +39,15 @@ mkdir -p "$NUMBA_CACHE_DIR"
   command -v mpirun || true
   mpirun --version || true
 } > "$OUT/hardware.log" 2>&1
-python3 -m venv "$VENV"
-"$VENV/bin/pip" install --report "$OUT/install.json" -e "$REPO[cuda]" pytest > "$OUT/install.log" 2>&1
+# CuPy compiles kernels with NVRTC and needs the CUDA headers: either a cuda
+# module or the cupy-cuda12x[ctk] wheels that bundle them. Both are tried.
+module load cuda 2>/dev/null || module load cuda/12 2>/dev/null || true
+PYTHON=${PYTHON:-python3}
+"$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 10))' \
+  || { echo "PYTHON=$PYTHON is older than 3.10; set PYTHON to a newer interpreter"; exit 2; }
+"$PYTHON" -m venv "$VENV"
+"$VENV/bin/pip" install --report "$OUT/install.json" -e "$REPO[cuda]" 'cupy-cuda12x[ctk]' pytest > "$OUT/install.log" 2>&1
+"$VENV/bin/python" -c 'import cupy; cupy.show_config()' >> "$OUT/hardware.log" 2>&1 || echo 'cupy.show_config failed' >> "$OUT/hardware.log"
 "$VENV/bin/python" -c 'import importlib.util; print("mpi4py available:", importlib.util.find_spec("mpi4py") is not None)' >> "$OUT/hardware.log"
 "$VENV/bin/python" "$KIT/gpu_probe.py" --kit "$KIT" --out "$OUT/results" > "$OUT/probe.log" 2>&1
 "$VENV/bin/pytest" -q "$REPO/tests/gpu_test.py" > "$OUT/pytest.log" 2>&1

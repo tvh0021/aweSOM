@@ -11,5 +11,7 @@
     "prefetch": false,
     "n_threads": 4
   },
-  "weights_sha256": "8c8f5b417efa18a496cb5766107081733860c60d40801bd42ac4c39dc064ec44"
+  "weights_sha256": "8c8f5b417efa18a496cb5766107081733860c60d40801bd42ac4c39dc064ec44",
+  "sampled_seed": 7,
+  "sampled_weights_sha256": "7dc596ad97bdb4d9a463ce372cc42e47b24a7fa366e61e58c8ee85b23a08efa6"
 }
