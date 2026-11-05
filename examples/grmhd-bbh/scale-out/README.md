@@ -126,7 +126,9 @@ Wait for each fit to finish before submitting its statistics job. The statistics
 launcher reads the feature count from the deferred fit's `pool-state.json`
 and defaults to that many single-threaded workers, capped at
 `SLURM_CPUS_PER_TASK`. An explicit `THREADS` overrides the default.
-The statistics template uses gp-default with 8 CPUs, 96G and a two-day limit.
+The statistics template uses gp-default with 8 CPUs, 96G and an eight-hour limit,
+enough for a 1e9 completion (about an hour). For 1e10 pass `--time=2-00:00:00`
+on the sbatch command line (the gp-default maximum).
 GP nodes have 32 cores and 192 GB of RAM. At 1e9 rows, seven workers need
 56 GB of scratch plus at most 7 GiB of merge buffers. The 96G request leaves
 about 37 GiB for run-formation arrays, file cache and runtimes.
