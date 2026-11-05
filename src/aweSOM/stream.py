@@ -69,7 +69,9 @@ Example:
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import math
+import os
 import resource
 import sys
 import time
@@ -94,6 +96,7 @@ from .inference import (
 __all__ = [
     "NpyReader",
     "train_batch_stream",
+    "read_checkpoint",
     "predict_stream",
     "stratified_sample",
     "neighbourhood_update",
@@ -152,38 +155,79 @@ class _ArraySource:
 
 
 class _CallableSource:
-    """Zero-argument callable returning a fresh iterable of (rows, F) chunks per call."""
+    """Zero-argument callable returning a fresh iterable of (rows, F) chunks per call.
 
-    def __init__(self, fn: Callable[[], Iterable[np.ndarray]], n_samples: Optional[int]):
+    Optional attributes of the callable, used when present:
+
+    - ``n_feat`` or ``n_features``: number of columns. With the row count known
+      as well (``n_samples``), no counting pass is made.
+    - ``rows(ix)``: rows ``ix`` of the callable's row order (the order of the
+      next call) without changing its state; used for the sampled initial
+      lattice instead of a pass over the data.
+    - ``lazy_chunks()``: one call (same state change as ``fn()``) yielding
+      ``(rows, read)`` pairs, where ``read()`` returns the chunk. A rank of a
+      multi-process run reads only the chunks it owns.
+    - ``calls``: integer call counter; saved in checkpoints and restored on
+      resume.
+    """
+
+    def __init__(
+        self,
+        fn: Callable[[], Iterable[np.ndarray]],
+        n_samples: Optional[int],
+        n_features: Optional[int] = None,
+    ):
         self.fn = fn
         self.n = n_samples
-        self.n_feat = None
+        self.n_feat = n_features
+        if self.n_feat is None:
+            for name in ("n_feat", "n_features"):
+                value = getattr(fn, name, None)
+                if value is not None:
+                    self.n_feat = int(value)
+                    break
         if self.n is None or self.n_feat is None:
             n = 0
             for block in fn():
                 block = np.asarray(block)
                 if block.ndim != 2:
                     raise ValueError("chunks must be 2-D (rows, F)")
+                if self.n_feat is not None and block.shape[1] != self.n_feat:
+                    raise ValueError(f"n_features={self.n_feat} but a chunk has {block.shape[1]} columns")
                 self.n_feat = block.shape[1]
                 n += block.shape[0]
             if self.n is not None and self.n != n:
                 raise ValueError(f"n_samples={self.n} but the source yielded {n} rows")
             self.n = n
 
-    def chunks(self) -> Iterator[np.ndarray]:
+    def lazy(self) -> Iterator[tuple[int, Callable[[], np.ndarray]]]:
+        """One call of the source as ``(rows, read)`` pairs; ``read()`` returns the float chunk."""
+        lazy = getattr(self.fn, "lazy_chunks", None)
+        if callable(lazy):
+            for m, read in lazy():
+                yield int(m), (lambda read=read: _as_float(read()))
+            return
         for block in self.fn():
-            yield _as_float(block)
+            block = np.asarray(block)
+            yield block.shape[0], (lambda block=block: _as_float(block))
 
     def rows(self, ix: np.ndarray) -> np.ndarray:
+        """Rows ``ix`` as float64: the callable's ``rows`` if it has one, else one
+        pass that reads only chunks holding requested rows and stops after the last."""
+        own = getattr(self.fn, "rows", None)
+        if callable(own):
+            return np.asarray(own(ix), np.float64)
         order = np.argsort(ix, kind="stable")
         sorted_ix = ix[order]
         out = np.empty((len(ix), self.n_feat), np.float64)
         offset = 0
         pos = 0
-        for block in self.chunks():
-            m = block.shape[0]
+        for m, read in self.lazy():
+            if pos == len(ix):
+                break
             hi = np.searchsorted(sorted_ix, offset + m, side="left")
             if hi > pos:
+                block = read()
                 out[order[pos:hi]] = block[sorted_ix[pos:hi] - offset]
                 pos = hi
             offset += m
@@ -239,9 +283,9 @@ class NpyReader:
         return np.array(np.load(self.path, mmap_mode="r")[key])
 
 
-def _make_source(data_source: Any, n_samples: Optional[int]):
+def _make_source(data_source: Any, n_samples: Optional[int], n_features: Optional[int] = None):
     if callable(data_source) and not hasattr(data_source, "shape"):
-        return _CallableSource(data_source, n_samples)
+        return _CallableSource(data_source, n_samples, n_features)
     return _ArraySource(data_source)
 
 
@@ -260,24 +304,38 @@ def _epoch_chunks(
     fraction: float,
     block: int,
     rng: Optional[np.random.Generator],
+    rank: int = 0,
+    size: int = 1,
 ) -> Iterator[np.ndarray]:
     """Chunks of one pass: all rows, or a stratified block sample (array sources),
-    or a Bernoulli row sample (callable sources)."""
+    or a Bernoulli row sample (callable sources).
+
+    With ``size > 1`` only the chunks with index ``i % size == rank`` are
+    yielded (round-robin ownership). The chunk boundaries and the random draws
+    do not depend on ``rank`` or ``size``, so the ranks together see exactly
+    the rows of a single-process pass.
+    """
     if isinstance(source, _CallableSource):
-        for c in source.chunks():
-            if fraction < 1.0:
-                c = np.ascontiguousarray(c[rng.random(c.shape[0]) < fraction])
+        for i, (m, read) in enumerate(source.lazy()):
+            keep = rng.random(m) < fraction if fraction < 1.0 else None
+            if i % size != rank:
+                continue
+            c = read()
+            if keep is not None:
+                c = np.ascontiguousarray(c[keep])
             if c.shape[0]:
                 yield c
         return
     if fraction >= 1.0:
-        for start in range(0, source.n, chunk):
-            yield source.read(start, min(start + chunk, source.n))
+        for i, start in enumerate(range(0, source.n, chunk)):
+            if i % size == rank:
+                yield source.read(start, min(start + chunk, source.n))
         return
     starts = _stratified_block_starts(source.n, block, fraction, rng)
     per = max(1, chunk // block)
-    for i in range(0, len(starts), per):
-        yield source.read_blocks(starts[i : i + per], block)
+    for i, lo in enumerate(range(0, len(starts), per)):
+        if i % size == rank:
+            yield source.read_blocks(starts[lo : lo + per], block)
 
 
 def _prefetched(it: Iterator[np.ndarray], stats: dict) -> Iterator[np.ndarray]:
@@ -462,13 +520,16 @@ def _pass(
     rng: Optional[np.random.Generator],
     groups: int,
     prefetch: bool,
+    rank: int = 0,
+    size: int = 1,
 ) -> dict:
-    """One pass: per-node float64 sums, counts and QE sum over all (or sampled) rows."""
+    """One pass: per-node float64 sums, counts and QE sum over all (or sampled) rows
+    (over the chunks this rank owns when ``size > 1``)."""
     s_g = np.zeros((groups, n_nodes, n_feat))
     n_g = np.zeros((groups, n_nodes))
     q_g = np.zeros(groups)
     stats = {"io_wait": 0.0, "bmu": 0.0, "acc": 0.0, "fallbacks": 0, "rows": 0}
-    it = _epoch_chunks(source, chunk, fraction, block, rng)
+    it = _epoch_chunks(source, chunk, fraction, block, rng, rank, size)
     if prefetch:
         it = _prefetched(it, stats)
     idx = np.empty(0, np.int32)
@@ -496,6 +557,44 @@ def _pass(
     return stats
 
 
+CHECKPOINT_FORMAT = "aweSOM.stream.checkpoint/1"
+_RANK_FIELDS = ("rows", "fallbacks", "io_wait", "bmu", "acc", "pass_time")
+
+
+def _git_commit() -> str:
+    """HEAD of the git checkout that holds this file, or "" (no checkout, no git)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _write_checkpoint(path: str, arrays: dict, meta: dict) -> None:
+    """Write ``arrays`` and the JSON ``meta`` to one ``.npz`` (temporary file, then rename)."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "wb") as fh:
+        np.savez(fh, meta=np.array(json.dumps(meta)), **arrays)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def read_checkpoint(path: str) -> tuple[dict, dict]:
+    """``(meta, arrays)`` of a :func:`train_batch_stream` checkpoint file."""
+    with np.load(path, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files if k != "meta"}
+        meta = json.loads(str(z["meta"]))
+    if meta.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError(f"{path}: not a {CHECKPOINT_FORMAT} file")
+    return meta, arrays
+
+
 def train_batch_stream(
     data_source: Any,
     xdim: int,
@@ -518,14 +617,19 @@ def train_batch_stream(
     n_threads: Optional[int] = None,
     verbose: bool = False,
     callback: Optional[Callable[[int, np.ndarray], None]] = None,
+    n_features: Optional[int] = None,
+    checkpoint: Optional[str] = None,
+    resume: bool = False,
+    comm: Any = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Train a SOM lattice with the batch map, streaming the data chunk by chunk.
 
     Args:
         data_source: ``(N, F)`` ndarray, ``numpy.memmap`` or ``h5py.Dataset``
             (sliced by rows), or a zero-argument callable returning a fresh
-            iterable of ``(rows, F)`` arrays on every call. Rows must be finite
-            and scaled (as for every aweSOM trainer).
+            iterable of ``(rows, F)`` arrays on every call (optional attributes:
+            see ``_CallableSource``). Rows must be finite and scaled (as for
+            every aweSOM trainer).
         xdim, ydim: Lattice dimensions; node ``i`` sits at ``(i % xdim, i // xdim)``.
         epochs: Number of batch epochs.
         chunk: Rows read and processed at once (array sources). Memory is about
@@ -555,24 +659,47 @@ def train_batch_stream(
         final_pass: ``"full"`` (QE and hits of the final weights over all rows,
             one extra full pass), ``"sample"`` (over one more sample) or
             ``"none"``.
-        n_samples: Number of rows of a callable source if known (otherwise one
-            counting pass is made).
+        n_samples: Number of rows of a callable source if known. Without it, or
+            without the column count, one counting pass is made.
         groups: Accumulator slots (fixed, so results do not depend on threads).
         prefetch: Read the next chunk in a background thread.
         n_threads: numba threads for this call (default: current setting).
-        verbose: Print one line per epoch.
-        callback: ``callback(epoch, weights)`` after every epoch.
+        verbose: Print one line per epoch (rank 0).
+        callback: ``callback(epoch, weights)`` after every epoch (rank 0).
+        n_features: Columns of a callable source if known (also read from the
+            callable's ``n_feat`` or ``n_features`` attribute).
+        checkpoint: Path of a ``.npz`` file rewritten after every epoch (rank 0)
+            with the weights, epoch, radii, QE, rows, fallbacks and timings,
+            the sampling seed, the callable's ``calls`` counter (if it has one)
+            and the git commit (:func:`read_checkpoint` reads it).
+        resume: With ``checkpoint`` present on disk, continue after its last
+            epoch (every rank reads it). Data, lattice, epochs, radii and
+            sampling must match; the result is bitwise equal to an
+            uninterrupted run with the same rank count.
+        comm: mpi4py communicator (:func:`aweSOM.distributed.get_comm`) for a
+            run with one rank per node. Rank 0 draws the initial lattice and
+            broadcasts it; every rank searches the chunks with index
+            ``i % size == rank``; the sums are gathered and added in rank order
+            (:class:`aweSOM.distributed.Reducer`), then every rank applies the
+            same update. A fixed rank count is bitwise reproducible; different
+            rank counts differ in the last bits of the float64 sums. Every
+            rank must call with the same arguments and the same data.
 
     Returns:
-        ``(weights, info)``; ``weights`` float64 ``(xdim * ydim, F)``. ``info``
-        has the keys of :func:`aweSOM.batch.train_batch` (``radius``, ``qe``,
-        ``qe_initial``, ``hits``, ``epoch_time``, ``chunk``, ``n_samples``)
-        plus ``rows_per_epoch``, ``fallbacks`` (rows that needed the float64
-        rescan), ``io_wait``, ``bmu_time``, ``acc_time``, ``update_time``
-        (seconds per epoch), ``final_time``, ``n_threads`` and ``peak_rss``
-        (bytes). ``qe`` is exact (float64 distance of the exact BMU); with
-        sampling it is measured on the next epoch's sample. ``hits`` is empty
-        when ``final_pass="none"``.
+        ``(weights, info)``; ``weights`` float64 ``(xdim * ydim, F)`` (equal on
+        every rank). ``info`` has the keys of :func:`aweSOM.batch.train_batch`
+        (``radius``, ``qe``, ``qe_initial``, ``hits``, ``epoch_time``,
+        ``chunk``, ``n_samples``) plus ``rows_per_epoch``, ``fallbacks`` (rows
+        that needed the float64 rescan), ``io_wait``, ``bmu_time``,
+        ``acc_time``, ``update_time``, ``reduce_time``, ``checkpoint_time``
+        (seconds per epoch; io/bmu/acc of this rank), ``final_time``,
+        ``n_threads``, ``peak_rss`` (bytes, this rank), ``ranks``, ``rank``,
+        ``resumed_from`` (epochs read from the checkpoint) and ``rank_rows``,
+        ``rank_fallbacks``, ``rank_io_wait``, ``rank_bmu``, ``rank_acc``,
+        ``rank_pass_time`` (one list per epoch, one value per rank). ``qe`` is
+        exact (float64 distance of the exact BMU); with sampling it is
+        measured on the next epoch's sample. ``hits`` is empty when
+        ``final_pass="none"``.
     """
     if bmu not in ("auto", "screen", "patch", "numba"):
         raise ValueError('bmu must be "auto", "screen", "patch" or "numba"')
@@ -582,28 +709,27 @@ def train_batch_stream(
         raise ValueError('final_pass must be "full", "sample" or "none"')
     if chunk < 1 or groups < 1 or sample_block < 1:
         raise ValueError("chunk, groups and sample_block must be positive")
+    if init not in ("sampling", "uniform"):
+        raise ValueError(f"init must be 'sampling' or 'uniform', got {init!r}")
+    if resume and checkpoint is None:
+        raise ValueError("resume=True needs a checkpoint path")
+    red = None
+    if comm is not None:
+        from .distributed import Reducer
+
+        red = Reducer(comm)
+    rank, size = (red.rank, red.size) if red is not None else (0, 1)
+    root = rank == 0
     old_threads = numba.get_num_threads()
     if n_threads is not None:
         numba.set_num_threads(int(n_threads))
     try:
-        source = _make_source(data_source, n_samples)
+        source = _make_source(data_source, n_samples, n_features)
         n_total, n_feat = source.n, source.n_feat
         if not n_total:
             raise ValueError("data is empty")
         n_nodes = xdim * ydim
-
-        if initial_weights is not None:
-            w = np.array(initial_weights, np.float64)
-            if w.shape != (n_nodes, n_feat):
-                raise ValueError(f"initial_weights must have shape {(n_nodes, n_feat)}, got {w.shape}")
-        else:
-            rng = np.random.default_rng(seed)
-            if init == "uniform":
-                w = rng.uniform(0.0, 1.0, (n_nodes, n_feat))
-            elif init == "sampling":
-                w = np.asarray(source.rows(rng.integers(0, n_total, n_nodes)), np.float64)
-            else:
-                raise ValueError(f"init must be 'sampling' or 'uniform', got {init!r}")
+        fn = getattr(source, "fn", None)
 
         if r_max is None:
             r_max = max(xdim, ydim) + 1
@@ -613,24 +739,88 @@ def train_batch_stream(
         def epoch_rng(e: int):
             return np.random.default_rng([s_seed, e]) if sample_fraction < 1.0 else None
 
-        keys = ("epoch_time", "io_wait", "bmu_time", "acc_time", "update_time")
+        keys = ("epoch_time", "io_wait", "bmu_time", "acc_time", "update_time", "reduce_time",
+                "checkpoint_time")
         rec = {k: np.zeros(epochs) for k in keys}
         rows = np.zeros(epochs, np.int64)
         fallbacks = np.zeros(epochs, np.int64)
-        bmu_kinds = []
+        bmu_kinds: list = []
+        rank_rec: dict = {k: [] for k in _RANK_FIELDS}
         qe_after = np.zeros(epochs)
         qe_initial = math.nan
+        start = 0
+        expect = dict(xdim=int(xdim), ydim=int(ydim), n_feat=int(n_feat), n_samples=int(n_total),
+                      epochs=int(epochs), sample_fraction=float(sample_fraction))
+        if sample_fraction < 1.0:
+            expect.update(sample_seed=int(s_seed), sample_block=int(sample_block))
 
-        for e, r in enumerate(radii):
+        if resume and os.path.exists(checkpoint):
+            meta, arrays = read_checkpoint(checkpoint)
+            for k, v in expect.items():
+                if meta.get(k) != v:
+                    raise ValueError(f"checkpoint has {k}={meta.get(k)!r}, this run {v!r}")
+            if not np.array_equal(arrays["radius"], radii):
+                raise ValueError("checkpoint radius schedule differs (r_max, r_min or epochs)")
+            start = int(meta["epoch"])
+            w = np.array(arrays["weights"], np.float64)
+            for k in keys:
+                rec[k][:] = arrays[k]
+            rows[:] = arrays["rows_per_epoch"]
+            fallbacks[:] = arrays["fallbacks"]
+            qe_after[:] = arrays["qe"]
+            qe_initial = float(meta["qe_initial"])
+            bmu_kinds = list(meta["bmu_kind"])
+            rank_rec = {k: list(meta["rank_records"][k]) for k in _RANK_FIELDS}
+            if meta.get("calls") is not None and fn is not None and hasattr(fn, "calls"):
+                fn.calls = int(meta["calls"])
+        else:
+            w = None
+            if initial_weights is not None:
+                w = np.array(initial_weights, np.float64)
+                if w.shape != (n_nodes, n_feat):
+                    raise ValueError(f"initial_weights must have shape {(n_nodes, n_feat)}, got {w.shape}")
+            elif init == "uniform":
+                w = np.random.default_rng(seed).uniform(0.0, 1.0, (n_nodes, n_feat))
+            else:
+                ix = np.random.default_rng(seed).integers(0, n_total, n_nodes)
+                # A callable without rows() advances its state on a pass: every rank
+                # makes the same pass so that the ranks stay in step.
+                stateful = fn is not None and not callable(getattr(fn, "rows", None))
+                if root or stateful:
+                    w = np.asarray(source.rows(ix), np.float64)
+            if red is not None:
+                w = red.bcast(w if root else None, (n_nodes, n_feat))
+
+        commit = _git_commit() if (checkpoint is not None and root) else ""
+
+        def save(e: int) -> None:
+            calls = getattr(fn, "calls", None) if fn is not None else None
+            meta = dict(format=CHECKPOINT_FORMAT, epoch=e + 1, **expect)
+            meta.update(sample_seed=int(s_seed), sample_block=int(sample_block), seed=int(seed), chunk=int(chunk),
+                        groups=int(groups), bmu=bmu, bmu_kind=bmu_kinds, qe_initial=qe_initial,
+                        calls=None if calls is None else int(calls), ranks=size,
+                        rank_records=rank_rec, git_commit=commit, version=_version())
+            arrays = dict(weights=w, radius=radii, qe=qe_after, rows_per_epoch=rows,
+                          fallbacks=fallbacks, **rec)
+            _write_checkpoint(checkpoint, arrays, meta)
+
+        for e in range(start, epochs):
+            r = radii[e]
             t0 = time.perf_counter()
             searcher = _BMU(w, bmu, xdim, ydim, first_epoch=e == 0)
             st = _pass(source, searcher, n_nodes, n_feat, chunk, sample_fraction,
-                       sample_block, epoch_rng(e), groups, prefetch)
+                       sample_block, epoch_rng(e), groups, prefetch, rank, size)
+            st["pass_time"] = time.perf_counter() - t0
             bmu_kinds.append(searcher.kind)
+            t_red = time.perf_counter()
+            if red is not None:
+                tot, per = red.reduce_pass(st)
+            else:
+                tot, per = st, {k: np.array([st[k]]) for k in _RANK_FIELDS}
             t1 = time.perf_counter()
-            w = neighbourhood_update(st["s"], st["n"], w, xdim, ydim, r)
+            w = neighbourhood_update(tot["s"], tot["n"], w, xdim, ydim, r)
             t2 = time.perf_counter()
-            qe_entering = st["qe_sum"] / st["rows"]
+            qe_entering = tot["qe_sum"] / tot["rows"]
             if e > 0:
                 qe_after[e - 1] = qe_entering
             else:
@@ -640,17 +830,28 @@ def train_batch_stream(
             rec["bmu_time"][e] = st["bmu"]
             rec["acc_time"][e] = st["acc"]
             rec["update_time"][e] = t2 - t1
-            rows[e] = st["rows"]
-            fallbacks[e] = st["fallbacks"]
-            if verbose:
+            rec["reduce_time"][e] = t1 - t_red
+            rows[e] = tot["rows"]
+            fallbacks[e] = tot["fallbacks"]
+            for k in _RANK_FIELDS:
+                rank_rec[k].append(np.asarray(per[k]).tolist())
+            if verbose and root:
                 print(
-                    f"epoch {e + 1}/{epochs}  radius {r:.3f}  rows {st['rows']}  "
+                    f"epoch {e + 1}/{epochs}  radius {r:.3f}  rows {tot['rows']}  "
                     f"qe(entering) {qe_entering:.6g}  {t2 - t0:.3f} s "
                     f"(io wait {st['io_wait']:.2f}, bmu {st['bmu']:.2f}, update {t2 - t1:.3f}, "
-                    f"fallbacks {st['fallbacks']}, {searcher.kind})",
+                    f"fallbacks {tot['fallbacks']}, {searcher.kind}"
+                    + (f", reduce {t1 - t_red:.3f}, ranks {size}" if red is not None else "") + ")",
                     flush=True,
                 )
-            if callback is not None:
+            if checkpoint is not None:
+                if root:
+                    t3 = time.perf_counter()
+                    save(e)
+                    rec["checkpoint_time"][e] = time.perf_counter() - t3
+                if red is not None:
+                    red.barrier()  # the file is complete before any rank can read it
+            if callback is not None and root:
                 callback(e, w.copy())
 
         t0 = time.perf_counter()
@@ -659,7 +860,9 @@ def train_batch_stream(
             frac = 1.0 if final_pass == "full" else sample_fraction
             st = _pass(source, _BMU(w, bmu, xdim, ydim), n_nodes, n_feat, chunk, frac, sample_block,
                        np.random.default_rng([s_seed, epochs]) if frac < 1.0 else None,
-                       groups, prefetch)
+                       groups, prefetch, rank, size)
+            if red is not None:
+                st, _ = red.reduce_pass(st)
             qe_after[-1] = st["qe_sum"] / st["rows"]
             hits = st["n"].round().astype(np.int64)
         else:
@@ -682,9 +885,19 @@ def train_batch_stream(
         "final_time": final_time,
         "n_threads": threads,
         "peak_rss": peak_rss_bytes(),
+        "ranks": size,
+        "rank": rank,
+        "resumed_from": start,
+        **{f"rank_{k}": v for k, v in rank_rec.items()},
         **rec,
     }
     return w, info
+
+
+def _version() -> str:
+    from . import __version__
+
+    return __version__
 
 
 # --------------------------------------------------------------------- inference
