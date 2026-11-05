@@ -25,6 +25,8 @@ Use an existing output parent and a fresh OUT for each job. Set `SCRATCH` to a
 node-local directory if the scheduler does not provide `SLURM_TMPDIR` or `TMPDIR`.
 Exact external sorting needs up to 32 bytes per row of temporary disk per fit.
 The driver removes its private scratch directory after success or an exception.
+A job killed by the scheduler (time limit, SIGTERM, SIGKILL) leaves it behind;
+remove `awesom-stat-*` directories under the scratch root by hand.
 
 After all jobs finish, collect their results with the same training options:
 

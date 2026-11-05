@@ -47,7 +47,9 @@ def test_fit_collect_round_trip(tmp_path):
         return out/'results'
     prepared = run(tmp_path/'prepared','--pool-only')
     with h5py.File(prepared/'pool.h5') as h: assert 'scaled' not in h
-    fits = [run(tmp_path/f'fit-{seed}','--reuse-pool',prepared,'--fit','3x2',seed) for seed in [42,43]]
+    (tmp_path/'scratch').mkdir()
+    fits = [run(tmp_path/f'fit-{seed}','--reuse-pool',prepared,'--fit','3x2',seed,'--scratch',tmp_path/'scratch')
+            for seed in [42,43]]
     before = [pool.digest(path/'3x2-s42.h5') if i==0 else pool.digest(path/'3x2-s43.h5') for i,path in enumerate(fits)]
     final = run(tmp_path/'collected','--reuse-pool',prepared,'--collect',*fits)
     manifest = json.loads((final/'freeze-manifest.json').read_text())

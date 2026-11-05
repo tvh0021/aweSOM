@@ -29,4 +29,4 @@ if [ -n "$scratch" ]; then scratch_args=(--scratch "$scratch"); fi
   --out "$OUT" --reuse-pool "$POOL" --fit "$LATTICE" "$SEED" \
   --rows-per-snapshot "${ROWS_PER_SNAPSHOT:-500000000}" --rows-per-epoch "${ROWS_PER_EPOCH:-1000000000}" \
   --epochs "${EPOCHS:-40}" --r-min 8 --threads-per-seed "$THREADS" \
-  --groups "${GROUPS_COUNT:-64}" "${scratch_args[@]}" "$@"
+  --groups "${GROUPS_COUNT:-64}" ${scratch_args[@]+"${scratch_args[@]}"} "$@"

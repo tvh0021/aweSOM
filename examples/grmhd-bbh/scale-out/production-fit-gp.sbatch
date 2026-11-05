@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=awesom-fit-gp
 #SBATCH --partition=debug
+#SBATCH --exclude=lm-n0001
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32

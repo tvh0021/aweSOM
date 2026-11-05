@@ -709,7 +709,7 @@ def fit(args, shape, seed, scaling, out):
         bz = names.index('bz_frac') if 'bz_frac' in names else None
         tubes = [c for c,m in medians.items() if bz is not None and m[bz] > args.tube_bz and m[beta] > args.tube_beta]
         merge_settings = dict(merge_cost_used=lat.merge_cost_used,
-                              target_clusters=args.target_clusters, n_clusters=lat.n_clusters, scratch=args.scratch)
+                              target_clusters=args.target_clusters, n_clusters=lat.n_clusters)
         # Selection is decided across the lattice's seeds in main(); until then nothing is selected.
         pending = dict(status='pending', reason='awaiting the other seeds of this lattice')
         exports = dict(cluster_effects=described['cluster_effects'], cluster_quartiles=described['cluster_quartiles'],
@@ -758,7 +758,7 @@ def fit(args, shape, seed, scaling, out):
         node_path.unlink(); distance_path.unlink()
         labels.flush()
         clock.finish('verification')
-    rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
+    rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, scratch=None if args.scratch is None else str(args.scratch), lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
                execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
