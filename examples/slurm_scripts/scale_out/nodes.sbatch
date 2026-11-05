@@ -22,6 +22,8 @@ kit_init nodes
 env_probe
 io_probe "${IO_TEST_GB:-20}"
 pick_launcher 4 4 || exit 1
+# Every multi-rank launch first proves each rank keeps its 32 CPUs (job 8413 got 1).
+for nn in 2 4; do affinity_preflight "nodes$nn" "$nn" 1 32 none || exit 3; done
 for L in $LATTICES; do
   try_run "$OUT/runs/$L-n$N-nodes1" 1 1 32 none -- --n "$N" --lattice "$L" --tag nodes-1
   for nn in 2 4; do

@@ -223,6 +223,24 @@ def source_info() -> dict:
     return info
 
 
+def affinity_check(threads: int, rank: int, comm=None) -> int:
+    """CPU count of this rank. Raises on every rank if any rank holds fewer than ``threads``
+    CPUs (gathered, so all ranks stop together, before any data or training).
+
+    Job 8413: Open MPI rebound every rank of a 1-rank-per-node srun to one CPU, and the
+    32 numba threads ran 10x slow on it. Skipped where ``os.sched_getaffinity`` is missing.
+    """
+    if not hasattr(os, "sched_getaffinity"):
+        return -1
+    mine = (rank, platform.node(), len(os.sched_getaffinity(0)))
+    every = comm.allgather(mine) if comm is not None else [mine]
+    bad = [f"rank {r} on {h}: affinity {n} CPUs < {threads} threads" for r, h, n in every if n < threads]
+    if bad:
+        raise RuntimeError("CPU affinity too small, refusing to run (srun needs --cpu-bind=cores and "
+                           "OMPI_MCA_hwloc_base_binding_policy=none, see README): " + "; ".join(bad))
+    return mine[2]
+
+
 # ------------------------------------------------------------------ run
 
 def parse(argv):
@@ -256,6 +274,7 @@ def main(argv=None) -> int:
 
         comm = get_comm()
     rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
+    affinity_check(args.threads, rank, comm)
     out = args.out
     if rank == 0:
         out.mkdir(parents=True, exist_ok=args.resume)

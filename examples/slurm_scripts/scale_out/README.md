@@ -15,7 +15,7 @@ These jobs time the streaming SOM trainer on synthetic gmm_bbh7 rows. The genera
 | `common.sh` | shared code: OUT guards, environment, probes, launcher choice, `run_one` |
 | `scale_out.py` | one timed run, 1 or more ranks; writes `run.json`, `rank<r>.json`, `weights.npy`, `checkpoint.npz` and `progress.log` |
 | `parity.py` | compares multi-rank weights with the 1-rank weights of the same setup at rtol 1e-4 and atol 1e-12; exits 1 on failure |
-| `summarize.py` | builds `summary.md` (rates, efficiencies, reduction, io_wait, RSS, I/O, and a labelled projection to 72 and 144 cores) and `gate.json` |
+| `summarize.py` | builds `summary.md` (rates, efficiencies, reduction, io_wait, RSS, I/O, and a labelled projection to 72 and 144 cores) and `gate.json`; marks UNDER-PINNED runs (a rank with fewer CPUs than threads) and leaves them out of efficiencies and the gate; lists unfinished runs. Works on a job killed mid-sweep: `python summarize.py --out DIR <job OUT>` |
 | `probe.py` | node environment JSON and the file write/read rate tests |
 | `gmm_bbh7.npz` | generator parameters, copied from the Z-scale kit |
 | `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py wheel (and source-build files), and the hashes of every file; only in a kit built by `make_kit.sh` |
@@ -74,6 +74,7 @@ The probe's `sinfo.txt` shows the current layout. If debug still has one node, s
 - gp nodes: Xeon Gold 6130, 2 sockets x 16 cores, 2 NUMA nodes.
 - Compute nodes have no internet and no C headers, so pip cannot download and nothing can be compiled there (see MPI).
 - srun MPI plugins: `pmix` (`pmix_v4`) and `pmi2`.
+- Multi-rank srun needs `--cpu-bind=cores` and `OMPI_MCA_hwloc_base_binding_policy=none` on GP. Without them each rank of a 1-rank-per-node run ends up on one CPU (job 8413: 2 and 4 nodes, every rank bound to CPU 0, 10x slow). Slurm itself bound the ranks to all 32 CPUs (`SLURM_CPU_BIND=mask_cpu:0xFFFFFFFF`). Open MPI 4.1.6 then rebound them in `MPI_Init`: a rank whose mask covers the whole node counts as unbound, and if a binding policy is set Open MPI binds it to the core matching its node rank, which is core 0 for one rank per node. `--cpu-bind=cores` alone gives the same full-node mask, so the MCA setting is what fixes it. Two ranks of 16 on one node (job 8409) were unaffected because their masks were half a node each. `run_one` now passes both on every multi-rank srun. `nodes`, `nodes_1e9` and `threads` run `affinity_preflight` before their MPI runs and stop with exit 3 if any rank has fewer CPUs than `--cpus-per-task` after `MPI_Init`. `scale_out.py` refuses to train on every rank if any rank has fewer CPUs than `--threads`.
 - I/O (20 GB files): lagoon cold read 1.5 GB/s, warm reread 3.5 GB/s, two nodes reading at once 1.4–1.5 GB/s each, lagoon write about 1 GB/s; node-local `/tmp` read 3.2–3.4 GB/s.
 
 ## MPI
@@ -109,7 +110,7 @@ pip download --no-deps --only-binary :all: --python-version 3.11 --implementatio
 
 To check the source set on the laptop, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py`; it builds against Homebrew Open MPI if `mpicc` is on PATH. The Linux wheel cannot be installed on macOS; PyPI's macOS wheel of the same version (`--only-binary :all:` into a scratch directory) exercises the same dlopen route with `MPI4PY_LIBMPI=/opt/homebrew/lib/libmpi.40.dylib`.
 
-If the build still fails, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one.
+If the build still fails, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one. `launch_cmd` in `common.sh` builds the multi-rank command once for `run_one` and the affinity pre-flight. The srun form is `srun --mpi=pmix --nodes=N --ntasks=R --ntasks-per-node=P --cpus-per-task=C --distribution=block:block --cpu-bind=verbose,cores` with `OMPI_MCA_hwloc_base_binding_policy=none` in the environment. The mpirun form binds each rank itself with `--map-by ppr:P:node:pe=C` (or `ppr:1:package:pe=C` per socket) and `--bind-to core --report-bindings`.
 
 ## Time estimates
 
@@ -135,5 +136,5 @@ If rows_1e9 hits its limit at 160x100, resubmit it with `RESUME_RUN=$K/runs/rows
 | `runs/<run>/run.json` | settings; per-epoch seconds, rows, rows/s, BMU, accumulate, update, reduction and checkpoint times; per-rank rows and pass times; nodes; peak RSS per rank; git commit; manifest check |
 | `summary/summary.md`, `summary/gate.json` | tables and the 1e9 gate |
 | `parity/parity.md` | max rel diff of each multi-rank run against its 1-rank reference |
-| `probe/` | sinfo (job nodes, then every partition and node with gres), modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs |
+| `probe/` | sinfo (job nodes, then every partition and node with gres), modules, `srun --mpi=list`, lscpu, `free -g`, `df -h`, `numactl -H`, environment JSON per node, mpi4py import, launcher tests, I/O JSONs; `affinity-<case>.txt` (CPUs per rank before and after `MPI_Init`) and `ompi-binding.txt` (where Open MPI's binding policy comes from) |
 | `logs/<run>.log`, `status/<job>-<restart>/final.tsv` | run logs; VALIDATED or FAILED |
