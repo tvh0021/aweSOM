@@ -1,7 +1,7 @@
 # Shared functions of the scale-out sbatch files. Source it, then call kit_init NAME.
 # Paths: KIT (this directory, default $SLURM_SUBMIT_DIR), VENV (python with numpy/numba/h5py),
 # OUT (fresh output dir, default $KIT/runs/NAME-JOBID), OUT_ROOTS (allowed parents).
-# MPI: MPI_SITE (pip --target dir holding mpi4py, default $KIT/mpi-site; PYTHONPATH),
+# MPI: $KIT/mpi-site (pip --target dir holding mpi4py, fixed, not overridable; PYTHONPATH),
 # LAUNCH (auto | srun-pmix | srun-pmi2 | srun-pmix_v4 | mpirun), MPIRUN (path, mpirun mode).
 
 kit_modules() {
@@ -22,8 +22,12 @@ kit_init() {
   OUT=${OUT:-$KIT/runs/$NAME-${SLURM_JOB_ID:-local}}
   OUT_ROOTS=${OUT_ROOTS:-$HOME:/lagoon/trungha}
   VENV=${VENV:-/lagoon/trungha/bbh-output/for-awesom-2026-10-28/check7-venv}
-  MPI_SITE=${MPI_SITE:-$KIT/mpi-site}
-  LOCAL_SCRATCH=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}
+  # The only pip target is inside the kit; an inherited MPI_SITE (--export=ALL) is ignored.
+  MPI_SITE=$KIT/mpi-site
+  [ ! -L "$MPI_SITE" ] || { echo "mpi-site must not be a symlink: $MPI_SITE" >&2; exit 2; }
+  # Node-local disk for the local I/O test: the scheduler's scratch or /tmp, never an
+  # inherited TMPDIR (which may point at HOME). Each node gets a fresh per-job directory.
+  LOCAL_SCRATCH=${SLURM_TMPDIR:-/tmp}
   [ -f "$KIT/scale_out.py" ] || { echo "KIT has no scale_out.py: $KIT" >&2; exit 2; }
   [ -d "$KIT/aweSOM-src/src/aweSOM" ] || { echo "KIT has no aweSOM-src/src/aweSOM (run make_kit.sh)" >&2; exit 2; }
   [ -x "$VENV/bin/python" ] || { echo "VENV has no bin/python: $VENV" >&2; exit 2; }
@@ -68,6 +72,8 @@ kit_init() {
 kit_finish() {
   local rc=$1 state=FAILED
   trap - EXIT TERM INT HUP; set +e
+  # The I/O test's large files live only in the fresh $OUT/io; remove them on every exit path.
+  [ -d "$OUT/io" ] && rm -f "$OUT/io/a.bin" "$OUT/io/b.bin"
   mkdir -p "$STATUS_DIR"
   if [ "$rc" -eq 0 ] && [ "$completed" = yes ]; then state=VALIDATED; elif [ "$rc" -eq 0 ]; then rc=1; fi
   printf '%s\t%s\t%s\n' "$state" "$rc" "$(date -u +%FT%TZ)" > "$STATUS_DIR/final.tmp"
@@ -114,10 +120,11 @@ io_probe() {
   rm -f "$io/a.bin" "$io/b.bin"
   local lgb; lgb=$(awk -v g="$gb" 'BEGIN { print (g < 10 ? g : 10) }')
   srun --nodes="$n" --ntasks="$n" --ntasks-per-node=1 --cpus-per-task=1 --mem=8G \
-    bash -c 'h=$(hostname -s); f="$3/awesom-io-$SLURM_JOB_ID-$h.bin";
+    bash -c 'h=$(hostname -s); d="$3/awesom-so-$SLURM_JOB_ID-$h"; f="$d/io.bin";
+             mkdir "$d" || exit 1; trap '"'"'rm -rf "$d"'"'"' EXIT;
              "$0" "$1/probe.py" write --path "$f" --gb "$2" --json "$4/io-local-write-$h.json" &&
-             "$0" "$1/probe.py" read --path "$f" --test local-disk --role after-fadvise --json "$4/io-local-read-$h.json";
-             rm -f "$f"' "$PY" "$KIT" "$lgb" "$LOCAL_SCRATCH" "$d" || echo "local disk test failed"
+             "$0" "$1/probe.py" read --path "$f" --test local-disk --role after-fadvise --json "$4/io-local-read-$h.json"' \
+      "$PY" "$KIT" "$lgb" "$LOCAL_SCRATCH" "$d" || echo "local disk test failed"
 }
 
 # Find a launcher that starts NRANKS ranks over NNODES nodes and reports the right size.
