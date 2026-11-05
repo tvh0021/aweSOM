@@ -107,9 +107,9 @@ export SCRATCH=/absolute/node-local/scratch
   --epochs "$EPOCHS" --r-min 8
 ```
 
-Submit the fits with statistics deferred. The GP templates use debug without an
-exclusion of its only node, lm-n0001. These commands submit work; they do not
-establish that a 1e10-row training run fits the requested wall time or memory.
+Submit the fits with statistics deferred. The training template uses debug on
+lm-n0001 for fast turnaround, not for correctness. These commands do not establish
+that a 1e10-row training run fits the requested wall time or memory.
 Use the trainer's supported checkpoint/resume workflow when required.
 
 ```bash
@@ -123,16 +123,32 @@ done
 ```
 
 Wait for each fit to finish before submitting its statistics job. The statistics
-launcher defaults to three single-threaded feature workers. At 1e10 rows,
-`THREADS=3` needs up to 240 GB of scratch; `THREADS=1` needs up to 160 GB.
-Completion copies 40 GB of labels per model into the new OUT, in addition to
-small model and JSON files. When OUT and scratch share a filesystem, the space
-guard adds both demands. Set scratch to a directory that exists on each
-statistics node, or omit SCRATCH to use SLURM_TMPDIR, TMPDIR, then the output
-filesystem. Confirm the chosen root's capacity before submission.
+launcher reads the feature count from the deferred fit's `pool-state.json`
+and defaults to that many single-threaded workers, capped at
+`SLURM_CPUS_PER_TASK`. An explicit `THREADS` overrides the default.
+The statistics template uses gp-default with 8 CPUs, 96G and a two-day limit.
+GP nodes have 32 cores and 192 GB of RAM. At 1e9 rows, seven workers need
+56 GB of scratch plus at most 7 GiB of merge buffers. The 96G request leaves
+about 37 GiB for run-formation arrays, file cache and runtimes.
+
+Measured on 2026-11-05, node-local `/tmp` on every GP node is a tmpfs RAM disk
+charged to the job's memory: 94 GB on gp nodes and 378 GB on lm-n0001.
+The 56 GB scratch at 1e9 rows fits on a gp node. At 1e10 rows, seven workers
+need about 560 GB, so put scratch under the job's lagoon directory with
+`SCRATCH`, which the launcher passes as `--scratch`. Measured lagoon throughput
+was about 1 GB/s writing and 1.5–3.5 GB/s reading.
+Before any 1e10 statistics submission, time a 1e9 `--statistics-only` run
+to check the wall-time request.
+
+Completion copies 40 GB of labels per model at 1e10 rows into the new OUT,
+in addition to small model and JSON files. When OUT and scratch share a
+filesystem, the space guard adds both demands. If SCRATCH is omitted, the
+launcher uses SLURM_TMPDIR, TMPDIR, then the output filesystem.
+Confirm the chosen root's capacity before submission.
 
 ```bash
-export THREADS=3
+export SCRATCH=/absolute/lagoon/job-directory/scratch
+# Leave THREADS unset to use the feature count, or export THREADS explicitly.
 for LATTICE in 91x64 48x34; do
   for SEED in 42 43; do
     export FIT_OUT="$FIT_ROOT/${LATTICE}-s${SEED}"
@@ -148,7 +164,7 @@ The direct equivalent for one fit is:
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
   --statistics-only "$FIT_ROOT/91x64-s42" \
   --out "$COMPLETE_ROOT/91x64-s42" \
-  --threads-per-seed 3 --scratch "$SCRATCH"
+  --threads-per-seed 7 --scratch "$SCRATCH"
 ```
 
 A retry reads the same deferred source and uses a different fresh OUT.
