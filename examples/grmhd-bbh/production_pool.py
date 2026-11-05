@@ -16,6 +16,7 @@ spatial check, which this driver does not run.
 from __future__ import annotations
 
 import copy
+import functools
 import argparse
 import hashlib
 import importlib.util
@@ -306,31 +307,71 @@ def pool(args, records, quota, out):
 
 
 class EpochSource:
-    """Fresh cyclic windows per physical stratum; exact equal snapshot budgets."""
+    """Fresh cyclic windows per physical stratum; exact equal snapshot budgets.
+
+    Call k (counted by ``calls``) draws its windows from ``default_rng([seed, k])``.
+    ``lazy_chunks()`` is one call that yields ``(rows, read)`` pairs and reads a window
+    only when ``read()`` runs, so ranks of a multi-process run read only the windows
+    they own while every rank advances ``calls`` identically. ``rows(ix)`` returns rows
+    ``ix`` of the next call's row order without advancing ``calls`` (used by
+    ``train_batch_stream`` for the sampled initial lattice instead of a full pass).
+    """
     def __init__(self, data, strata, rows, seed, chunk):
         self.data, self.strata, self.seed, self.chunk = data, strata, seed, chunk
         self.calls = 0
         snapshots = list(dict.fromkeys(s['snapshot'] for s in strata))
         if rows > len(data) or rows < len(snapshots) or rows % len(snapshots):
             raise ValueError('rows per epoch must be <= pool and divisible by snapshot count')
-        self.rows = rows
+        self.rows_per_call = rows
         self.groups = [[i for i,s in enumerate(strata) if s['snapshot'] == snap] for snap in snapshots]
         if any(rows//len(snapshots) < len(ix) for ix in self.groups):
             raise ValueError('epoch budget smaller than populated strata per snapshot')
         self.quotas = np.zeros(len(strata), dtype=int)
 
-    def __call__(self):
-        rng = np.random.default_rng([self.seed, self.calls]); self.calls += 1
-        for ix in self.groups:
-            self.quotas[ix] = randomized_allocate([self.strata[i]['rows'] for i in ix],
-                                                  self.rows//len(self.groups), rng)
+    @property
+    def n_feat(self):
+        shape = getattr(self.data, 'shape', ())
+        return int(shape[1]) if len(shape) == 2 else None
 
-        for s, q in zip(self.strata, self.quotas):
+    def _windows(self, call):
+        """Pool windows ``(start, rows)`` of call ``call``, in yield order, and its quotas."""
+        rng = np.random.default_rng([self.seed, call])
+        quotas = np.zeros(len(self.strata), dtype=int)
+        for ix in self.groups:
+            quotas[ix] = randomized_allocate([self.strata[i]['rows'] for i in ix],
+                                             self.rows_per_call//len(self.groups), rng)
+        windows = []
+        for s, q in zip(self.strata, quotas):
             pos = int(rng.integers(s['rows']))
             while q:
                 n = min(int(q), self.chunk, s['rows']-pos)
-                yield self.data[s['start']+pos:s['start']+pos+n]
+                windows.append((s['start']+pos, n))
                 q -= n; pos = (pos+n) % s['rows']
+        return windows, quotas
+
+    def _read(self, start, n):
+        return self.data[start:start+n]
+
+    def lazy_chunks(self):
+        windows, self.quotas = self._windows(self.calls); self.calls += 1
+        for start, n in windows:
+            yield n, functools.partial(self._read, start, n)
+
+    def __call__(self):
+        for _, read in self.lazy_chunks():
+            yield read()
+
+    def rows(self, ix):
+        windows, _ = self._windows(self.calls)
+        ix = np.asarray(ix, dtype=np.int64)
+        if len(ix) and (ix.min() < 0 or ix.max() >= self.rows_per_call):
+            raise IndexError('row index outside the epoch')
+        starts = np.array([a for a, _ in windows], dtype=np.int64)
+        offsets = np.r_[0, np.cumsum([n for _, n in windows])].astype(np.int64)
+        k = np.searchsorted(offsets, ix, side='right') - 1
+        uniq, inv = np.unique(starts[k] + ix - offsets[k], return_inverse=True)
+        got = self.data[uniq] if isinstance(self.data, np.ndarray) else self.data[uniq.tolist()]
+        return np.asarray(got)[inv]
 
 
 from numba import njit
