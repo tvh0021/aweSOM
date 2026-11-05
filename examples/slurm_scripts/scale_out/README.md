@@ -63,10 +63,12 @@ The probe's `sinfo.txt` shows the current layout. If debug still has one node, s
 
 ## MPI
 
-Compute nodes have no internet (probe 8401 could not resolve pypi.org). `probe.sbatch` therefore builds mpi4py offline:
+Compute nodes have no internet (probe 8401 could not resolve pypi.org) and no C headers (probe 8407: `stdlib.h: No such file or directory`), so nothing can be compiled there. `probe.sbatch` therefore installs the binary mpi4py wheel offline:
 
-1. If the venv cannot import mpi4py, it loads the newest `openmpi` module (`openmpi4/4.1.6` on GP) and runs `MPICC=$(command -v mpicc) pip install --no-index --find-links $KIT/wheels --target $KIT/mpi-site --no-binary mpi4py mpi4py`. It records the module in `mpi-site/MODULE` and checks that `MPI.Get_library_version()` names the module's Open MPI version. The other jobs load that module and put `mpi-site` on `PYTHONPATH`. A failed or mislinked build is moved to `mpi-site.failed-<job>-<time>`.
-2. Only if the kit has no `wheels/`, it tries the same build from PyPI, then the PyPI `mpi4py` and `openmpi` wheels. Both need network access from the node, which GP compute nodes do not have.
+1. If the venv cannot import mpi4py, it loads the newest `openmpi` module (`openmpi4/4.1.6` on GP) and runs `pip install --no-index --find-links $KIT/wheels --target $KIT/mpi-site --only-binary mpi4py mpi4py`. The PyPI wheel holds an Open MPI and an MPICH build of `mpi4py.MPI` and dlopens the MPI library at import. The probe takes the library from the module (`$(dirname $(dirname $(command -v mpicc)))/lib/libmpi.so.40`), refuses to go on if it is missing, and records it in `mpi-site/LIBMPI`. It records the module in `mpi-site/MODULE`. Every job loads that module, exports `MPI4PY_LIBMPI` from `mpi-site/LIBMPI`, and puts `mpi-site` on `PYTHONPATH`. `srun` passes the whole environment to the ranks (nothing in the kit filters it), and the `mpirun` lines add `-x MPI4PY_LIBMPI`.
+2. The probe then checks that `MPI.Get_library_version()` names the module's Open MPI version and that `mpi4py.MPI.__file__` is not the MPICH build, and writes both to `probe/mpi4py-version.txt`. A failed or mislinked install is moved to `mpi-site.failed-<job>-<time>`.
+3. `MPI_BUILD=source` (in `--export`) compiles mpi4py from the sdist in `$KIT/wheels` against the module's `mpicc` instead. Use it only where compute nodes have a compiler, such as Tigris. PyPI also has aarch64 wheels (`manylinux2014_aarch64`), so on Tigris the default wheel route works too once that wheel is in `WHEELS`.
+4. Only if the kit has no `wheels/`, it tries the same install from PyPI, then the PyPI `mpi4py` and `openmpi` wheels. Both need network access from the node, which GP compute nodes do not have.
 
 Do not use the `py3-mpi4py` module: it is built for the system python, not the 3.11 venv.
 
