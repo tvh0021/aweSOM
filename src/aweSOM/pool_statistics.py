@@ -17,51 +17,100 @@ def scratch_directory(scratch=None, fallback=None):
 
 
 @njit(cache=True)
-def _merge(a, b, out):
-    i = j = k = 0
-    while i < len(a) and j < len(b) and k < len(out):
-        if a[i]['value'] <= b[j]['value']:
-            out[k] = a[i]; i += 1
-        else:
-            out[k] = b[j]; j += 1
-        k += 1
-    return i, j, k
+def _sift(heap, size, values, positions):
+    parent = 0
+    while 2*parent+1 < size:
+        child = 2*parent+1
+        if child+1 < size:
+            left, right = heap[child], heap[child+1]
+            lv, rv = values[left,positions[left]], values[right,positions[right]]
+            if rv < lv or (rv == lv and right < left): child += 1
+        top, bottom = heap[parent], heap[child]
+        tv, bv = values[top,positions[top]], values[bottom,positions[bottom]]
+        if tv < bv or (tv == bv and top < bottom): break
+        heap[parent], heap[child] = bottom, top
+        parent = child
+
+
+@njit(cache=True)
+def _drain(values, labels, positions, lengths, heap, size, output):
+    count = 0
+    while size and count < len(output):
+        run = heap[0]; pos = positions[run]
+        output[count]['value'] = values[run,pos]
+        output[count]['label'] = labels[run,pos]
+        count += 1; positions[run] += 1
+        if positions[run] == lengths[run]: return count, run
+        _sift(heap,size,values,positions)
+    return count, -1
 
 
 def sorted_blocks(blocks, directory, chunk):
-    """Sort runs, then merge pairs using three fixed-size buffers."""
-    n_runs = 0
-    for i, (values, labels) in enumerate(blocks):
-        data = np.empty(len(values), DTYPE)
-        data['value'], data['label'] = values, labels
-        data.sort(order='value', kind='quicksort')
-        path = directory / f'run-0-{i}'
-        data.tofile(path); n_runs += 1
-    generation = 0
-    while n_runs > 1:
-        generation += 1
-        for i in range(0, n_runs, 2):
-            left = directory / f'run-{generation-1}-{i}'
-            right = directory / f'run-{generation-1}-{i+1}'
-            path = directory / f'run-{generation}-{i//2}'
-            if i+1 == n_runs:
-                left.rename(path); continue
-            with left.open('rb') as fa, right.open('rb') as fb, path.open('xb') as dst:
-                a = np.fromfile(fa, DTYPE, chunk); b = np.fromfile(fb, DTYPE, chunk)
-                buffer = np.empty(chunk, DTYPE)
-                while len(a) and len(b):
-                    na, nb, count = _merge(a, b, buffer)
-                    buffer[:count].tofile(dst)
-                    a, b = a[na:], b[nb:]
-                    if not len(a): a = np.fromfile(fa, DTYPE, chunk)
-                    if not len(b): b = np.fromfile(fb, DTYPE, chunk)
-                for rest, source in ((a, fa), (b, fb)):
-                    while len(rest):
-                        rest.tofile(dst); rest = np.fromfile(source, DTYPE, chunk)
-            left.unlink(); right.unlink()
-        n_runs = (n_runs+1)//2
-    if not n_runs: raise ValueError('empty statistics input')
-    return directory / f'run-{generation}-0'
+    """Write sorted runs once and consume them in one buffered k-way merge.
+
+    One file descriptor serves every run. Merge buffers hold at most 2**24
+    records with at most 2**15 records buffered per run. Refuse more than
+    2**18 runs to retain a fixed upper bound on buffers and metadata.
+    """
+    path = directory/'runs.bin'; offsets = []; lengths = []; packed = None
+    with path.open('xb') as dst:
+        for values, labels in blocks:
+            values, labels = np.asarray(values), np.asarray(labels)
+            is_packed = values.dtype == np.float32
+            if packed is not None and packed != is_packed: raise ValueError('mixed run dtypes')
+            packed = is_packed
+            if not len(values): continue
+            if len(offsets) == 2**18: raise ValueError('too many statistics runs; increase chunk')
+            offsets.append(dst.tell()); lengths.append(len(values))
+            if packed:
+                if np.any(labels < 0) or np.any(labels > 0xFFFFFFFF):
+                    raise ValueError('packed labels must fit uint32')
+                bits = (values + np.float32(0)).view(np.uint32)
+                keys = np.where(bits >> np.uint32(31), ~bits,
+                                bits | np.uint32(0x80000000)).astype(np.uint64)
+                keys <<= np.uint64(32); keys |= labels.astype(np.uint64)
+                keys.sort(); keys.tofile(dst)
+            else:
+                idx = np.argsort(values,kind='stable')
+                records = np.empty(len(values),DTYPE)
+                records['value'],records['label'] = values[idx], labels[idx]
+                records.tofile(dst)
+    if not lengths: raise ValueError('empty statistics input')
+    runs = len(lengths); width = min(chunk,2**15,max(1,2**24//runs))
+    values = np.empty((runs,width),dtype='f8'); labels = np.empty((runs,width),dtype='i8')
+    positions = np.zeros(runs,dtype='i8'); available = np.zeros(runs,dtype='i8')
+    remaining = np.array(lengths,dtype='i8'); offsets = np.array(offsets,dtype='i8')
+    output = np.empty(min(chunk,2**18),DTYPE)
+    dtype = np.dtype('u8') if packed else DTYPE
+    try:
+        with path.open('rb') as source:
+            def refill(run):
+                count = min(width,int(remaining[run]))
+                source.seek(int(offsets[run]))
+                data = np.fromfile(source,dtype,count)
+                if len(data) != count: raise IOError('truncated statistics run')
+                offsets[run] += count*dtype.itemsize; remaining[run] -= count
+                if packed:
+                    bits = (data >> np.uint64(32)).astype(np.uint32)
+                    bits = np.where(bits >> np.uint32(31), bits & np.uint32(0x7FFFFFFF), ~bits)
+                    values[run,:count] = bits.view(np.float32)
+                    labels[run,:count] = (data & np.uint64(0xFFFFFFFF)).astype('i8')
+                else:
+                    values[run,:count],labels[run,:count] = data['value'],data['label']
+                positions[run] = 0; available[run] = count
+                return count
+            for run in range(runs): refill(run)
+            heap = np.array(sorted(range(runs),key=lambda r:(values[r,0],r)),dtype='i8')
+            size = runs
+            while size:
+                count, empty = _drain(values,labels,positions,available,heap,size,output)
+                yield output[:count]
+                if empty >= 0:
+                    if not refill(empty):
+                        size -= 1; heap[0] = heap[size]
+                    if size: _sift(heap,size,values,positions)
+    finally:
+        path.unlink()
 
 
 @njit(cache=True)
@@ -92,15 +141,9 @@ def summarize(blocks, counts, probabilities, directory, chunk):
     selected = np.full(targets.shape, np.nan)
     sums = np.zeros(len(counts)); ties = np.zeros(len(counts)); state = np.zeros(3)
     seen = np.zeros(len(sizes), dtype='i8')
-    path = sorted_blocks(blocks, directory, chunk)
-    try:
-        with path.open('rb') as source:
-            while True:
-                data = np.fromfile(source, DTYPE, chunk)
-                if not len(data): break
-                _scan(data, seen, targets, selected, sums, ties, state)
-        sums += ties * (state[1] + state[0] + 1)
-    finally: path.unlink()
+    for data in sorted_blocks(blocks,directory,chunk):
+        _scan(data, seen, targets, selected, sums, ties, state)
+    sums += ties * (state[1] + state[0] + 1)
     lo, hi = selected[..., 0], selected[..., 1]
     fraction = positions - targets[..., 0]
     result = np.where(fraction >= .5, hi-(hi-lo)*(1-fraction), lo+(hi-lo)*fraction)
@@ -123,3 +166,34 @@ def read_slice(array, start, stop):
     result = np.array(array[start:stop])
     release_mapping(array)
     return result
+
+
+def feature_summary(job):
+    """Read one HDF5 feature in a spawned, single-threaded statistics worker."""
+    filename, dataset, label_path, column, counts, chunk, scratch = job
+    import h5py
+    import numba
+    numba.set_num_threads(1)
+    labels = np.load(label_path,mmap_mode='r')
+    with h5py.File(filename,'r') as source, scratch_directory(scratch) as directory:
+        raw = source[dataset]
+        blocks = ((raw[a:a+chunk,column],read_slice(labels,a,a+chunk))
+                  for a in range(0,len(raw),chunk))
+        return summarize(blocks,counts,[.25,.5,.75],directory,chunk)
+
+
+def parallel_features(raw, labels, counts, chunk, scratch, workers):
+    """Map independent features within the enclosing fit's CPU allocation."""
+    from concurrent.futures import ProcessPoolExecutor
+    import multiprocessing as mp
+    jobs = [(raw.file.filename,raw.name,str(labels.filename),j,counts,chunk,str(scratch))
+            for j in range(raw.shape[1])]
+    previous = os.environ.get('NUMBA_NUM_THREADS')
+    os.environ['NUMBA_NUM_THREADS'] = '1'
+    try:
+        with ProcessPoolExecutor(max_workers=min(workers,raw.shape[1]),
+                                 mp_context=mp.get_context('spawn')) as executor:
+            return list(executor.map(feature_summary,jobs))
+    finally:
+        if previous is None: os.environ.pop('NUMBA_NUM_THREADS',None)
+        else: os.environ['NUMBA_NUM_THREADS'] = previous

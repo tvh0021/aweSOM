@@ -23,7 +23,14 @@ done
 
 Use an existing output parent and a fresh OUT for each job. Set `SCRATCH` to a
 node-local directory if the scheduler does not provide `SLURM_TMPDIR` or `TMPDIR`.
-Exact external sorting needs up to 32 bytes per row of temporary disk per fit.
+Exact statistics sort packed float32 features into 8-byte keys per row.
+A single k-way merge reads each run once, without writing another generation.
+With W=min(threads-per-seed, features) concurrent features, peak scratch is
+max(16, 8*W) bytes per row for float32 pools, or 56 bytes per row with seven
+concurrent features. Serial features need 16 bytes per row including the
+separate float64 distance stage. Scaler selection needs 8 bytes per row.
+Merge buffers and metadata have fixed ceilings; more than 2**18 runs requires
+a larger --chunk. Each statistics process uses one Numba/BLAS thread.
 The driver removes its private scratch directory after success or an exception.
 A job killed by the scheduler (time limit, SIGTERM, SIGKILL) leaves it behind;
 remove `awesom-stat-*` directories under the scratch root by hand.

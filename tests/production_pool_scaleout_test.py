@@ -70,3 +70,22 @@ def test_cpu_no_checkpoint_baseline(threads):
                 bmu='patch',seed=42,groups=64,r_min=2,final_pass='none')
             assert np.array_equal(weights,fixture['weights'])
     finally: numba.set_num_threads(previous)
+
+
+def test_parallel_statistics_bitwise(tmp_path):
+    rng = np.random.default_rng(17)
+    values = np.round(rng.normal(size=(1003,7)),1).astype('f4')
+    values[:5,0] = [-0.,0.,np.nextafter(np.float32(0),np.float32(1)),1.,-1.]
+    nodes = rng.integers(0,9,len(values),dtype='i4')
+    np.save(tmp_path/'labels.npy',nodes%3)
+    labels = np.load(tmp_path/'labels.npy',mmap_mode='r')
+    distances = rng.random(len(values))
+    with h5py.File(tmp_path/'raw.h5','w') as h:
+        h.create_dataset('raw',data=values)
+    with h5py.File(tmp_path/'raw.h5','r') as h:
+        raw = h['raw']
+        serial = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'serial',29,
+                                        names=pool.NAMES,n_clusters=4,workers=1)
+        parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
+                                          names=pool.NAMES,n_clusters=4,workers=2)
+    assert pool.one_line(serial) == pool.one_line(parallel)

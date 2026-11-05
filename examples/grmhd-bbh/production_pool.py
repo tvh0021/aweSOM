@@ -366,11 +366,12 @@ def grouped_order(keys, n_groups):
 
 
 def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
-                      names=None, strata=None, n_clusters=None, scratch=None):
+                      names=None, strata=None, n_clusters=None, scratch=None, workers=1):
     """Exact quartiles and tied ranks using bounded external sorts.
 
-    RAM is O(chunk*D + K*D + n_nodes), excluding caller-owned mapped outputs.
-    Private scratch holds at most two generations of 16-byte sorted records.
+    Feature runs hold 8-byte packed float32/label keys; distance runs use
+    16-byte records. A single bounded-buffer k-way merge consumes each run.
+    File-backed features run concurrently within the fit thread budget.
     Output keys match the in-memory implementation.
     """
     from aweSOM.pool_statistics import scratch_directory, summarize, read_slice
@@ -393,9 +394,16 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
         blocks = ((read_slice(distances,a,a+chunk), read_slice(nodes,a,a+chunk)) for a in range(0,n,chunk))
         qs, _, _ = summarize(blocks, node_counts, np.asarray([99.,99.9])/100, directory, chunk)
         q, reject = qs[:-1,0], float(qs[-1,1])
-        for j in range(D):
-            blocks = ((raw[a:a+chunk][:,j], read_slice(labels,a,a+chunk)) for a in range(0,n,chunk))
-            qs, mids, sums = summarize(blocks, counts, [.25,.5,.75], directory, chunk)
+        if workers > 1 and isinstance(raw,h5py.Dataset) and raw.file.mode == 'r' and isinstance(labels,np.memmap):
+            from aweSOM.pool_statistics import parallel_features
+            summaries = parallel_features(raw,labels,counts,chunk,directory,workers)
+        else:
+            summaries = []
+            for j in range(D):
+                blocks = ((raw[a:a+chunk][:,j], read_slice(labels,a,a+chunk)) for a in range(0,n,chunk))
+                with scratch_directory(directory) as feature_directory:
+                    summaries.append(summarize(blocks,counts,[.25,.5,.75],feature_directory,chunk))
+        for j,(qs,mids,sums) in enumerate(summaries):
             quartiles[:,:,j] = qs[:-1]; quartiles[:,1,j] = mids[:-1,1]
             pooled_medians[j] = mids[-1,1]
             effects[:,j] = effects_from_rank_sums(sums,counts,n)
@@ -703,7 +711,7 @@ def fit(args, shape, seed, scaling, out):
         clock.finish('labelling')
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         q, reject, medians, described = export_statistics(raw, nodes, distances, labels, len(w), out, tag, args.chunk,
-                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters, scratch=args.scratch)
+                                                          names=names, strata=scaling['strata'], n_clusters=lat.n_clusters, scratch=args.scratch, workers=args.threads_per_seed)
         candidates = sheet_candidates(described['cluster_effects'], names)
         clock.finish('statistics')
         del nodes, distances
