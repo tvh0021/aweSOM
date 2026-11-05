@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.5.0
+Version: 1.6.0
 
 ## 1. Installation
 
@@ -115,6 +115,8 @@ map.train_lattice(iris_data_transformed, feature_names, true_labels)
 The trained SOM is saved at  `map.lattice`
 
 Since v1.5.0, training draws the initial lattice and the sample order from `map.seed` (42 by default; set it before `train_lattice`), so the same seed and data give the same lattice.
+
+For large runs, `map.train_lattice(..., history=False)` skips the snapshots in `map.lattice_history` and `map.umat_history`; the final lattice and U-matrix are the same.
 
 To visualize the SOM with U-matrix, which is saved at the end of training at `map.umat`
 

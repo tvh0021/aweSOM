@@ -254,5 +254,22 @@ def test_final_umat_uses_final_lattice():
     np.testing.assert_array_equal(lattice.umat, lattice.compute_umat())
 
 
+def test_final_umat_uses_final_lattice_without_history():
+    # history=False keeps no snapshots, but the final lattice and U-matrix are
+    # still computed
+    lattice = Lattice(
+        xdim=6,
+        ydim=5,
+        alpha_0=0.5,
+        train=1003,
+        alpha_type="static",
+        sampling_type="uniform",
+    )
+    lattice.train_lattice(data, features_names, history=False)
+    assert lattice.lattice_history == []
+    assert lattice.umat_history == []
+    np.testing.assert_array_equal(lattice.umat, lattice.compute_umat())
+
+
 if __name__ == "__main__":
     pytest.main()
