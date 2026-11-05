@@ -87,6 +87,20 @@ def test_save_cluster_labels(tmp_path, monkeypatch):
     os.remove(file_name)
 
 
+@pytest.mark.parametrize(
+    "top, dtype", [(5, np.uint8), (255, np.uint8), (300, np.uint16), (70000, np.int32)]
+)
+def test_save_cluster_labels_smallest_unsigned_dtype(tmp_path, monkeypatch, top, dtype):
+    monkeypatch.chdir(tmp_path)
+    labels = (np.arange(1000, dtype=np.int32) * 7919) % (top + 1)
+    labels[0] = top
+    save_cluster_labels(labels, 10, 10, 0.5, 100, name_of_dataset="test")
+    loaded = np.load("labels.test-10-10-0.5-100-1s.npy")
+    assert loaded.dtype == dtype
+    assert loaded.max() == top
+    np.testing.assert_array_equal(loaded.astype(np.int64), labels.astype(np.int64))
+
+
 # Run the tests
 if __name__ == "__main__":
     pytest.main()
