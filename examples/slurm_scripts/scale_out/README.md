@@ -18,7 +18,7 @@ These jobs time the streaming SOM trainer on synthetic gmm_bbh7 rows. The genera
 | `summarize.py` | builds `summary.md` (rates, efficiencies, reduction, io_wait, RSS, I/O, and a labelled projection to 72 and 144 cores) and `gate.json` |
 | `probe.py` | node environment JSON and the file write/read rate tests |
 | `gmm_bbh7.npz` | generator parameters, copied from the Z-scale kit |
-| `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py build files, and the hashes of every file; only in a kit built by `make_kit.sh` |
+| `aweSOM-src/`, `wheels/`, `kit-manifest.json` | vendored aweSOM source, the offline mpi4py wheel (and source-build files), and the hashes of every file; only in a kit built by `make_kit.sh` |
 
 In the repository, `[WHEELS=DIR] make_kit.sh DEST [REVISION]` builds a kit from a committed revision. `scale_out.py` checks the vendored package against `kit-manifest.json` and records the result in `run.json` under `source.package_matches_manifest`.
 
@@ -89,12 +89,15 @@ Do not use the `py3-mpi4py` module: it is built for the system python, not the 3
 
 ### Offline wheels
 
-`make_kit.sh` copies `WHEELS` (default `/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels`) into the kit as `wheels/`, checks each file against `WHEELS/SHA256SUMS`, and lists each file's sha256 under `wheels` in `kit-manifest.json`. The wheels stay out of git. The directory holds the mpi4py sdist and its build-isolation requirements: `setuptools >= 42` and `build` (from mpi4py's `pyproject.toml`), their dependencies `packaging` and `pyproject_hooks`, and `cython >= 3.0.1`, which the build needs because the sdist has no generated `MPI.c`. Cython comes twice: the cp311 manylinux x86_64 wheel, which pip picks on the cluster, and the pure-Python wheel as a slower fallback.
+`make_kit.sh` copies `WHEELS` (default `/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels`) into the kit as `wheels/`, checks each file against `WHEELS/SHA256SUMS`, and lists each file's sha256 under `wheels` in `kit-manifest.json`. The wheels stay out of git. `make_kit.sh` requires the binary wheel `mpi4py-4.1.2-cp311-cp311-manylinux1_x86_64.manylinux_2_5_x86_64.whl`, which the default route installs on GP. The rest is the `MPI_BUILD=source` set and is optional: the mpi4py sdist and its build-isolation requirements, `setuptools >= 42` and `build` (from mpi4py's `pyproject.toml`), their dependencies `packaging` and `pyproject_hooks`, and `cython >= 3.0.1`, which the build needs because the sdist has no generated `MPI.c`. If the sdist is there, `make_kit.sh` requires a cython wheel too. Cython comes twice: the cp311 manylinux x86_64 wheel and the pure-Python wheel as a slower fallback. For Tigris, add the `manylinux2014_aarch64` mpi4py wheel (`--platform manylinux2014_aarch64` below).
 
 To rebuild the directory, run this on a machine with internet:
 
 ```bash
 W=/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels
+pip download --no-deps --only-binary :all: --python-version 3.11 --implementation cp --abi cp311 \
+  --platform manylinux1_x86_64 --platform manylinux_2_5_x86_64 -d $W mpi4py==4.1.2
+# optional, MPI_BUILD=source only:
 pip download --no-deps --no-binary :all: -d $W mpi4py==4.1.2
 pip download --no-deps --only-binary :all: -d $W setuptools==84.2.1 build==1.6.1 packaging==26.3 pyproject_hooks==1.3.3
 pip download --no-deps --only-binary :all: --python-version 3.11 --implementation cp --abi cp311 \
@@ -104,7 +107,7 @@ pip download --no-deps --only-binary :all: --python-version 3.11 --implementatio
 (cd $W && shasum -a 256 *.whl *.tar.gz > SHA256SUMS)
 ```
 
-To check that the set is complete, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py` on the laptop. It builds against Homebrew Open MPI if `mpicc` is on PATH.
+To check the source set on the laptop, run `pip install --no-index --find-links $W --target /tmp/x --no-binary mpi4py mpi4py`; it builds against Homebrew Open MPI if `mpicc` is on PATH. The Linux wheel cannot be installed on macOS; PyPI's macOS wheel of the same version (`--only-binary :all:` into a scratch directory) exercises the same dlopen route with `MPI4PY_LIBMPI=/opt/homebrew/lib/libmpi.40.dylib`.
 
 If the build still fails, run the same `pip install --target` command on a login node. Multi-rank jobs try `srun --mpi=pmix`, `pmix_v4`, `pmi2`, then `mpirun`. Each is tested with `python -m mpi4py.bench helloworld`, and the first one that starts the right number of ranks is used. Set `LAUNCH=` to force one.
 

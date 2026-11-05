@@ -2,19 +2,24 @@
 # Build a self-contained scale-out kit from a committed revision (default HEAD):
 #   DEST/            the files of examples/slurm_scripts/scale_out at REVISION
 #   DEST/aweSOM-src/ git archive REVISION src/aweSOM, unmodified
-#   DEST/wheels/     copy of WHEELS: the mpi4py sdist and its build wheels (README, "MPI");
-#                    compute nodes have no internet, so probe.sbatch builds mpi4py from these
+#   DEST/wheels/     copy of WHEELS: the binary mpi4py wheel (MPI_BUILD=wheel, the default)
+#                    and optionally the sdist and its build wheels (MPI_BUILD=source); compute
+#                    nodes have no internet, so probe.sbatch installs mpi4py from these (README, "MPI")
 #   DEST/kit-manifest.json  commit, branch, SHA256 of every package .py file, kit file and wheel
 # Usage: [WHEELS=DIR] make_kit.sh DEST [REVISION]. DEST must not exist. WHEELS (default below)
-# must hold mpi4py-*.tar.gz, a cython wheel and SHA256SUMS; every file is checked against it.
+# must hold SHA256SUMS and the cp311 x86_64 manylinux mpi4py wheel; if it holds the sdist
+# mpi4py-*.tar.gz it must also hold a cython wheel. Every file is checked against SHA256SUMS.
 set -eo pipefail
 dest=$1; rev=${2:-HEAD}
 [ -n "$dest" ] || { echo "usage: make_kit.sh DEST [REVISION]" >&2; exit 2; }
 [ ! -e "$dest" ] || { echo "DEST exists: $dest" >&2; exit 2; }
 wheels=${WHEELS:-/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels}
 [ -f "$wheels/SHA256SUMS" ] || { echo "WHEELS has no SHA256SUMS: $wheels" >&2; exit 2; }
-ls "$wheels"/mpi4py-*.tar.gz >/dev/null 2>&1 || { echo "WHEELS has no mpi4py-*.tar.gz: $wheels" >&2; exit 2; }
-ls "$wheels"/[cC]ython-*.whl >/dev/null 2>&1 || { echo "WHEELS has no cython wheel: $wheels" >&2; exit 2; }
+ls "$wheels"/mpi4py-*-cp311-cp311-*manylinux*_x86_64*.whl >/dev/null 2>&1 \
+  || { echo "WHEELS has no binary mpi4py-*-cp311-*manylinux*_x86_64.whl: $wheels" >&2; exit 2; }
+if ls "$wheels"/mpi4py-*.tar.gz >/dev/null 2>&1; then
+  ls "$wheels"/[cC]ython-*.whl >/dev/null 2>&1 || { echo "WHEELS has the mpi4py sdist but no cython wheel: $wheels" >&2; exit 2; }
+fi
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 commit=$(git -C "$repo" rev-parse "$rev^{commit}")
 mkdir -p "$dest/aweSOM-src"
