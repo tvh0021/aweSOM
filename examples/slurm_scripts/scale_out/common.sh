@@ -112,7 +112,7 @@ io_probe() {
              "$0" "$1/probe.py" read --path "$2/b.bin" --test lagoon-'"$n"'-concurrent --role "$r" \
                --json "$4/io-lagoon-concurrent-$h.json"' "$PY" "$KIT" "$io" "${NODES[0]%%.*}" "$d"
   rm -f "$io/a.bin" "$io/b.bin"
-  local lgb=$(( gb < 10 ? gb : 10 ))
+  local lgb; lgb=$(awk -v g="$gb" 'BEGIN { print (g < 10 ? g : 10) }')
   srun --nodes="$n" --ntasks="$n" --ntasks-per-node=1 --cpus-per-task=1 --mem=8G \
     bash -c 'h=$(hostname -s); f="$3/awesom-io-$SLURM_JOB_ID-$h.bin";
              "$0" "$1/probe.py" write --path "$f" --gb "$2" --json "$4/io-local-write-$h.json" &&
