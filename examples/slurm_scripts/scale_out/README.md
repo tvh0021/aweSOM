@@ -61,6 +61,21 @@ Each file sets `--partition=debug`, as the brief asks. The 2026-10-28 `sinfo` li
 
 The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. Submit the probe with `--partition=gp-default --nodes=2`, as above, so the 2-node launcher test and the cold read run. mpi4py is installed once, by the batch shell on the first node, before any `srun`, so the two nodes never write `mpi-site/` at the same time. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
 
+## Cluster notes (probe 8407, 2026-11-05, gp-n0021 + gp-n0022)
+
+| Partition | Nodes | CPUs, memory per node | Time limit |
+| --- | --- | --- | --- |
+| gp-default / gp-long | 40, gp-n[0001-0040] | 32, 192 GB | 2 days / 20 days |
+| wl-default / wl-long | 24, wl-n[0001-0024] | 32, 192 GB | 2 days / 20 days |
+| all-default | 64, the gp and wl nodes | 32, 192 GB | none |
+| debug / lm-largemem | 1, lm-n0001 | 48, 770 GB | 12 h / 1 day |
+
+- GRES is `(null)` on every partition and node, so the cluster has no GPUs. The GPU probe cannot run here; it needs Tigris.
+- gp nodes: Xeon Gold 6130, 2 sockets x 16 cores, 2 NUMA nodes.
+- Compute nodes have no internet and no C headers, so pip cannot download and nothing can be compiled there (see MPI).
+- srun MPI plugins: `pmix` (`pmix_v4`) and `pmi2`.
+- I/O (20 GB files): lagoon cold read 1.5 GB/s, warm reread 3.5 GB/s, two nodes reading at once 1.4–1.5 GB/s each, lagoon write about 1 GB/s; node-local `/tmp` read 3.2–3.4 GB/s.
+
 ## MPI
 
 Compute nodes have no internet (probe 8401 could not resolve pypi.org) and no C headers (probe 8407: `stdlib.h: No such file or directory`), so nothing can be compiled there. `probe.sbatch` therefore installs the binary mpi4py wheel offline:
