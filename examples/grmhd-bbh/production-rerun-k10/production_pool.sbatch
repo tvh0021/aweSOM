@@ -1,18 +1,20 @@
 #!/bin/bash
 #SBATCH --job-name=production-pool-k10
-#SBATCH --partition=gp-default
+#SBATCH --partition=debug
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --exclusive
 #SBATCH --exclude=lm-n0001
 #SBATCH --mem=180G
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thccrg@rit.edu
 set -eo pipefail
 DATA_KIT=${DATA_KIT:-/lagoon/trungha/bbh-output/for-awesom-2026-10-28}
 KIT=${KIT:-$DATA_KIT/production-rerun-k10}
+# For four separate node jobs, use ../scale-out/production-fit-gp.sbatch.
+# groups=64 preserves rounding; --groups 128 can help 144-core nodes but changes last bits.
 LATTICES='91x64 48x34'
 case "${1:-}" in
   '') ;;
@@ -54,10 +56,11 @@ printf 'STARTED\t%s\n' "$(date -u +%FT%TZ)" > "$STATUS_DIR/start.tsv"
 cd "$OUT"
 source "${VENV:-$DATA_KIT/check7-venv}/bin/activate"
 export PYTHONPATH="$KIT/aweSOM-src/src:${ETK:-$HOME/etk-analysis}"
-export PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR="$OUT/numba-cache" MPLCONFIGDIR="$OUT/mpl" TMPDIR="$OUT/tmp"
-export NUMBA_NUM_THREADS=${SLURM_CPUS_PER_TASK:-32} OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR="$OUT/numba-cache" MPLCONFIGDIR="$OUT/mpl" TMPDIR="${SLURM_TMPDIR:-${TMPDIR:-$OUT/tmp}}"
+export HDF5_USE_FILE_LOCKING=FALSE
+export NUMBA_NUM_THREADS=${SLURM_CPUS_PER_TASK:?} OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 python -u "$KIT/production_pool.py" --verify-source-only
-mkdir "$TMPDIR"
+mkdir -p "$TMPDIR"
 INPUT_94208=${INPUT_94208:-$DATA_KIT/HHR_flux_it94208_region7/features_HHR_flux_94208.h5}
 INPUT_98304=${INPUT_98304:-$DATA_KIT/HHR_flux_it98304_region7_anchor94208/features_HHR_flux_98304.h5}
 # 405504 remains the named holdout. A third training snapshot needs a different holdout.
