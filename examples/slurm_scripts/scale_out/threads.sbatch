@@ -19,10 +19,16 @@ LATTICE=${LATTICE:-91x64}; N=${SCALE_N:-1e8}
 kit_init "threads-$LATTICE"
 env_probe
 io_probe "${IO_TEST_GB:-20}"
+# Launcher and affinity pre-flight first, so a bad binding stops the job in seconds.
+MPI_OK=no
+if pick_launcher 1 2; then
+  affinity_preflight 2x16-socket 1 2 16 socket || exit 3
+  MPI_OK=yes
+fi
 for t in 32 16 8; do
   try_run "$OUT/runs/$LATTICE-n$N-1x$t" 1 1 "$t" none -- --n "$N" --lattice "$LATTICE" --tag "threads-1x$t"
 done
-if pick_launcher 1 2; then
+if [ "$MPI_OK" = yes ]; then
   try_run "$OUT/runs/$LATTICE-n$N-2x16-socket" 1 2 16 socket -- --n "$N" --lattice "$LATTICE" --tag threads-2x16-socket
   check_pinning "$OUT/runs/$LATTICE-n$N-2x16-socket" || true
 else

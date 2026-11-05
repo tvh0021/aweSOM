@@ -7,6 +7,11 @@ later-epoch rates, reduction time, io_wait, peak RSS. The projection section sca
 the measured 1-node 32-thread per-core rate to 72 and 144 cores at 1x, 1.5x and 2x
 per-core speed; it is arithmetic, not a measurement.
 
+A run in which some rank held fewer CPUs than threads (``affinity`` in ``per_rank``; job
+8413) is marked UNDER-PINNED and left out of every efficiency, the projection and the gate.
+Run directories with ``progress.log`` but no ``run.json`` (killed mid-run) are listed as
+unfinished; the summary covers the finished runs, so it also works on a job killed mid-sweep.
+
 Writes ``summary.md`` and ``gate.json`` (node efficiency at 1e8 rows, 2 and 4
 nodes, >= 0.70 for every lattice: the condition for submitting nodes_1e9.sbatch).
 ``--check-gate`` re-evaluates a gate.json for the lattices a 1e9 job will run.
@@ -43,6 +48,23 @@ def check_gate_file(path, lattices):
     ok, reasons = gate_check(g.get("efficiency", {}), lattices, g.get("threshold", GATE))
     print(f"gate {'PASS' if ok else 'NOT MET'} for {' '.join(lattices)}" + "".join(f"\n  {r}" for r in reasons))
     return 0 if ok else 1
+
+
+def min_cpus(r):
+    """Fewest CPUs any rank of run ``r`` was bound to, or None if not recorded."""
+    counts = [len(x["affinity"]) for x in r.get("per_rank", []) if x.get("affinity")]
+    return min(counts) if counts else None
+
+
+def under_pinned(r):
+    m = min_cpus(r)
+    return m is not None and m < r["threads_per_rank"]
+
+
+def unfinished(roots):
+    """Run directories (with progress.log) that never wrote run.json."""
+    return sorted({str(p.parent) for root in roots for p in Path(root).rglob("progress.log")
+                   if not (p.parent / "run.json").exists()})
 
 
 def load(roots):
@@ -91,26 +113,33 @@ def main(argv=None):
     fewest = {}  # 1 rank, fewest threads
     for r in runs:
         k = setup(r)
+        if under_pinned(r):
+            continue
         if r["ranks"] == 1 and r["threads_per_rank"] == 32:
             base.setdefault(k, r)
         if r["ranks"] == 1 and (k not in fewest or r["threads_per_rank"] < fewest[k]["threads_per_rank"]):
             fewest[k] = r
     out = ["# Scale-out runs", "", "Measured. Rates are rows processed / training wall time (5 epochs, all rows "
            "every epoch, final_pass none). Thread eff = per-thread rate / per-thread rate of the fewest-thread "
-           "1-rank run; node eff = rate / (nodes x 1-node 32-thread rate).", "",
-           "| lattice | n | nodes | ranks x threads | wall s | Mrows/s | krows/s/thread | thread eff | node eff | "
+           "1-rank run; node eff = rate / (nodes x 1-node 32-thread rate). min CPUs = fewest CPUs any rank was "
+           "bound to; UNDER-PINNED runs (min CPUs < threads) are left out of every efficiency, the projection "
+           "and the gate.", "",
+           "| lattice | n | nodes | ranks x threads | min CPUs | wall s | Mrows/s | krows/s/thread | thread eff | node eff | "
            "epoch-1 Mrows/s | later Mrows/s | reduce s | io_wait s | max RSS GB | max/min rank pass s | dir |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     gate = {}
     for r in sorted(runs, key=lambda r: (setup(r), r["n_nodes"], r["ranks"], r["threads_per_rank"])):
         k = setup(r)
         rate = r["rows_per_second"]
         per_thread = rate / r["total_threads"]
         teff = neff = None
-        if r["ranks"] == 1 and k in fewest:
+        pinned = "" if min_cpus(r) is None else str(min_cpus(r))
+        if under_pinned(r):
+            pinned += " UNDER-PINNED"
+        elif r["ranks"] == 1 and k in fewest:
             f = fewest[k]
             teff = per_thread / (f["rows_per_second"] / f["total_threads"])
-        if (r["n_nodes"] > 1 or r["ranks"] > 1) and k in base:
+        if (r["n_nodes"] > 1 or r["ranks"] > 1) and k in base and not under_pinned(r):
             neff = rate / (r["n_nodes"] * base[k]["rows_per_second"])
             if k[1] == int(1e8) and r["n_nodes"] in (2, 4) and r["ranks"] == r["n_nodes"]:
                 gate.setdefault(k[0], {})[r["n_nodes"]] = neff
@@ -118,12 +147,16 @@ def main(argv=None):
         passes = [e.get("rank_pass_seconds") for e in r["epochs"]]
         if passes and all(passes) and r["ranks"] > 1:
             imb = f"{sum(max(x) for x in passes):.0f}/{sum(min(x) for x in passes):.0f}"
-        out.append(f"| {k[0]} | {k[1]:.0e} | {r['n_nodes']} | {r['ranks']} x {r['threads_per_rank']} | "
+        out.append(f"| {k[0]} | {k[1]:.0e} | {r['n_nodes']} | {r['ranks']} x {r['threads_per_rank']} | {pinned} | "
                    f"{r['training_wall_seconds']:.0f} | {rate / 1e6:.2f} | {per_thread / 1e3:.1f} | "
                    f"{fmt(teff, '.2f')} | {fmt(neff, '.2f')} | {r['first_epoch_rows_per_second'] / 1e6:.2f} | "
                    f"{fmt(r['later_epoch_rows_per_second'] and r['later_epoch_rows_per_second'] / 1e6, '.2f')} | "
                    f"{r['reduce_seconds_total']:.3f} | {r['io_wait_total']:.2f} | "
                    f"{max(r['peak_rss_bytes_per_rank']) / 2**30:.1f} | {imb} | {Path(r['dir']).name} |")
+    left = unfinished(a.roots)
+    if left:
+        out += ["", "Unfinished (progress.log but no run.json, e.g. killed by the time limit): "
+                + ", ".join(Path(d).name for d in left)]
     if io:
         out += ["", "# Lagoon and local-disk I/O probe (measured)", "",
                 "| test | role | host | GB | seconds | GB/s | note |", "|---|---|---|---|---|---|---|"]

@@ -163,8 +163,37 @@ hostlist() {  # first $1 nodes, $2 slots each: h1:2,h2:2
   echo "$s"
 }
 
-# run_one DIR NNODES RANKS_PER_NODE CPUS_PER_RANK [socket] -- scale_out.py args
-# One rank: plain srun, no MPI. More: the launcher from pick_launcher, python -m mpi4py.
+# launch_cmd NNODES RANKS_PER_NODE CPUS_PER_RANK BIND: set the array CMD to the multi-rank
+# launch (environment + launcher + flags) that run_one and affinity_preflight both use.
+# srun: Slurm binds each rank to its --cpus-per-task cores (--cpu-bind=cores, ranks packed
+# block:block, so 2 ranks x 16 on a node land one per socket), and
+# OMPI_MCA_hwloc_base_binding_policy=none stops Open MPI from rebinding the rank in MPI_Init.
+# Job 8413 (2 and 4 nodes, 1 rank x 32 CPUs per node, srun --mpi=pmix): Slurm applied
+# mask 0xFFFFFFFF, the whole node, and Open MPI 4.1.6 then rebound every rank to core 0,
+# because a rank whose mask equals the node counts as "not bound at launch"
+# (orte/mca/ess/base/ess_base_fns.c). --cpu-bind=cores alone gives the same full mask, so the
+# MCA setting is the part that fixes it. BIND (socket or none) only changes mpirun's --map-by.
+# mpirun binds each rank to CPUS_PER_RANK cores itself (--map-by ...:pe=N --bind-to core)
+# and marks the ranks bound at launch, so Open MPI leaves them alone.
+launch_cmd() {
+  local nn=$1 rpn=$2 cpus=$3 bind=$4 nr=$(($1 * $2)) mb="ppr:$2:node:pe=$3"
+  [ "$bind" = socket ] && mb="ppr:1:package:pe=$cpus"
+  case $LAUNCH in
+    srun-*) CMD=(env NUMBA_NUM_THREADS="$cpus" OMPI_MCA_hwloc_base_binding_policy=none
+                 srun --mpi="${LAUNCH#srun-}" --nodes="$nn" --ntasks="$nr" --ntasks-per-node="$rpn"
+                 --cpus-per-task="$cpus" --distribution=block:block --cpu-bind=verbose,cores);;
+    mpirun) CMD=(env NUMBA_NUM_THREADS="$cpus"
+                 "$MPIRUN" -np "$nr" --host "$(hostlist "$nn" "$rpn")" --map-by "$mb" --bind-to core
+                 --report-bindings -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x NUMBA_NUM_THREADS
+                 -x OMP_NUM_THREADS -x OPENBLAS_NUM_THREADS -x MKL_NUM_THREADS -x SCALE_CACHE_ROOT
+                 -x HDF5_USE_FILE_LOCKING -x PYTHONUNBUFFERED -x PYTHONDONTWRITEBYTECODE -x TMPDIR
+                 -x MPLCONFIGDIR ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI});;
+    *) echo "launch_cmd: no launcher (LAUNCH=$LAUNCH)" >&2; return 2;;
+  esac
+}
+
+# run_one DIR NNODES RANKS_PER_NODE CPUS_PER_RANK BIND -- scale_out.py args
+# One rank: plain srun, no MPI. More: launch_cmd with the launcher from pick_launcher.
 run_one() {
   local dir=$1 nn=$2 rpn=$3 cpus=$4 bind=$5; shift 5
   [ "$1" = -- ] && shift
@@ -176,19 +205,44 @@ run_one() {
       $PY "$KIT/scale_out.py" --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1
     return
   fi
-  local sb="" mb="ppr:$rpn:node:pe=$cpus"
-  if [ "$bind" = socket ]; then sb="--distribution=block:block --cpu-bind=cores"; mb="ppr:1:package:pe=$cpus"; fi
-  case $LAUNCH in
-    srun-*) NUMBA_NUM_THREADS=$cpus srun --mpi="${LAUNCH#srun-}" --nodes="$nn" --ntasks="$nr" \
-              --ntasks-per-node="$rpn" --cpus-per-task="$cpus" $sb \
-              $PY -m mpi4py "$KIT/scale_out.py" --mpi --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1;;
-    mpirun) NUMBA_NUM_THREADS=$cpus "$MPIRUN" -np "$nr" --host "$(hostlist "$nn" "$rpn")" --map-by "$mb" \
-              --bind-to core -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x NUMBA_NUM_THREADS -x OMP_NUM_THREADS \
-              -x OPENBLAS_NUM_THREADS -x MKL_NUM_THREADS -x SCALE_CACHE_ROOT -x HDF5_USE_FILE_LOCKING \
-              -x PYTHONUNBUFFERED -x PYTHONDONTWRITEBYTECODE -x TMPDIR -x MPLCONFIGDIR ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI} \
-              $PY -m mpi4py "$KIT/scale_out.py" --mpi --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1;;
-    *) echo "run_one: no launcher (LAUNCH=$LAUNCH)" >&2; return 2;;
-  esac
+  launch_cmd "$nn" "$rpn" "$cpus" "$bind" || return 2
+  "${CMD[@]}" $PY -m mpi4py "$KIT/scale_out.py" --mpi --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1
+}
+
+# affinity_preflight CASE NNODES RANKS_PER_NODE CPUS_PER_RANK BIND: start the launch of
+# run_one (same CMD) with a few lines of python. Each rank writes its host and CPU count
+# before and after MPI_Init to $OUT/probe/affinity-CASE.txt. Fails, in seconds, if a rank is
+# missing or holds fewer than CPUS_PER_RANK CPUs after MPI_Init; scale_out.py would run 10x
+# slow. The first call also records where Open MPI's binding policy comes from.
+affinity_preflight() {
+  local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt" bad
+  local nr=$((nn * rpn))
+  if [ ! -e "$OUT/probe/ompi-binding.txt" ]; then
+    { echo "== OMPI_MCA_* in the batch environment"; env | grep '^OMPI_MCA_' || echo none
+      echo "== ompi_info binding_policy"; ompi_info --param hwloc base --level 9 2>&1 | grep -i binding_policy
+      local conf; conf=$(dirname "$(dirname "$(command -v ompi_info 2>/dev/null || echo /x/x/x)")")/etc/openmpi-mca-params.conf
+      echo "== $conf (non-comment lines)"; grep -v '^[[:space:]]*\(#\|$\)' "$conf" 2>&1
+    } > "$OUT/probe/ompi-binding.txt" 2>&1 || true
+  fi
+  launch_cmd "$nn" "$rpn" "$cpus" "$bind" || return 2
+  timeout 120 "${CMD[@]}" $PY -c '
+import os, socket
+before = len(os.sched_getaffinity(0))
+from mpi4py import MPI
+c = MPI.COMM_WORLD
+print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={socket.gethostname()} "
+      f"before_init={before} after_init={len(os.sched_getaffinity(0))}", flush=True)
+' > "$f" 2>&1 || true
+  bad=$(awk -v nr="$nr" -v cpus="$cpus" '
+    /^AFFINITY / { n++; for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                   if (v["after_init"] + 0 < cpus) printf "rank %s on %s: %s CPUs after MPI_Init (%s before), needs %d\n",
+                                                          v["rank"], v["host"], v["after_init"], v["before_init"], cpus }
+    END { if (n != nr) printf "%d of %d ranks reported\n", n, nr }' "$f")
+  if [ -n "$bad" ]; then
+    { echo "affinity pre-flight $case FAILED ($f):"; echo "$bad"; } >&2
+    return 1
+  fi
+  echo "affinity pre-flight $case: $nr rank(s), each >= $cpus CPUs after MPI_Init"
 }
 
 r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }
