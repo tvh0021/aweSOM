@@ -229,17 +229,21 @@ def inspect(args):
 
 
 def quantiles(dataset, start=0, stop=None, scratch=None):
-    """Exact quartiles through bounded external sorts on private scratch."""
-    from aweSOM.pool_statistics import scratch_directory, summarize
+    """Exact quartiles using one scratch-backed float64 column."""
+    from aweSOM.pool_statistics import scratch_directory
     stop = len(dataset) if stop is None else stop
     result = []
-    fallback = Path(dataset.file.filename).parent
-    with scratch_directory(scratch, fallback) as directory:
-        for j in range(dataset.shape[1]):
-            blocks = ((dataset[a:min(a+2**18, stop), j],
-                       np.zeros(min(2**18, stop-a), dtype='i8')) for a in range(start, stop, 2**18))
-            q, _, _ = summarize(blocks, [stop-start], [.25,.5,.75], directory, 2**18)
-            result.append(q[0])
+    with scratch_directory(scratch, Path(dataset.file.filename).parent) as directory:
+        column = np.lib.format.open_memmap(directory/'scaler-column.npy', mode='w+',
+                                          dtype='f8', shape=(stop-start,))
+        try:
+            for j in range(dataset.shape[1]):
+                for a in range(start,stop,2**18):
+                    b = min(a+2**18,stop)
+                    column[a-start:b-start] = dataset[a:b,j]
+                result.append(np.percentile(column,[25,50,75],overwrite_input=True))
+        finally:
+            column._mmap.close()
     return np.stack(result, axis=1)
 
 
