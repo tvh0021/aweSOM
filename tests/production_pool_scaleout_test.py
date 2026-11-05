@@ -20,8 +20,20 @@ def test_raw_scaling_matches_stored(tmp_path):
         raw = pool.EpochSource(h['raw'],scaling['strata'],60,42,17,
                                transform=lambda x: scaler.transform(x.astype('f8')))
         stored = pool.EpochSource(h['scaled'],scaling['strata'],60,42,17)
+        plain = pool.EpochSource(h['raw'],scaling['strata'],60,42,17)
+        def equal(actual,expected,unscaled):
+            assert actual.tobytes() == expected.tobytes()
+            assert actual.tobytes() == scaler.transform(unscaled.astype('f8')).tobytes()
         for _ in range(3):
-            assert all(np.array_equal(a,b) for a,b in zip(raw(),stored(),strict=True))
+            for a,b,c in zip(raw(),stored(),plain(),strict=True): equal(a,b,c)
+            if callable(getattr(raw,'rows',None)):
+                ix = np.array([59,0,7,7,21,42])
+                equal(raw.rows(ix),stored.rows(ix),plain.rows(ix))
+            if callable(getattr(raw,'lazy_chunks',None)):
+                for a,b,c in zip(raw.lazy_chunks(),stored.lazy_chunks(),plain.lazy_chunks(),strict=True):
+                    assert a[0] == b[0] == c[0]
+                    equal(a[1](),b[1](),c[1]())
+                    equal(a[1](),b[1](),c[1]())
 
 
 @pytest.mark.parametrize('cores,workers,threads',[(32,2,16),(72,1,72),(144,1,144),(144,2,72)])
