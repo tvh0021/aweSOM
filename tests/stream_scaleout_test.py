@@ -155,7 +155,7 @@ def _stop_after(epoch):
 
 @pytest.mark.parametrize("kind", ["array", "array-sampled", "callable"])
 def test_resume_is_bitwise(tmp_path, small, kind):
-    kw = dict(epochs=5, chunk=4096, r_min=2, seed=3, final_pass="full")
+    kw = dict(epochs=5, chunk=4096, r_min=2, seed=3, final_pass="full", bmu="screen")
     if kind == "array-sampled":
         kw.update(sample_fraction=0.5, sample_block=256, final_pass="sample")
 
