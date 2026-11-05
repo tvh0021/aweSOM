@@ -169,7 +169,9 @@ class _CallableSource:
       ``(rows, read)`` pairs, where ``read()`` returns the chunk. A rank of a
       multi-process run reads only the chunks it owns.
     - ``calls``: integer call counter; saved in checkpoints and restored on
-      resume.
+      resume. When the counting pass is skipped, ``calls`` is advanced by one
+      in its place, so call ``k`` is the same call as in a run that made the
+      pass (``rows(ix)`` is then expected to act as one call).
     """
 
     def __init__(
@@ -187,7 +189,12 @@ class _CallableSource:
                 if value is not None:
                     self.n_feat = int(value)
                     break
-        if self.n is None or self.n_feat is None:
+        self.scanned = self.n is None or self.n_feat is None
+        if not self.scanned:
+            calls = getattr(fn, "calls", None)
+            if isinstance(calls, (int, np.integer)) and not isinstance(calls, bool):
+                fn.calls = calls + 1  # the logical call of the skipped counting pass
+        else:
             n = 0
             for block in fn():
                 block = np.asarray(block)

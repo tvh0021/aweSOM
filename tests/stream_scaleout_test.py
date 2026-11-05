@@ -114,7 +114,7 @@ def test_callable_rows_reads_only_needed_chunks(small):
 def test_callable_rows_method_is_used_and_keeps_state(small):
     src = Windows(small, 9000, 2048)
     w, _ = train_batch_stream(src, 6, 5, epochs=3, n_samples=9000, final_pass="none")
-    assert src.calls == 3  # no counting pass, no initialisation pass
+    assert src.calls == 5  # skipped counting pass (1), rows() (1), 3 epochs; no data pass for either
     ref = Windows(small, 9000, 2048)
     ix = np.random.default_rng(42).integers(0, 9000, 30)
     first = np.concatenate(list(ref()))
@@ -171,7 +171,7 @@ def test_resume_is_bitwise(tmp_path, small, kind):
     meta, arrays = read_checkpoint(ck)
     assert meta["epoch"] == 2 and arrays["weights"].shape == (48, 7)
     if kind == "callable":
-        assert meta["calls"] == 2
+        assert meta["calls"] == 4  # skipped counting pass, rows(), 2 epochs
     w, info = train_batch_stream(src(), 8, 6, checkpoint=ck, resume=True, **kw)
     assert info["resumed_from"] == 2
     assert sha(w) == sha(w_ref)
@@ -289,7 +289,7 @@ def test_mpi_callable_resume(tmp_path, ranks):
     outs = run_worker(ranks, tmp_path, "resume")
     o = outs[0]
     assert sha(o["resumed"]) == sha(o["uninterrupted"])  # bitwise for a fixed rank count
-    assert int(o["resumed_from"]) == 2 and int(o["calls"]) == 7  # 2 for rows(), 5 epochs
+    assert int(o["resumed_from"]) == 2 and int(o["calls"]) == 7  # skipped counting pass, rows(), 5 epochs
     assert all(int(r["calls"]) == 7 for r in outs)
     w_single = wk.run_callable(wk.data(), None)
     d = rel_diff(o["uninterrupted"], w_single)

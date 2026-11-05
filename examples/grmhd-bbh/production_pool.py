@@ -313,9 +313,9 @@ class EpochSource:
     ``lazy_chunks()`` is one call that yields ``(rows, read)`` pairs and reads a window
     only when ``read()`` runs, so ranks of a multi-process run read only the windows
     they own while every rank advances ``calls`` identically. ``rows(ix)`` returns rows
-    ``ix`` of call ``calls + 1`` and advances ``calls`` by two: earlier drivers spent
-    call 0 on a counting pass and drew the initial lattice from call 1, so the epochs
-    still use calls 2, 3, ... and training is bitwise unchanged, without those passes.
+    ``ix`` of call ``calls`` and counts as one call. ``train_batch_stream`` advances
+    ``calls`` by one when it skips the counting pass, so the call numbering (and the
+    weights) equal those of earlier drivers, which always made that pass.
     """
     def __init__(self, data, strata, rows, seed, chunk):
         self.data, self.strata, self.seed, self.chunk = data, strata, seed, chunk
@@ -363,7 +363,7 @@ class EpochSource:
             yield read()
 
     def rows(self, ix):
-        windows, _ = self._windows(self.calls + 1); self.calls += 2
+        windows, _ = self._windows(self.calls); self.calls += 1
         ix = np.asarray(ix, dtype=np.int64)
         if len(ix) and (ix.min() < 0 or ix.max() >= self.rows_per_call):
             raise IndexError('row index outside the epoch')
