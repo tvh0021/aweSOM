@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.2.0
+Version: 1.3.0
 
 ## 1. Installation
 
@@ -332,6 +332,25 @@ Because of the simplicity of the Iris dataset, not much improvement is made with
 ## 5. Advanced Usage - Plasma Simulation
 
 The Jupyter Notebook for the fiducial realization of SOM lattice is located [here](examples/plasma-turbulence/plasma.ipynb).
+
+`examples/plasma-turbulence/combine_clumps.py` splits a 2D or 3D label array into connected clumps of equal value.
+`label_clumps` returns one clump id per cell and the number of clumps, in the order of the clump list from the slower `get_clumps`.
+With `periodic=True` it also joins clumps across opposite faces, which `get_clumps` does not.
+`merge_double_sheets` takes three dicts of clumps (double, positive and negative sheets, each mapping a key to its cells), merges each double sheet that touches both a positive and a negative clump with the clumps it touches, and deletes the merged clumps from the positive and negative dicts.
+By default (`fast=True`) it runs the array version `merge_double_sheets_fast`, and `fast=False` runs the original loop; both return the same result.
+The script imports `tqdm`, which aweSOM does not install:
+
+```bash
+pip install -r examples/plasma-turbulence/requirements.txt
+```
+
+```python
+import sys
+sys.path.insert(0, "examples/plasma-turbulence")
+from combine_clumps import generate_neighbors, label_clumps
+
+clump_ids, n_clumps = label_clumps(cluster_map, generate_neighbors(26))  # cluster_map: 3D integer array
+```
 
 ## 6. License
 

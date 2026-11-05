@@ -1,0 +1,4 @@
+# Extra packages for the example scripts in this folder; aweSOM's own requirements are installed with the package.
+tqdm
+# optional: faster label_clumps on 3D integer arrays (connectivity 6, 18 or 26)
+# connected-components-3d

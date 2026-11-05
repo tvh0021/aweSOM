@@ -30,6 +30,8 @@ With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`
 SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 The ensemble loop itself works on integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it
 against the original mask-by-mask loop (bitwise on NumPy, to float32 precision on a JAX device).
+``combine_clumps_test.py`` tests the clump helpers of the plasma example and is skipped when ``tqdm`` is not installed
+(``pip install -r examples/plasma-turbulence/requirements.txt`` installs it).
 
 Performance tests
 -----------------

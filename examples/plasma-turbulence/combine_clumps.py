@@ -133,7 +133,8 @@ def label_clumps(data_array: np.ndarray, connectivity, periodic: bool = False, u
             without it ids are still a valid partition but in backend order.
 
     Returns:
-        (np.ndarray, int): int32 clump id per cell and the number of clumps. Ids are
+        (np.ndarray, int): clump id per cell (int32 with ``renumber=True``, the
+            backend's integer dtype otherwise) and the number of clumps. Ids are
             numbered in order of each clump's first cell in C order, which is the
             order of the list returned by ``get_clumps`` (for ``periodic=False``).
     """
@@ -254,8 +255,8 @@ def merge_double_sheets(
 
     With ``fast=True`` (the default) this runs ``merge_double_sheets_fast``, which returns the
     same dict (keys, order, cell sets, value types) and makes the same in-place deletions; it
-    was checked against this loop on the plasma merged_sheets arrays
-    (``planning/benchmarks/real_clumps.py``). If clumps of one dict overlap, which the fast
+    was checked against this loop on the plasma current-sheet arrays of the example. If clumps
+    of one dict overlap, which the fast
     version does not support, the original loop runs instead. ``fast=False`` always runs the
     original loop (with its per-sheet printout and progress bar).
     """
