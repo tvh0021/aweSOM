@@ -65,7 +65,7 @@ def test_cpu_no_checkpoint_baseline(threads):
     previous = numba.get_num_threads()
     try:
         numba.set_num_threads(threads)
-        with np.load(ROOT/'tests/fixtures/scale_out_cpu.npz') as fixture:
+        with np.load(ROOT/'tests/fixtures/scale_out_driver_cpu.npz') as fixture:
             weights,_ = train_batch_stream(fixture['raw'],12,8,epochs=3,chunk=2048,
                 bmu='patch',seed=42,groups=64,r_min=2,final_pass='none')
             assert np.array_equal(weights,fixture['weights'])
