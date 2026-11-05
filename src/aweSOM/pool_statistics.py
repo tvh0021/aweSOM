@@ -30,20 +30,23 @@ def _merge(a, b, out):
 
 def sorted_blocks(blocks, directory, chunk):
     """Sort runs, then merge pairs using three fixed-size buffers."""
-    paths = []
+    n_runs = 0
     for i, (values, labels) in enumerate(blocks):
         data = np.empty(len(values), DTYPE)
         data['value'], data['label'] = values, labels
         data.sort(order='value', kind='quicksort')
         path = directory / f'run-0-{i}'
-        data.tofile(path); paths.append(path)
+        data.tofile(path); n_runs += 1
     generation = 0
-    while len(paths) > 1:
-        generation += 1; merged = []
-        for i in range(0, len(paths), 2):
-            if i+1 == len(paths): merged.append(paths[i]); continue
-            path = directory / f'run-{generation}-{i}'
-            with paths[i].open('rb') as fa, paths[i+1].open('rb') as fb, path.open('xb') as dst:
+    while n_runs > 1:
+        generation += 1
+        for i in range(0, n_runs, 2):
+            left = directory / f'run-{generation-1}-{i}'
+            right = directory / f'run-{generation-1}-{i+1}'
+            path = directory / f'run-{generation}-{i//2}'
+            if i+1 == n_runs:
+                left.rename(path); continue
+            with left.open('rb') as fa, right.open('rb') as fb, path.open('xb') as dst:
                 a = np.fromfile(fa, DTYPE, chunk); b = np.fromfile(fb, DTYPE, chunk)
                 buffer = np.empty(chunk, DTYPE)
                 while len(a) and len(b):
@@ -55,10 +58,10 @@ def sorted_blocks(blocks, directory, chunk):
                 for rest, source in ((a, fa), (b, fb)):
                     while len(rest):
                         rest.tofile(dst); rest = np.fromfile(source, DTYPE, chunk)
-            paths[i].unlink(); paths[i+1].unlink(); merged.append(path)
-        paths = merged
-    if not paths: raise ValueError('empty statistics input')
-    return paths[0]
+            left.unlink(); right.unlink()
+        n_runs = (n_runs+1)//2
+    if not n_runs: raise ValueError('empty statistics input')
+    return directory / f'run-{generation}-0'
 
 
 @njit(cache=True)

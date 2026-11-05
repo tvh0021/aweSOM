@@ -1021,6 +1021,7 @@ def main(argv=None):
     fits=[]; choices=[]
     for shape in shapes:
         trio=[r for r in collected if tuple(r['lattice_shape']) == shape]
+        trio.sort(key=lambda r: args.seeds.index(r['seed']) if r['seed'] in args.seeds else len(args.seeds))
         if args.collect and {r['seed'] for r in trio} != set(args.seeds):
             raise ValueError(f'incomplete collected seeds for {shape}')
         width=execution_plan['seed_workers']

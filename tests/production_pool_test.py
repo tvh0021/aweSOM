@@ -447,7 +447,7 @@ def test_export_statistics_production_pool_bitwise(tmp_path, monkeypatch, chunk)
         labels = np.load(a.out/'labels.npy', mmap_mode='r')
         distances = np.load(a.out/'distances.npy', mmap_mode='r')
         old = old_export(raw, nodes, distances, labels, 10, a.out, 'old', chunk)
-        # Statistics must never create a disk buffer or read individual columns.
+        # External sorts use ordinary files and bounded row reads, without a full-size memmap.
         def no_scratch(*args, **kwargs):
             raise AssertionError('statistics scratch allocation')
         monkeypatch.setattr(np.lib.format, 'open_memmap', no_scratch)
