@@ -13,6 +13,7 @@
 # mpi4py (installed into $KIT/mpi-site if missing), MPI launchers (1 and 2 ranks per
 # node), and the lagoon read test (IO_TEST_GB, default 20; cold read on the second node
 # when the job gets two). Submit this first; the other jobs use what it installs.
+# debug has one node (lm-n0001); submit with --partition=gp-default --nodes=2 (README).
 set -eo pipefail
 . "${KIT:-$SLURM_SUBMIT_DIR}/common.sh"
 kit_init probe

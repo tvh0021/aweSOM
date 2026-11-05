@@ -37,7 +37,7 @@ Keep the kit on lagoon. OUT defaults to `$KIT/runs/<job>-<jobid>`, which puts th
 ```bash
 K=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit
 cd $K
-sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K $K/probe.sbatch
+sbatch --output=$K/%x-%j.out --partition=gp-default --nodes=2 --export=ALL,KIT=$K $K/probe.sbatch
 # after the probe: read runs/probe-<id>/probe/{mpi-install.txt,hello-*.txt,sinfo.txt}
 sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=91x64 $K/threads.sbatch
 sbatch --output=$K/%x-%j.out --export=ALL,KIT=$K,LATTICE=160x100 $K/threads.sbatch
@@ -56,10 +56,10 @@ Before you submit, run `env -u SCALE_N -u LATTICES -u LATTICE -u OUT -u FORCE -u
 Each file sets `--partition=debug`, as the brief asks. The 2026-10-28 `sinfo` listed one debug node, lm-n0001 (48 cores, 770 GB). On debug:
 
 - `nodes.sbatch` and `nodes_1e9.sbatch` cannot start, because they need 4 nodes.
-- `probe.sbatch` asks for 1 or 2 nodes and gets 1, which leaves no second node for the cold read.
+- `probe.sbatch` asks for 1 or 2 nodes and gets 1, which leaves no second node for the 2-node launcher test or the cold read (job 8401).
 - the single-node jobs run on a different CPU from jobs 8238 and 8243 (gp-n0013, Xeon Gold 6130).
 
-The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. For the cold read on a second node, also submit the probe with `--partition=gp-default`. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
+The probe's `sinfo.txt` shows the current layout. If debug still has one node, submit the node sweeps with `--partition=gp-default`, as in the commands above. Each gp node has 32 cores and 192 GB. Submit the probe with `--partition=gp-default --nodes=2`, as above, so the 2-node launcher test and the cold read run. mpi4py is installed once, by the batch shell on the first node, before any `srun`, so the two nodes never write `mpi-site/` at the same time. For thread and row rates comparable with 8238, submit threads, rows and rows_1e9 the same way. Every job asks for explicit CPUs and memory (64 GB at 1e8 rows, 120 GB at 1e9) and never takes all of lm-n0001.
 
 ## MPI
 
