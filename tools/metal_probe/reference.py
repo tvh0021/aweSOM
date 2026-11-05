@@ -150,6 +150,11 @@ def certified_rows(weights, data, chunk=4096):
     D_k - B_k > D_j + B_j, or when k's weights equal j's exactly (then the
     float32 distances are equal too and both searches take the lower index).
 
+    The bound assumes normal float32 arithmetic: no overflow and no subnormal
+    intermediate. Metal flushes float32 subnormals to zero, so a row whose
+    distances fall below about 1e-38 can be certified here and still differ
+    on the GPU. No real-data input of this package comes near that range.
+
     Returns (certified mask, float64 argmin, min over rows of the slack
     (D_k - B_k) - (D_j + B_j) relative to D_k, ignoring exact duplicates).
     """

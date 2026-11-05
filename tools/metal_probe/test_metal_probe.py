@@ -349,13 +349,15 @@ def test_timing():
             entry = dict(rows=n)
             entry['metal_rows_per_s'], entry['metal_s'] = _rate(lambda: metal(x, idx, d2), n, 3)
             entry['metal_serial_rows_per_s'], _ = _rate(lambda: serial(x, idx, d2), n, 3)
-            xm = mx.array(x[:2**20])
+            m = min(n, 2**20)  # kernel rows never exceed the staged input
+            xm = mx.array(x[:m])
             mx.eval(xm)
+            grid = -(-m // 128) * 128
             kernel_only = lambda: mx.eval(metal.kernel(  # noqa: E731
-                inputs=[metal.w, xm, 2**20, nodes, 32], template=[('F', 7), ('TILE', 32)],
-                grid=(2**20, 1, 1), threadgroup=(128, 1, 1), output_shapes=[(2**20,), (2**20,)],
+                inputs=[metal.w, xm, m, nodes, 32], template=[('F', 7), ('TILE', 32)],
+                grid=(grid, 1, 1), threadgroup=(128, 1, 1), output_shapes=[(m,), (m,)],
                 output_dtypes=[mx.int32, mx.float32]))
-            entry['metal_kernel_only_rows_per_s'], _ = _rate(kernel_only, 2**20, 5)
+            entry['metal_kernel_only_rows_per_s'], _ = _rate(kernel_only, m, 5)
             entry['numba_bruteforce_f64_rows_per_s'], entry['numba_bruteforce_s'] = \
                 _rate(lambda: _bmu_kernel(w, x, idx, d2), n, 1)
             entry['numba_screen_rows_per_s'], _ = _rate(lambda: screen(x, idx, d2), n, 3)

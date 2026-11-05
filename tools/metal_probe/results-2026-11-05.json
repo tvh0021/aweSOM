@@ -13,23 +13,23 @@
  "results": [
   {
    "rows": 1000000,
-   "metal_rows_per_s": 18426796.755636763,
-   "metal_s": 0.05426879198057577,
-   "metal_serial_rows_per_s": 18550767.64827221,
-   "metal_kernel_only_rows_per_s": 19375704.777936306,
-   "numba_bruteforce_f64_rows_per_s": 637128.3351849411,
-   "numba_bruteforce_s": 1.5695424999576062,
-   "numba_screen_rows_per_s": 1628344.3742211352
+   "metal_rows_per_s": 18334592.333201,
+   "metal_s": 0.054541709017939866,
+   "metal_serial_rows_per_s": 18668093.844253063,
+   "metal_kernel_only_rows_per_s": 19357133.331577282,
+   "numba_bruteforce_f64_rows_per_s": 629363.1089199185,
+   "numba_bruteforce_s": 1.5889078750042245,
+   "numba_screen_rows_per_s": 1683363.2934434076
   },
   {
    "rows": 10000000,
-   "metal_rows_per_s": 19484761.223024353,
-   "metal_s": 0.5132215830381028,
-   "metal_serial_rows_per_s": 18579712.55585411,
-   "metal_kernel_only_rows_per_s": 19391993.636839,
-   "numba_bruteforce_f64_rows_per_s": 529504.2434186315,
-   "numba_bruteforce_s": 18.88558991602622,
-   "numba_screen_rows_per_s": 1308858.2297934343
+   "metal_rows_per_s": 19226215.318154752,
+   "metal_s": 0.5201231669634581,
+   "metal_serial_rows_per_s": 18616120.978881262,
+   "metal_kernel_only_rows_per_s": 19398017.59260484,
+   "numba_bruteforce_f64_rows_per_s": 526454.330086994,
+   "numba_bruteforce_s": 18.994999999995343,
+   "numba_screen_rows_per_s": 1231873.8930982717
   }
  ]
 }

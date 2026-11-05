@@ -78,23 +78,25 @@ order, strict `<`):
 
 The loop order, tile load, barriers, tie rule, launch geometry
 (`ceil(rows / block)` full threadgroups) and host subchunk loop follow the CUDA
-code line for line.
+code with the same control structure. Transfer handling differs as the
+table says.
 
 ## Measured rates (2026-11-05, M1 Max, 91x64 nodes, 7 features, float32 input)
 
 `test_timing` writes `results-<date>.json`. Each figure is the best of 3 runs
-after a warm-up, except numba brute force (one timed run). Numba used 8 threads.
+after a warm-up, except numba brute force (one timed run) and kernel only
+(best of 5, on the first 2^20 rows or the whole input if smaller). Numba used 8 threads.
 The laptop was not idle: other jobs held the load average near 8 (10 cores),
 so the CPU figures are low and noisy. An earlier single-run measurement gave
 the screen 0.62 to 0.64 Mrows/s.
 
 | rows | Metal, 2 slots | Metal, 1 slot | Metal kernel only | numba float64 brute force | numba `screen` |
 |---|---|---|---|---|---|
-| 1e6 | 18.4 Mrows/s | 18.6 | 19.4 | 0.64 Mrows/s | 1.63 Mrows/s |
-| 1e7 | 19.5 Mrows/s | 18.6 | 19.4 | 0.53 Mrows/s | 1.31 Mrows/s |
+| 1e6 | 18.3 Mrows/s | 18.7 | 19.4 | 0.63 Mrows/s | 1.68 Mrows/s |
+| 1e7 | 19.2 Mrows/s | 18.6 | 19.4 | 0.53 Mrows/s | 1.23 Mrows/s |
 
 At 1e7 rows, the Metal search is about 37 times the numba brute-force search
-and 15 times the numba screen. Kernel-only and end-to-end rates differ by under
+and 16 times the numba screen. Kernel-only and end-to-end rates differ by under
 6%, so host copies hardly matter on unified memory, and the second slot gains
 under 5%. 19.4 Mrows/s is about 1.1e11 row-node pairs/s, or 2.4 TFLOP/s
 counting 21 operations per pair, about a quarter of the M1 Max float32 peak. A
