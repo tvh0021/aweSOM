@@ -777,7 +777,15 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         if 'checkpoint' in parameters: checkpoint_args['checkpoint'] = out / f'{tag}-checkpoint.npz'
         if args.resume is not None:
             if 'resume' not in parameters: raise ValueError('installed trainer does not support resume')
-            checkpoint_args['resume'] = args.resume
+            # The trainer resumes from its own checkpoint path: rank 0 stages the requested file
+            # there (the source stays unchanged). The other ranks never write a checkpoint, so
+            # they read the source and never look up a file rank 0 has just created.
+            if comm is None or not comm.Get_rank():
+                shutil.copyfile(args.resume, checkpoint_args['checkpoint'])
+            else:
+                checkpoint_args['checkpoint'] = args.resume.resolve()
+            if comm is not None: comm.Barrier()
+            checkpoint_args['resume'] = True
         w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
                                     bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
                                     r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
@@ -1062,7 +1070,7 @@ def parser():
     p.add_argument('--scratch',type=Path)
     p.add_argument('--bmu',default='auto')
     p.add_argument('--verify-labels',action='store_true')
-    p.add_argument('--resume',type=Path)
+    p.add_argument('--resume',type=Path,help='--fit only: continue from this checkpoint (copied into OUT, left unchanged); same rank count')
     p.add_argument('--reuse-pool',type=Path)
     p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
     p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); rank 0 writes every output')
@@ -1264,6 +1272,7 @@ def main(argv=None):
     if sum([bool(args.fit),bool(args.collect),args.pool_only]) > 1:
         raise ValueError('--fit, --collect and --pool-only are exclusive')
     if args.fit and not args.reuse_pool: raise ValueError('--fit requires --reuse-pool')
+    if args.resume is not None and not args.fit: raise ValueError('--resume requires --fit (one lattice, one seed)')
     if args.check_scaling < 0: raise ValueError('--check-scaling must be nonnegative')
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')

@@ -48,8 +48,13 @@ class FakeComm:
         return every if self.rank == root else None
 
 
-def rank_main(conn, rank, size, barrier, slots, argv, watch):
-    """One fake rank: main(argv) with get_comm patched; reports writes under ``watch``."""
+class StopFit(Exception):
+    pass
+
+
+def rank_main(conn, rank, size, barrier, slots, argv, watch, stop_after=None):
+    """One fake rank: main(argv) with get_comm patched; reports writes under ``watch``.
+    ``stop_after``: rank 0 raises StopFit after that many epochs (after the checkpoint)."""
     writes = []
     def audit(event, args):
         writing = event in ('os.mkdir', 'os.rename', 'os.symlink', 'os.link', 'os.remove') or (
@@ -61,6 +66,13 @@ def rank_main(conn, rank, size, barrier, slots, argv, watch):
     try:
         from aweSOM import distributed
         distributed.get_comm = lambda: FakeComm(rank, size, barrier, slots)
+        if stop_after is not None:
+            from aweSOM import stream
+            train = stream.train_batch_stream
+            def stop(e, w):
+                if e + 1 == stop_after: raise StopFit(f'stopped after epoch {e + 1}')
+            import functools  # partial keeps the signature, which the driver inspects
+            stream.train_batch_stream = functools.partial(train, callback=stop)
         sys.addaudithook(audit)
         pool.main(argv)
         conn.send(('ok', writes))
@@ -70,21 +82,24 @@ def rank_main(conn, rank, size, barrier, slots, argv, watch):
         conn.close()
 
 
-def run_ranks(size, argv, watch):
+def run_ranks(size, argv, watch, stop_after=None):
     ctx = mp.get_context('spawn')
     with ctx.Manager() as manager:
         barrier, slots = ctx.Barrier(size), manager.dict()
         pipes, procs = [], []
         for r in range(size):
             receive, send = ctx.Pipe(duplex=False)
-            p = ctx.Process(target=rank_main, args=(send, r, size, barrier, slots, argv, str(watch)))
+            p = ctx.Process(target=rank_main, args=(send, r, size, barrier, slots, argv, str(watch), stop_after))
             p.start(); send.close(); pipes.append(receive); procs.append(p)
         results = [receive.recv() for receive in pipes]
         for p in procs:
             p.join(60)
+    assert [p.exitcode for p in procs] == [0]*size
+    if stop_after is not None:  # every rank stops: rank 0 on StopFit, the others on its broadcast
+        assert all(status == 'error' for status, _ in results), results
+        return [payload for _, payload in results]
     for status, payload in results:
         assert status == 'ok', payload
-    assert [p.exitcode for p in procs] == [0]*size
     return [payload for _, payload in results]
 
 
@@ -141,6 +156,50 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     assert result.returncode == 0, result.stdout+result.stderr
     manifest = json.loads((collected/'results/freeze-manifest.json').read_text())
     assert [m['ranks'] for m in manifest['models']] == [2, 2] and (collected/'results/frozen-4x3.h5').exists()
+
+
+def _max_rel(a, b):
+    return (np.abs(a-b)/np.maximum(np.maximum(np.abs(a), np.abs(b)), 1e-8)).max()
+
+
+@pytest.mark.parametrize('ranks', [1, 2])
+def test_resume_continues_an_interrupted_fit(prepared, monkeypatch, ranks):
+    """--resume on a fresh OUT continues the interrupted fit: 1 rank through the plain
+    driver, 2 ranks through the MPI path. Another rank count is refused."""
+    from aweSOM import SOMModel
+    monkeypatch.setenv('NUMBA_CACHE_DIR', str(prepared.tmp/'cache'))
+    fit = lambda out: [*prepared.base, '--out', str(out), '--reuse-pool', str(prepared.pool), '--fit', '4x3', '42']
+    cut = prepared.tmp/f'cut-{ranks}'
+    errors = run_ranks(ranks, [*fit(cut), '--mpi'], cut, stop_after=1)
+    assert 'StopFit: stopped after epoch 1' in errors[0]
+    checkpoint = cut/'results.partial/4x3-s42-checkpoint.npz'
+    from aweSOM.stream import read_checkpoint
+    assert read_checkpoint(str(checkpoint))[0]['epoch'] == 1 and read_checkpoint(str(checkpoint))[0]['ranks'] == ranks
+    before = checkpoint.read_bytes()
+    env = dict(os.environ, NUMBA_NUM_THREADS='2')
+    plain = lambda out: subprocess.run([sys.executable, str(DRIVER), *fit(out), '--resume', str(checkpoint)],
+                                       env=env, capture_output=True, text=True)
+    out = prepared.tmp/f'resumed-{ranks}'
+    if ranks == 1:
+        result = plain(out)
+        assert result.returncode == 0, result.stdout+result.stderr
+    else:
+        run_ranks(2, [*fit(out), '--mpi', '--resume', str(checkpoint)], out)
+        result = plain(prepared.tmp/'resumed-wrong-ranks')
+        assert result.returncode != 0
+        assert 'checkpoint was written by a run with 2 rank(s), this run has 1' in result.stdout+result.stderr
+    assert checkpoint.read_bytes() == before  # the source checkpoint is left unchanged
+    rec = json.loads((out/'results/4x3-s42.json').read_text())
+    assert rec['training_info']['resumed_from'] == 1 and rec['training_info']['ranks'] == ranks
+    a = SOMModel.load(out/'results/4x3-s42.h5').weights
+    b = SOMModel.load(prepared.single/'4x3-s42.h5').weights
+    print(f'resumed on {ranks} rank(s) vs uninterrupted: max relative weight difference {_max_rel(a, b):.3e}')
+    assert _max_rel(a, b) < 1e-4
+
+
+def test_resume_requires_fit(prepared):
+    with pytest.raises(ValueError, match='--resume requires --fit'):
+        pool.main([*prepared.base, '--out', str(prepared.tmp/'resume-pool'), '--pool-only', '--resume', 'x'])
 
 
 def _mpirun():
