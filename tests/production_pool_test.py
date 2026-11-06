@@ -541,46 +541,70 @@ SEEDS = {42: labelling((0, 40), (1, 30), (2, 20), (3, 10)),
          44: labelling((1, 38), (0, 32), (2, 20), (3, 10))}
 
 
+def ranked(orders):
+    """E(log_chi_B) that reproduces each seed's candidate order: 0.9, 0.8, ... by rank."""
+    return {s: {c: .9 - .1*r for r, c in enumerate(o)} for s, o in orders.items()}
+
+
 def test_selection_first_and_second_reproduced():
     orders = {42: [1, 3], 43: [0, 1], 44: [0, 3]}
-    picks, audit = pool.select_group(orders, jaccards(SEEDS))
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
     assert audit['status'] == 'selected' and picks == {42: [1, 3], 43: [0, 1], 44: [0, 3]}
     assert audit['first']['reproduced'] and audit['second']['reproduced']
     assert set(audit['first']['pairs']) == {'42-43', '42-44', '43-44'}
+    # the previous rule succeeds here and the top-two rule gives the same picks
+    assert audit['approved_rule_outcome']['status'] == 'selected'
+    assert audit['approved_rule_outcome']['selected'] == picks
+    assert list(audit) == ['seeds', 'rule', 'eligible', 'tuples', 'first', 'second', 'status', 'reason',
+                           'approved_rule_outcome']
+    assert len(audit['tuples']) == 8 and audit['tuples'][0]['candidates'] == {42: 1, 43: 0, 44: 0}
 
 
 def test_selection_second_refused():
-    # the second candidates do not correspond (cluster 3 of 42 vs cluster 3 of 43)
-    picks, audit = pool.select_group({42: [1, 3], 43: [0, 3], 44: [0, 3]}, jaccards(SEEDS))
+    # the unused eligible candidates do not correspond (cluster 3 of 42 vs cluster 3 of 43)
+    orders = {42: [1, 3], 43: [0, 3], 44: [0, 3]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
     assert audit['status'] == 'selected' and picks == {42: [1], 43: [0], 44: [0]}
     assert not audit['second']['reproduced'] and '42-43' in audit['reason']
     # one seed has no second candidate
-    picks, audit = pool.select_group({42: [1, 3], 43: [0], 44: [0, 3]}, jaccards(SEEDS))
+    orders = {42: [1, 3], 43: [0], 44: [0, 3]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
     assert picks == {42: [1], 43: [0], 44: [0]} and audit['second']['missing_in_seeds'] == [43]
-    # a reproduced second without a reproduced first selects nothing
-    picks, audit = pool.select_group({42: [0, 1], 43: [1, 0], 44: [1, 0]}, jaccards(SEEDS))
-    assert audit['status'] == 'none' and all(p == [] for p in picks.values()) and audit['second'] is None
+    assert audit['approved_rule_outcome']['selected'] == picks
+    # first candidates not mutual, the rank-two tuple is: the top-two rule picks it, the previous rule none
+    orders = {42: [0, 1], 43: [1, 0], 44: [1, 0]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
+    assert audit['status'] == 'selected' and picks == {42: [1], 43: [0], 44: [0]}
+    assert not audit['second']['reproduced']
+    assert audit['approved_rule_outcome']['status'] == 'none' and audit['approved_rule_outcome']['selected'] == {
+        42: [], 43: [], 44: []}
 
 
 def test_selection_first_not_reproduced():
-    # seeds 42 and 43 agree, 44 picks a non-matching cluster: unanimity fails for the whole group
-    picks, audit = pool.select_group({42: [1], 43: [0], 44: [2]}, jaccards(SEEDS))
+    # seeds 42 and 43 agree, 44 picks a non-matching cluster: pairwise mutuality fails for the whole group
+    orders = {42: [1], 43: [0], 44: [2]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
     assert audit['status'] == 'none' and picks == {42: [], 43: [], 44: []}
-    assert audit['first']['pairs']['42-43']['mutual'] and not audit['first']['pairs']['42-44']['mutual']
-    assert 'not mutual' in audit['reason']
+    assert audit['first'] is None and len(audit['tuples']) == 1
+    assert audit['tuples'][0]['mutual'] == {'42-43': True, '42-44': False, '43-44': False}
+    assert 'not mutual' in audit['approved_rule_outcome']['reason']
+    assert 'no tuple' in audit['reason']
 
 
 def test_selection_empty_signature_and_single_seed():
-    picks, audit = pool.select_group({42: [1], 43: [], 44: [0]}, jaccards(SEEDS))
+    orders = {42: [1], 43: [], 44: [0]}
+    picks, audit = pool.select_group(orders, jaccards(SEEDS), ranked(orders))
     assert audit['status'] == 'none' and 'empty signature set' in audit['reason'] and '43' in audit['reason']
-    assert all(p == [] for p in picks.values())
-    picks, audit = pool.select_group({42: [1]}, {})
+    assert all(p == [] for p in picks.values()) and audit['approved_rule_outcome']['status'] == 'none'
+    picks, audit = pool.select_group({42: [1]}, {}, {42: {1: .5}})
     assert audit['status'] == 'unavailable' and picks == {42: []} and 'fewer than two seeds' in audit['reason']
+    assert audit['approved_rule_outcome']['status'] == 'unavailable'
 
 
 def test_selection_exports_serialize():
     J = jaccards(SEEDS)
-    picks, audit = pool.select_group({42: [1, 3], 43: [0, 1], 44: [0, 3]}, J)
+    orders = {42: [1, 3], 43: [0, 1], 44: [0, 3]}
+    picks, audit = pool.select_group(orders, J, ranked(orders))
     overlap = pool.seed_overlap(J)
     assert overlap['42-43']['jaccard'].shape == (4, 4) and overlap['42-43']['mutual_best'].dtype == bool
     E = effects_table([(.2, .1, -.1), (np.nan,)*3])
