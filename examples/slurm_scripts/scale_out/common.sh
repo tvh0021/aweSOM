@@ -5,6 +5,15 @@
 # LAUNCH (auto | srun-pmix | srun-pmi2 | srun-pmix_v4 | mpirun), MPIRUN (path, mpirun mode),
 # MPI_BUILD (probe only: wheel = binary mpi4py wheel, default; source = compile, needs a C compiler).
 
+# True on Tigris (cluster name, or the /shared/rc/ paths): GP-only surveys skip or refuse there
+# (no host-state reads on Tigris, user rule 2026-11-06).
+on_tigris() {
+  case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD|${SLURM_SUBMIT_DIR:-}|${KIT:-}|${OUT:-}" in
+    tigris\|*|*/shared/rc/*) return 0;;
+  esac
+  return 1
+}
+
 kit_modules() {
   # Make `module` available in a batch shell; load the MPI module the probe recorded.
   if ! type module >/dev/null 2>&1; then
@@ -59,7 +68,7 @@ kit_init() {
   completed=no
   trap 'kit_finish "$?"' EXIT; trap 'exit 143' TERM; trap 'exit 130' INT; trap 'exit 129' HUP
   mkdir -p "$STATUS_DIR" "$OUT/tmp" "$OUT/mpl" "$OUT/probe"
-  printf 'STARTED\t%s\t%s\n' "$(date -u +%FT%TZ)" "$(hostname)" > "$STATUS_DIR/start.tsv"
+  printf 'STARTED\t%s\t%s\n' "$(date -u +%FT%TZ)" "${SLURMD_NODENAME:-local}" > "$STATUS_DIR/start.tsv"
   cd "$OUT"
   PY="$VENV/bin/python"
   export PYTHONPATH="$KIT/aweSOM-src/src${MPI_SITE:+:$MPI_SITE}"
@@ -88,17 +97,17 @@ kit_finish() {
 # Light environment probe on every node of the job (brief item e, without the I/O test).
 env_probe() {
   local d="$OUT/probe"
-  { sinfo -Nel -n "$SLURM_JOB_NODELIST"; echo; sinfo -p "$SLURM_JOB_PARTITION" -o '%P %D %c %m %l %N'; } \
-    > "$d/sinfo.txt" 2>&1 || true
+  if on_tigris; then echo "env probe skipped: GP-only survey, not run on Tigris"; return 0; fi
+  { sinfo -Nel -n "$SLURM_JOB_NODELIST"; echo; sinfo -p "$SLURM_JOB_PARTITION" -o '%P %D %c %m %l %N'; } > "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
   # Cluster-wide: every partition (availability, nodes, cpus, mem, limit, gres) and every node
   # (gres and features), to see whether any partition has GPUs and how big gp-default is.
-  { echo; echo '== all partitions'; sinfo -a -o '%P %a %D %c %m %l %G %N';
-    echo; echo '== all nodes'; sinfo -a -N -o '%N %P %c %m %G %f'; } >> "$d/sinfo.txt" 2>&1 || true
-  { module -t avail 2>&1 | grep -iE 'mpi|cuda|pmix|ucx' ; } > "$d/modules.txt" 2>&1 || true
-  srun --mpi=list > "$d/srun-mpi-list.txt" 2>&1 || true
+  { echo; echo '== all partitions'; sinfo -a -o '%P %a %D %c %m %l %G %N';  # sysinfo-ok: GP-only survey, skipped on Tigris
+    echo; echo '== all nodes'; sinfo -a -N -o '%N %P %c %m %G %f'; } >> "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
+  { module -t avail 2>&1 | grep -iE 'mpi|cuda|pmix|ucx' ; } > "$d/modules.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
+  srun --mpi=list > "$d/srun-mpi-list.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
   srun --nodes="${#NODES[@]}" --ntasks="${#NODES[@]}" --ntasks-per-node=1 --cpus-per-task=1 --mem=4G \
-    bash -c 'h=$(hostname -s); { echo "== $h"; lscpu; echo; free -g; echo; df -h "$0" /tmp "$1"; echo;
-             numactl -H 2>&1 | head -20; echo; ulimit -a; } > "$2/node-$h.txt" 2>&1;
+    bash -c 'h=${SLURMD_NODENAME:-local}; h=${h%%.*}; { echo "== $h"; lscpu; echo; free -g; echo; df -h "$0" /tmp "$1"; echo;  # sysinfo-ok: GP-only survey, skipped on Tigris
+             numactl -H 2>&1 | head -20; echo; ulimit -a; } > "$2/node-$h.txt" 2>&1;  # sysinfo-ok: GP-only survey, skipped on Tigris
              "$3" "$4/probe.py" env --json "$2/env-$h.json" > /dev/null 2>&1 || echo "env probe failed on $h"' \
     "$LOCAL_SCRATCH" "$OUT" "$d" "$PY" "$KIT"
   $PY -c "import mpi4py, sys; print('mpi4py', mpi4py.__version__, mpi4py.__file__)" > "$d/mpi4py-import.txt" 2>&1 \
@@ -121,13 +130,13 @@ io_probe() {
   srun $one -w "$cold" $PY "$KIT/probe.py" read --path "$io/a.bin" --test lagoon-reread \
     --role warm --json "$d/io-lagoon-reread.json"
   srun --nodes="$n" --ntasks="$n" --ntasks-per-node=1 --cpus-per-task=1 --mem=8G \
-    bash -c 'h=$(hostname -s); r=reader; [ "$h" = "$3" ] && r=writer-node;
+    bash -c 'h=${SLURMD_NODENAME:-local}; h=${h%%.*}; r=reader; [ "$h" = "$3" ] && r=writer-node;
              "$0" "$1/probe.py" read --path "$2/b.bin" --test lagoon-'"$n"'-concurrent --role "$r" \
                --json "$4/io-lagoon-concurrent-$h.json"' "$PY" "$KIT" "$io" "${NODES[0]%%.*}" "$d"
   rm -f "$io/a.bin" "$io/b.bin"
   local lgb; lgb=$(awk -v g="$gb" 'BEGIN { print (g < 10 ? g : 10) }')
   srun --nodes="$n" --ntasks="$n" --ntasks-per-node=1 --cpus-per-task=1 --mem=8G \
-    bash -c 'h=$(hostname -s); d="$3/awesom-so-$SLURM_JOB_ID-$h"; f="$d/io.bin";
+    bash -c 'h=${SLURMD_NODENAME:-local}; h=${h%%.*}; d="$3/awesom-so-$SLURM_JOB_ID-$h"; f="$d/io.bin";
              mkdir "$d" || exit 1; trap '"'"'rm -rf "$d"'"'"' EXIT;
              "$0" "$1/probe.py" write --path "$f" --gb "$2" --json "$4/io-local-write-$h.json" &&
              "$0" "$1/probe.py" read --path "$f" --test local-disk --role after-fadvise --json "$4/io-local-read-$h.json"' \
@@ -261,7 +270,7 @@ affinity_preflight() {
   local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt"
   launch_cmd "$nn" "$rpn" "$cpus" "$bind" || return 2
   timeout 120 "${CMD[@]}" $PY -c '
-import os, socket
+import os
 saved = os.sched_getaffinity(0)
 from mpi4py import MPI
 c = MPI.COMM_WORLD
@@ -270,7 +279,8 @@ restored = 0
 if after < len(saved):
     os.sched_setaffinity(0, saved)
     restored = len(os.sched_getaffinity(0))
-print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={socket.gethostname()} "
+host = os.environ.get("SLURMD_NODENAME") or "local"
+print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={host} "
       f"before_init={len(saved)} after_init={after} restored={restored}", flush=True)
 ' > "$f" 2>&1 || true
   affinity_report "$case" "$f" $((nn * rpn)) "$cpus"
@@ -310,7 +320,8 @@ mpi_install() {
   local log="$OUT/probe/mpi-install.txt" vfile="$OUT/probe/mpi4py-version.txt" mod ver
   local wheels="$KIT/wheels" build=${MPI_BUILD:-wheel} rc=0
   case $build in wheel|source) ;; *) echo "MPI_BUILD must be wheel or source, not $build" | tee "$log"; return 2;; esac
-  mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)
+  if on_tigris; then echo "mpi_install is GP-only (module survey); refusing on Tigris" | tee "$log"; return 2; fi
+  mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)  # sysinfo-ok: GP-only, refuses on Tigris
   ver=${mod##*/}
   # Skip only if MPI itself loads and names the module's Open MPI version (kit_init has
   # already loaded MPI_SITE/MODULE and exported MPI4PY_LIBMPI); a bare `import mpi4py`
@@ -330,7 +341,7 @@ mpi_install() {
     echo "openmpi module: ${mod:-none}; MPI_BUILD=$build"
     if [ -n "$mod" ] && module load "$mod" && command -v mpicc; then
       lib=$(dirname "$(dirname "$(command -v mpicc)")")/lib/libmpi.so.40
-      [ "$(uname -s)" = Darwin ] && lib=${lib%/*}/libmpi.40.dylib
+      [ -f "$lib" ] || [ ! -f "${lib%/*}/libmpi.40.dylib" ] || lib=${lib%/*}/libmpi.40.dylib  # macOS name
       [ -f "$lib" ] || { echo "no MPI library at $lib"; echo "mpi4py install FAILED"; exit 1; }
       export MPI4PY_LIBMPI=$lib
       if [ -d "$wheels" ]; then

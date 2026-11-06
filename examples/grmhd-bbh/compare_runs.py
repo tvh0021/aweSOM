@@ -85,7 +85,7 @@ def predict_labels(grid, model, out_path, chunk_rows=4_000_000, log=print):
         n_bad += int((~ok).sum())
         out[a:b] = lab
         el = time.perf_counter() - t0
-        log(f"[predict] {b:,}/{n:,} rows, {el:.0f}s, {el / b * 1e6:.2f} us/pt, load {os.getloadavg()[0]:.1f}")
+        log(f"[predict] {b:,}/{n:,} rows, {el:.0f}s, {el / b * 1e6:.2f} us/pt")
     out.flush()
     del out
     os.replace(out_path.with_suffix(".tmp.npy"), out_path)
@@ -478,7 +478,7 @@ def main(argv=None):
                 summaries[name] = s
                 planes[name] = load_planes(run_dir / f"{name}_planes.npz")
                 continue
-        info = {"grid": str(grid), "load_start": os.getloadavg()}
+        info = {"grid": str(grid)}
         src = GridFileSource(grid)
         it = src.attrs.get("iteration", "x")
         src.close()
@@ -489,7 +489,6 @@ def main(argv=None):
                     raise SystemExit(f"[{name}] no labels and no --model")
                 print(f"[{name}] predicting labels -> {labels}", flush=True)
                 info["predict"] = predict_labels(grid, model, labels, args.chunk_rows)
-                info["predict"]["load_end"] = os.getloadavg()
                 info["predict"]["model"] = str(args.model)
         info["labels"] = str(labels)
         t0 = time.perf_counter()
@@ -498,7 +497,6 @@ def main(argv=None):
         src = GridFileSource(grid, labels)
         res = sheet_statistics(src, clusters, config=cfg)
         src.close()
-        info["load_end"] = os.getloadavg()
         info["peak_rss_gb"] = round(rss_gb(), 3)
         res.summary["run"] = {"name": name, **info}
         paths = write_outputs(res, run_dir, name)

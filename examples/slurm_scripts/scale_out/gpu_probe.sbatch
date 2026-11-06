@@ -12,6 +12,10 @@
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thccrg@rit.edu
+# GP-only survey: refuse to run on Tigris (no host-state reads there, user rule 2026-11-06).
+case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD|${SLURM_SUBMIT_DIR:-}|${KIT:-}|${OUT:-}" in
+  tigris\|*|*/shared/rc/*) echo "GP-only probe: refusing to run on Tigris" >&2; exit 2;;
+esac
 set -euo pipefail
 KIT=${KIT:-$SLURM_SUBMIT_DIR}
 REPO=${REPO:-$KIT/aweSOM-src}
@@ -28,14 +32,14 @@ export NUMBA_NUM_THREADS=$THREADS OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_N
 export NUMBA_CACHE_DIR="$OUT/numba-cache/rank-0" HDF5_USE_FILE_LOCKING=FALSE PYTHONUNBUFFERED=1
 mkdir -p "$NUMBA_CACHE_DIR"
 {
-  nvidia-smi -L
-  nvidia-smi topo -m
-  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
-  free -g
+  nvidia-smi -L  # sysinfo-ok: GP-only probe, refuses on Tigris
+  nvidia-smi topo -m  # sysinfo-ok: GP-only probe, refuses on Tigris
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv  # sysinfo-ok: GP-only probe, refuses on Tigris
+  free -g  # sysinfo-ok: GP-only probe, refuses on Tigris
   nproc
-  lscpu | head || true
-  df -h "${TMPDIR:-/tmp}" /tmp
-  module avail 2>&1 | grep -i -E 'cuda|openmpi|mpi' || true
+  lscpu | head || true  # sysinfo-ok: GP-only probe, refuses on Tigris
+  df -h "${TMPDIR:-/tmp}" /tmp  # sysinfo-ok: GP-only probe, refuses on Tigris
+  module avail 2>&1 | grep -i -E 'cuda|openmpi|mpi' || true  # sysinfo-ok: GP-only probe, refuses on Tigris
   command -v mpirun || true
   mpirun --version || true
 } > "$OUT/hardware.log" 2>&1

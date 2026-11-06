@@ -91,10 +91,9 @@ def setup(r):
     return s["lattice"], int(s["n"])
 
 
-def baseline_label(r):
-    """CPU model, partition and node of a run, as recorded in its run.json."""
+def baseline_label(r, cpu="unknown CPU"):
+    """CPU label (--cpu-label: run.json records no CPU model), partition and node of a run."""
     env = r.get("environment", {})
-    cpu = env.get("lscpu", {}).get("Model name") or env.get("platform") or "unknown CPU"
     part = env.get("slurm", {}).get("SLURM_JOB_PARTITION") or "no partition"
     nodes = ",".join(r.get("nodes", [])) or "unknown node"
     return f"{cpu}, {part}, {nodes}"
@@ -109,6 +108,7 @@ def main(argv=None):
     p.add_argument("--out", type=Path)
     p.add_argument("--check-gate", type=Path, help="exit 0 if this gate.json passes for --lattices")
     p.add_argument("--lattices", nargs="+", default=list(LATTICES))
+    p.add_argument("--cpu-label", default="unknown CPU", help="CPU model named in the projection table")
     p.add_argument("roots", nargs="*")
     a = p.parse_args(argv)
     if a.check_gate is not None:
@@ -182,7 +182,7 @@ def main(argv=None):
             "|---|---|---|---|---|---|---|---|"]
     for k, r in sorted(base.items()):
         per_core = r["rows_per_second"] / 32
-        label = baseline_label(r)
+        label = baseline_label(r, a.cpu_label)
         for cores in (72, 144):
             for factor in (1.0, 1.5, 2.0):
                 rate = per_core * cores * factor

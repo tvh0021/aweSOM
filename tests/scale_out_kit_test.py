@@ -35,12 +35,43 @@ def test_gate_file_from_one_lattice_sweep_fails_a_two_lattice_job(tmp_path):
     assert summarize.main(["--check-gate", str(g), "--lattices", "91x64"]) == 0
 
 
-def test_projection_label_is_the_recorded_baseline():
-    r = dict(environment=dict(lscpu={"Model name": "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz"},
-                              slurm={"SLURM_JOB_PARTITION": "gp-default"}), nodes=["gp-n0013"])
-    assert summarize.baseline_label(r) == "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz, gp-default, gp-n0013"
-    r = dict(environment=dict(lscpu={}, slurm={}, platform="macOS-arm64"), nodes=[])
-    assert summarize.baseline_label(r) == "macOS-arm64, no partition, unknown node"
+def test_projection_label_takes_the_cpu_from_the_option():
+    # run.json records no CPU model; old files still carry lscpu/platform, which are ignored.
+    old = dict(environment=dict(lscpu={"Model name": "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz"},
+                                platform="Linux-x86_64", slurm={"SLURM_JOB_PARTITION": "gp-default"}),
+               nodes=["gp-n0013"])
+    assert summarize.baseline_label(old) == "unknown CPU, gp-default, gp-n0013"
+    assert summarize.baseline_label(old, "Xeon Gold 6130") == "Xeon Gold 6130, gp-default, gp-n0013"
+    new = dict(environment=dict(slurm={}), nodes=[])
+    assert summarize.baseline_label(new) == "unknown CPU, no partition, unknown node"
+
+
+def test_node_name_comes_from_slurm_only(monkeypatch):
+    monkeypatch.setenv("SLURMD_NODENAME", "test-node")
+    assert scale_out.node_name() == "test-node"
+    monkeypatch.delenv("SLURMD_NODENAME")
+    assert scale_out.node_name() == "local"
+
+
+class NamesComm:
+    """Get_size and allgather over fixed per-rank SLURMD_NODENAME values (None = unset)."""
+
+    def __init__(self, names):
+        self.names = names
+
+    def Get_size(self):
+        return len(self.names)
+
+    def allgather(self, mine):
+        return list(self.names)
+
+
+def test_multi_rank_run_needs_slurm_node_names_on_every_rank():
+    scale_out.require_node_names(None)                      # serial run: "local" is fine
+    scale_out.require_node_names(NamesComm([None]))         # one rank: fine
+    scale_out.require_node_names(NamesComm(["gg-a-001", "gg-a-002"]))
+    with pytest.raises(RuntimeError, match=r"SLURMD_NODENAME is unset on ranks \[1\]"):
+        scale_out.require_node_names(NamesComm(["gg-a-001", None]))
 
 
 spec_so = importlib.util.spec_from_file_location("scale_out_run", KIT / "scale_out.py")
@@ -62,7 +93,7 @@ class FakeComm:
 def test_affinity_check_passes_with_full_cpu_set(monkeypatch):
     monkeypatch.setattr(scale_out.os, "sched_getaffinity", lambda pid: set(range(32)), raising=False)
     assert scale_out.affinity_check(32, 0) == 32
-    host = scale_out.platform.node()
+    host = scale_out.node_name()
     assert scale_out.affinity_check(32, 0, FakeComm([(0, host, 32), (1, "gp-n0016", 32)])) == 32
 
 
@@ -76,7 +107,7 @@ def test_affinity_check_fails_on_one_cpu(monkeypatch):
 def test_affinity_check_fails_on_every_rank_when_another_rank_is_short(monkeypatch):
     # This rank is fine; rank 1 on another node is not. All ranks see the gathered list and stop.
     monkeypatch.setattr(scale_out.os, "sched_getaffinity", lambda pid: set(range(32)), raising=False)
-    host = scale_out.platform.node()
+    host = scale_out.node_name()
     comm = FakeComm([(0, host, 32), (1, "gp-n0016", 1)])
     with pytest.raises(RuntimeError, match=r"rank 1 on gp-n0016: affinity 1 CPUs < 32 threads") as e:
         scale_out.affinity_check(32, 0, comm)

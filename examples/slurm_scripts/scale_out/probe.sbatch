@@ -17,6 +17,10 @@
 # node), and the lagoon read test (IO_TEST_GB, default 20; cold read on the second node
 # when the job gets two). Submit this first; the other jobs use what it installs.
 # debug has one node (lm-n0001); submit with --partition=gp-default --nodes=2 (README).
+# GP-only survey: refuse to run on Tigris (no host-state reads there, user rule 2026-11-06).
+case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD|${SLURM_SUBMIT_DIR:-}|${KIT:-}|${OUT:-}" in
+  tigris\|*|*/shared/rc/*) echo "GP-only probe: refusing to run on Tigris" >&2; exit 2;;
+esac
 set -eo pipefail
 . "${KIT:-$SLURM_SUBMIT_DIR}/common.sh"
 kit_init probe

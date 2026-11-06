@@ -43,7 +43,6 @@ import argparse  # noqa: E402
 import concurrent.futures  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
-import platform  # noqa: E402
 import resource  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
@@ -186,20 +185,22 @@ class OwnedRows:
 
 # ------------------------------------------------------------------ environment
 
-def lscpu() -> dict:
-    try:
-        text = subprocess.run(["lscpu"], capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    keep = ("Architecture", "Model name", "CPU(s)", "Socket(s)", "Core(s) per socket", "Thread(s) per core",
-            "NUMA node(s)", "CPU max MHz", "L3 cache")
-    out = {}
-    for line in text.splitlines():
-        if ":" in line:
-            k, v = (s.strip() for s in line.split(":", 1))
-            if k in keep or k.startswith("NUMA node") and "CPU(s)" in k:
-                out[k] = v
-    return out
+def node_name() -> str:
+    """This node's name from Slurm (SLURMD_NODENAME, set in every task on its own node), or
+    "local" outside Slurm. No system call: no host-state reads on Tigris (user rule 2026-11-06)."""
+    return os.environ.get("SLURMD_NODENAME") or "local"
+
+
+def require_node_names(comm) -> None:
+    """With more than one rank, every rank must have SLURMD_NODENAME: the node count in run.json
+    comes from these names, and "local" on every rank would count a multi-node run as one node.
+    Gathered, so all ranks stop together. No hostname probe (user rule 2026-11-06)."""
+    if comm is None or comm.Get_size() < 2:
+        return
+    missing = [r for r, name in enumerate(comm.allgather(os.environ.get("SLURMD_NODENAME"))) if not name]
+    if missing:
+        raise RuntimeError(f"SLURMD_NODENAME is unset on ranks {missing}: launch under Slurm (srun, or "
+                           "mpiexec -launcher slurm) so each rank knows its node; refusing to count nodes")
 
 
 def peak_rss() -> int:
@@ -256,7 +257,7 @@ def restore_affinity(saved, rank: int, get=None, put=None):
     except OSError as e:
         rec["error"] = f"{type(e).__name__}: {e}"
     rec["after_restore"] = len(set(get(0)))
-    print(f"rank {rank} on {platform.node()}: CPU set shrank in MPI_Init from {rec['before']} to "
+    print(f"rank {rank} on {node_name()}: CPU set shrank in MPI_Init from {rec['before']} to "
           f"{rec['after_init']} CPUs {rec['cpus_after_init'][:8]}; restored to {rec['after_restore']}"
           + (f" ({rec['error']})" if "error" in rec else ""), file=sys.stderr, flush=True)
     return rec
@@ -272,7 +273,7 @@ def affinity_check(threads: int, rank: int, comm=None) -> int:
     """
     if not hasattr(os, "sched_getaffinity"):
         return -1
-    mine = (rank, platform.node(), len(os.sched_getaffinity(0)))
+    mine = (rank, node_name(), len(os.sched_getaffinity(0)))
     every = comm.allgather(mine) if comm is not None else [mine]
     bad = [f"rank {r} on {h}: affinity {n} CPUs < {threads} threads" for r, h, n in every if n < threads]
     if bad:
@@ -316,6 +317,7 @@ def main(argv=None) -> int:
     rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
     # Before numba.set_num_threads below, which starts numba's thread pool.
     restored = restore_affinity(AFFINITY_AT_START, rank)
+    require_node_names(comm)
     affinity_check(args.threads, rank, comm)
     out = args.out
     if rank == 0:
@@ -376,7 +378,7 @@ def main(argv=None) -> int:
         raise RuntimeError("training returned invalid weights")
 
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
-    mine = dict(rank=rank, hostname=platform.node(), pid=os.getpid(), affinity=affinity, affinity_restored=restored,
+    mine = dict(rank=rank, hostname=node_name(), pid=os.getpid(), affinity=affinity, affinity_restored=restored,
                 numba_threads=numba.get_num_threads(), threading_layer=numba.threading_layer(),
                 owned_chunks=len(src.owned), owned_rows=src.owned_rows, generate_seconds=src.generate_seconds,
                 init_rows_seconds=src.rows_seconds, warmup_seconds=warmup, training_wall_seconds=wall,
@@ -392,10 +394,9 @@ def main(argv=None) -> int:
     later = info["epoch_time"][1:]
     rec = dict(
         schema="scale_out/1", finished_utc=utc(), settings=settings, source=source_info(),
-        block0_sha256=block0, environment=dict(python=sys.version.split()[0], numpy=np.__version__,
-                                               numba=numba.__version__, platform=platform.platform(),
-                                               lscpu=lscpu(), slurm={k: v for k, v in os.environ.items()
-                                                                     if k.startswith("SLURM_")}),
+        block0_sha256=block0, environment=dict(
+            python=sys.version.split()[0], numpy=np.__version__, numba=numba.__version__,
+            slurm={k: v for k, v in os.environ.items() if k.startswith("SLURM_")}),
         nodes=sorted({r["hostname"] for r in ranks}), n_nodes=len({r["hostname"] for r in ranks}),
         ranks=size, threads_per_rank=args.threads, total_threads=size * args.threads,
         training_wall_seconds=wall, rows_processed=rows_done, rows_per_second=rows_done / wall,

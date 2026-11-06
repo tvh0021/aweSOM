@@ -49,6 +49,19 @@ NAMES = ['log_beta_inv', 'log_theta', 'log_chi_B', 'log_grad_ln_b2',
 UNAVAILABLE = {'status': 'not available', 'reason': 'not recorded by the extraction'}
 
 
+def node_name():
+    """This node's name from Slurm (SLURMD_NODENAME is set in every task, per node), or 'local'
+    outside Slurm. No system call: no host-state reads on Tigris (user rule 2026-11-06)."""
+    return os.environ.get('SLURMD_NODENAME') or 'local'
+
+
+def on_tigris(*paths):
+    """True on Tigris: SLURM_CLUSTER_NAME is tigris (any case) or a path lies under /shared/rc/.
+    Free-space checks are skipped there (no filesystem reads, user rule 2026-11-06)."""
+    if os.environ.get('SLURM_CLUSTER_NAME', '').lower() == 'tigris': return True
+    return any(os.path.abspath(p).startswith('/shared/rc/') for p in paths)
+
+
 def plain(x):
     if isinstance(x, dict): return {str(k): plain(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)): return [plain(v) for v in x]
@@ -233,7 +246,9 @@ def inspect(args):
         threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
         bytes_per_row += 8 if deferred else max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
     need = max(args.min_free_gb*1e9, rows*bytes_per_row + 1e9)
-    free = shutil.disk_usage(args.out.parent).free
+    if on_tigris(args.out):  # no free-space read on Tigris; nothing recorded
+        return records, quota, dict(required_bytes=need), mismatches
+    free = shutil.disk_usage(args.out.parent).free  # sysinfo-ok: GP-only branch, skipped on Tigris
     if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
     return records, quota, dict(free_bytes=free, required_bytes=need), mismatches
 
@@ -779,12 +794,14 @@ def thread_budget(args):
 
 def execution_info():
     import numba
+    # Thread values this process uses, not environment variables (user rule 2026-11-06: records
+    # hold only SLURM_* and CUDA_VISIBLE_DEVICES from the environment). Native BLAS/OpenMP
+    # libraries are pinned to 1 thread at import (top of this file).
     return dict(numba_threads=numba.get_num_threads(), numba_thread_ceiling=numba.config.NUMBA_NUM_THREADS,
-                pid=os.getpid(), hostname=os.uname().nodename,
+                native_library_threads=1, pid=os.getpid(), hostname=node_name(),
                 affinity=sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else None,
-                thread_environment={k:os.environ.get(k) for k in ('NUMBA_NUM_THREADS', 'OMP_NUM_THREADS',
-                    'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS',
-                    'SLURM_CPUS_PER_TASK', 'SLURM_JOB_ID')})
+                slurm_cpus_per_task=os.environ.get('SLURM_CPUS_PER_TASK'),
+                slurm_job_id=os.environ.get('SLURM_JOB_ID'))
 
 
 
@@ -868,7 +885,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                                     comm=comm, **checkpoint_args)
         if comm is not None:
             import numba
-            per_rank = comm.gather(dict(hostname=os.uname().nodename, numba_threads=numba.get_num_threads(),
+            per_rank = comm.gather(dict(hostname=node_name(), numba_threads=numba.get_num_threads(),
                                         affinity_restored=restored), root=0)
             if comm.Get_rank(): return None
         clock.finish('training')
@@ -999,7 +1016,7 @@ def restore_affinity(saved, get=None, put=None):
     except OSError as e:
         rec['error'] = f'{type(e).__name__}: {e}'
     rec['after_restore'] = len(set(get(0)))
-    print(f"{os.uname().nodename}: CPU set shrank in MPI_Init from {rec['before']} to {rec['after_init']} CPUs; "
+    print(f"{node_name()}: CPU set shrank in MPI_Init from {rec['before']} to {rec['after_init']} CPUs; "
           f"restored to {rec['after_restore']}" + (f" ({rec['error']})" if 'error' in rec else ''),
           file=sys.stderr, flush=True)
     return rec
@@ -1020,7 +1037,7 @@ def mpi_threads(args):
     cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
     threads = args.threads_per_seed or int(os.environ.get('NUMBA_NUM_THREADS') or cpus)
     if threads > cpus:
-        raise RuntimeError(f'{os.uname().nodename}: {cpus} CPUs in this rank\'s affinity mask, '
+        raise RuntimeError(f'{node_name()}: {cpus} CPUs in this rank\'s affinity mask, '
                            f'fewer than {threads} threads; check the srun --cpu-bind and HFI_NO_CPUAFFINITY')
     return threads
 
@@ -1217,8 +1234,10 @@ def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_ne
         pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
         fits = len(args.lattices)*len(args.seeds)
         output_bytes = rows*(pool_bytes+4*fits+12*(fits if deferred else concurrent))
-    scratch_free = shutil.disk_usage(scratch).free
-    output_free = shutil.disk_usage(output).free
+    if on_tigris(args.out, scratch):  # no free-space reads on Tigris; nothing recorded
+        return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=None)
+    scratch_free = shutil.disk_usage(scratch).free  # sysinfo-ok: GP-only branch, skipped on Tigris
+    output_free = shutil.disk_usage(output).free  # sysinfo-ok: GP-only branch, skipped on Tigris
     shared = scratch.stat().st_dev == output.stat().st_dev
     floor = args.min_free_gb*1e9
     scratch_need = max(floor,scratch_bytes+output_bytes if shared else scratch_bytes)
@@ -1309,7 +1328,7 @@ def statistics_only(args):
             del labels,nodes,distances
     dump(out/'fit-results.json',dict(bundle,models=completed))
     dump(out/'statistics-job.json',dict(git_commit=provenance(),rows=rows,threads=args.threads_per_seed,
-         ranks=1,hostname=os.uname().nodename,peak_rss_bytes=peak_rss_bytes(),
+         ranks=1,hostname=node_name(),peak_rss_bytes=peak_rss_bytes(),
          wall_seconds=time.perf_counter()-started,
          models={r['tag']:r['phase_timings']['statistics'] for r in completed}))
     os.rename(out,args.out/'results')

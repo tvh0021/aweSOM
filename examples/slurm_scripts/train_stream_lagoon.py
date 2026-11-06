@@ -51,7 +51,7 @@ def env(name, default, cast=str):
 
 
 def log(stage, **kw):
-    rec = {"stage": stage, "time": time.strftime("%H:%M:%S"), "load": os.getloadavg(),
+    rec = {"stage": stage, "time": time.strftime("%H:%M:%S"),
            "threads": numba.get_num_threads(), "peak_rss_gb": peak_rss_bytes() / 1e9, **kw}
     print(json.dumps(rec, default=float), flush=True)
 

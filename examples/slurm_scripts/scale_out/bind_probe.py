@@ -13,9 +13,17 @@ process-wide hwloc binding (every thread changes). No restore unless ``--restore
 ``--no-mpi`` prints only the start values (Python under the same srun, no MPI).
 """
 import os
-import socket
 import sys
 
+
+def refuse_on_tigris():
+    """GP-only survey: stop on Tigris (no host-state reads there, user rule 2026-11-06)."""
+    paths = (os.getcwd(), os.environ.get("SLURM_SUBMIT_DIR", ""), os.environ.get("KIT", ""), os.environ.get("OUT", ""))
+    if os.environ.get("SLURM_CLUSTER_NAME", "").lower() == "tigris" or any("/shared/rc/" in p for p in paths):
+        raise SystemExit("GP-only probe: refusing to run on Tigris")
+
+
+refuse_on_tigris()
 SAVED = frozenset(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
 
 
@@ -40,16 +48,16 @@ def ranges(cpus):
 def cgroup_cpus():
     """CPU count the step's cgroup allows (cgroup v2 or v1 cpuset), or '?'."""
     try:
-        lines = open("/proc/self/cgroup").read().splitlines()
+        lines = open("/proc/self/cgroup").read().splitlines()  # sysinfo-ok: GP-only probe, refuses on Tigris
     except OSError:
         return "?"
     paths = []
     for line in lines:
         _, ctrl, path = line.split(":", 2)
         if ctrl == "":
-            paths.append(f"/sys/fs/cgroup{path}/cpuset.cpus.effective")
+            paths.append(f"/sys/fs/cgroup{path}/cpuset.cpus.effective")  # sysinfo-ok: GP-only probe, refuses on Tigris
         elif "cpuset" in ctrl.split(","):
-            paths += [f"/sys/fs/cgroup/cpuset{path}/cpuset.effective_cpus", f"/sys/fs/cgroup/cpuset{path}/cpuset.cpus"]
+            paths += [f"/sys/fs/cgroup/cpuset{path}/cpuset.effective_cpus", f"/sys/fs/cgroup/cpuset{path}/cpuset.cpus"]  # sysinfo-ok: GP-only probe, refuses on Tigris
     for p in paths:
         try:
             text = open(p).read().strip()
@@ -82,7 +90,7 @@ def thread_cpus():
 
 def main(argv):
     case = argv[argv.index("--case") + 1] if "--case" in argv else "-"
-    head = (f"BIND case={case} host={socket.gethostname()} online={os.cpu_count()} cgroup={cgroup_cpus()} "
+    head = (f"BIND case={case} host={os.environ.get('SLURMD_NODENAME') or 'local'} online={os.cpu_count()} cgroup={cgroup_cpus()} "
             f"policy_env={os.environ.get('OMPI_MCA_hwloc_base_binding_policy', '(unset)')}")
     before = len(SAVED) if SAVED is not None else -1
     if "--no-mpi" in argv:

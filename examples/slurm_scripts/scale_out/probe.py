@@ -25,11 +25,24 @@ from pathlib import Path
 BLOCK = 64 << 20
 
 
+def node_name():
+    """Node name from Slurm (SLURMD_NODENAME), or "local" outside Slurm; no system call."""
+    return os.environ.get("SLURMD_NODENAME") or "local"
+
+
+def refuse_on_tigris():
+    """GP-only survey: stop on Tigris (no host-state reads there, user rule 2026-11-06)."""
+    paths = (os.getcwd(), os.environ.get("SLURM_SUBMIT_DIR", ""), os.environ.get("KIT", ""), os.environ.get("OUT", ""))
+    if os.environ.get("SLURM_CLUSTER_NAME", "").lower() == "tigris" or any("/shared/rc/" in p for p in paths):
+        raise SystemExit("GP-only probe: refusing to run on Tigris")
+
+
 def env():
     import numpy as np
 
-    out = dict(host=platform.node(), python=sys.version.split()[0], executable=sys.executable,
-               platform=platform.platform(), machine=platform.machine(), numpy=np.__version__,
+    refuse_on_tigris()
+    out = dict(host=node_name(), python=sys.version.split()[0], executable=sys.executable,
+               platform=platform.platform(), machine=platform.machine(), numpy=np.__version__,  # sysinfo-ok: GP-only probe, refuses on Tigris
                cpu_count=os.cpu_count(),
                affinity=len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None)
     try:
@@ -58,12 +71,12 @@ def env():
     except Exception as exc:  # noqa: BLE001 - recorded
         out["mpi4py"] = dict(ok=False, error=repr(exc)[:300])
     try:
-        rows = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+        rows = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())  # sysinfo-ok: GP-only probe, refuses on Tigris
         out["mem_total_gb"] = int(rows["MemTotal"].split()[0]) / 2**20
         out["mem_available_gb"] = int(rows["MemAvailable"].split()[0]) / 2**20
     except OSError:
         pass
-    numa = sorted(Path("/sys/devices/system/node").glob("node[0-9]*"))
+    numa = sorted(Path("/sys/devices/system/node").glob("node[0-9]*"))  # sysinfo-ok: GP-only probe, refuses on Tigris
     out["numa_nodes"] = {p.name: (p / "cpulist").read_text().strip() for p in numa}
     return out
 
@@ -128,7 +141,7 @@ def main(argv=None):
         res = write(a.path, a.gb)
     else:
         res = read(a.path, a.test, a.role)
-    res.setdefault("host", platform.node())
+    res.setdefault("host", node_name())
     a.json.parent.mkdir(parents=True, exist_ok=True)
     a.json.write_text(json.dumps(res, indent=1) + "\n")
     print(json.dumps({k: v for k, v in res.items() if k != "numa_nodes"}))

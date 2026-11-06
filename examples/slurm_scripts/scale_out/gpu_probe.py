@@ -3,7 +3,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 from pathlib import Path
 import subprocess
 import time
@@ -42,7 +41,7 @@ def main():
         commit = subprocess.check_output(['git', '-C', str(source_root),
                                           'rev-parse', 'HEAD'], text=True).strip()
     record = dict(status='running', rows=args.rows, check_rows=args.check_rows,
-                  threads=threads, ranks=1, nodes=[platform.node()], platform=platform.platform(),
+                  threads=threads, ranks=1, nodes=[os.environ.get('SLURMD_NODENAME', 'unknown')],
                   commit=commit,
                   cupy=cp.__version__, driver=cp.cuda.runtime.driverGetVersion(),
                   runtime=cp.cuda.runtime.runtimeGetVersion(), checks=[], rates=[], epochs=[],

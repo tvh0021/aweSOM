@@ -60,7 +60,7 @@ export PYTHONUNBUFFERED=1
 
 mkdir -p "$AWESOM_OUT"
 source "$AWESOM_VENV/bin/activate"
-echo "host $(hostname)  cpus ${SLURM_CPUS_PER_TASK:-?}  features $AWESOM_FEATURES  out $AWESOM_OUT"
+echo "host ${SLURMD_NODENAME:-?}  cpus ${SLURM_CPUS_PER_TASK:-?}  features $AWESOM_FEATURES  out $AWESOM_OUT"
 python -c "import numba, numpy, h5py, aweSOM; print('numba', numba.__version__, 'numpy', numpy.__version__, 'h5py', h5py.__version__, 'aweSOM', aweSOM.__file__)"
 
 TIMER=""

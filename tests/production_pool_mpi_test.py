@@ -135,7 +135,7 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     rec = json.loads((results/'4x3-s42.json').read_text())
     ref = json.loads((prepared.single/'4x3-s42.json').read_text())
     assert rec['ranks'] == 2 and ref['ranks'] == 1
-    assert rec['rank_hostnames'] == [os.uname().nodename]*2
+    assert rec['rank_hostnames'] == [os.environ.get('SLURMD_NODENAME') or 'local']*2
     assert rec['rank_numba_threads'] == [1, 1] and rec['affinity_restored'] == [None, None]
     assert not {'rank_hostnames', 'rank_numba_threads', 'affinity_restored'} & set(ref)
     assert rec['training_info']['ranks'] == 2
