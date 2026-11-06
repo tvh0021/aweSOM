@@ -32,6 +32,9 @@ import time
 import traceback
 
 sys.dont_write_bytecode = True
+# CPU set at start, saved before anything can initialise MPI (`python -m mpi4py` imports MPI
+# only on an exception; MPI_Init happens in get_comm). Linux only. See restore_affinity.
+AFFINITY_AT_START = frozenset(os.sched_getaffinity(0)) if sys.platform.startswith('linux') else None
 # Bound native libraries before NumPy is imported, including in spawned workers.
 for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
     os.environ[_key] = '1'
@@ -746,7 +749,9 @@ def statistics_fields(args, raw, nodes, distances, labels, n_nodes, n_clusters, 
 
 
 
-def fit(args, shape, seed, scaling, out):
+def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=None):
+    """One fit. With ``comm`` every rank trains on the windows it owns; rank 0 alone does
+    the rest and returns the record, the other ranks return None after training."""
     from aweSOM import Lattice, SOMModel, Scaler
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
     from aweSOM.inference import best_match_nodes_patch
@@ -756,7 +761,7 @@ def fit(args, shape, seed, scaling, out):
     execution = execution_info()
     print(json.dumps(dict(tag=tag, execution=execution)), flush=True)
     scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
-    with h5py.File(out / 'pool.h5', 'r') as h:
+    with h5py.File(pool_file or out / 'pool.h5', 'r') as h:
         raw = h['raw']
         transform = lambda block: scaler.transform(np.asarray(block,dtype='f8'))
         if args.check_scaling:
@@ -772,11 +777,25 @@ def fit(args, shape, seed, scaling, out):
         if 'checkpoint' in parameters: checkpoint_args['checkpoint'] = out / f'{tag}-checkpoint.npz'
         if args.resume is not None:
             if 'resume' not in parameters: raise ValueError('installed trainer does not support resume')
-            checkpoint_args['resume'] = args.resume
+            # The trainer resumes from its own checkpoint path: rank 0 stages the requested file
+            # there (the source stays unchanged). The other ranks never write a checkpoint, so
+            # they read the source and never look up a file rank 0 has just created.
+            if comm is None or not comm.Get_rank():
+                shutil.copyfile(args.resume, checkpoint_args['checkpoint'])
+            else:
+                checkpoint_args['checkpoint'] = args.resume.resolve()
+            if comm is not None: comm.Barrier()
+            checkpoint_args['resume'] = True
         w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
                                     bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
                                     r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
-                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True, **checkpoint_args)
+                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
+                                    comm=comm, **checkpoint_args)
+        if comm is not None:
+            import numba
+            per_rank = comm.gather(dict(hostname=os.uname().nodename, numba_threads=numba.get_num_threads(),
+                                        affinity_restored=restored), root=0)
+            if comm.Get_rank(): return None
         clock.finish('training')
         if w.dtype != np.float64 or not np.isfinite(w).all():
             raise RuntimeError('training returned invalid float64 weights')
@@ -868,11 +887,67 @@ def fit(args, shape, seed, scaling, out):
                                  bmu_node_mismatches=bmu_mismatches, bmu_distance_rtol_1e6=distance_parity,
                                  saved_components_equal=components,
                                  parity_rows=len(probe),scaler_max_abs_error=scaler_error))
+    if comm is not None:
+        rec.update(ranks=comm.Get_size(), rank_hostnames=[r['hostname'] for r in per_rank],
+                   rank_numba_threads=[r['numba_threads'] for r in per_rank],
+                   affinity_restored=[r['affinity_restored'] for r in per_rank])
     if deferred:
         rec.update(selected_sheet_clusters=None,sheet_selection_status='deferred',selection_audit=None,seed_overlap=None)
         rec['verification']['saved_components_equal'].update(distance_quantiles=None,reject_distance=None)
     dump(out / f'{tag}.json',rec)
     return plain(rec)
+
+
+# Set by MPI launchers (srun --mpi=pmix, mpirun, mpiexec) in every rank, never in a plain run.
+LAUNCHER_VARIABLES = ('PMIX_RANK', 'OMPI_COMM_WORLD_SIZE', 'PMI_SIZE')
+
+
+def restore_affinity(saved, get=None, put=None):
+    """Give this thread back the CPU set ``saved`` if MPI_Init shrank it; None if it did not.
+
+    Copied from examples/slurm_scripts/scale_out/scale_out.py. On GP, libpsm2 (Omni-Path) pins
+    a whole-node rank to one CPU in MPI_Init (jobs 8413, 8444, 8448); HFI_NO_CPUAFFINITY=1 in
+    the launch turns that off and this stays as the guard. Call it before numba starts its
+    threads (set_num_threads or the first parallel call). Returns {before, after_init,
+    after_restore, cpus_after_init} and writes one line to stderr when it acts.
+    """
+    get = get or getattr(os, 'sched_getaffinity', None)
+    put = put or getattr(os, 'sched_setaffinity', None)
+    if saved is None or get is None or put is None:
+        return None
+    now = set(get(0))
+    if len(now) >= len(saved):
+        return None
+    rec = dict(before=len(saved), after_init=len(now), cpus_after_init=sorted(now))
+    try:
+        put(0, set(saved))
+    except OSError as e:
+        rec['error'] = f'{type(e).__name__}: {e}'
+    rec['after_restore'] = len(set(get(0)))
+    print(f"{os.uname().nodename}: CPU set shrank in MPI_Init from {rec['before']} to {rec['after_init']} CPUs; "
+          f"restored to {rec['after_restore']}" + (f" ({rec['error']})" if 'error' in rec else ''),
+          file=sys.stderr, flush=True)
+    return rec
+
+
+def mpi_comm(args):
+    """``(comm, restored)``: the communicator of a multi-rank launch (None otherwise) and the
+    affinity restore record. MPI is initialised only under --mpi or an MPI launcher."""
+    if not (args.mpi or any(k in os.environ for k in LAUNCHER_VARIABLES)):
+        return None, None
+    from aweSOM import distributed
+    comm = distributed.get_comm()
+    return comm, restore_affinity(AFFINITY_AT_START)
+
+
+def mpi_threads(args):
+    """Numba threads of one rank: --threads-per-seed, else NUMBA_NUM_THREADS, else the CPU set."""
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    threads = args.threads_per_seed or int(os.environ.get('NUMBA_NUM_THREADS') or cpus)
+    if threads > cpus:
+        raise RuntimeError(f'{os.uname().nodename}: {cpus} CPUs in this rank\'s affinity mask, '
+                           f'fewer than {threads} threads; check the srun --cpu-bind and HFI_NO_CPUAFFINITY')
+    return threads
 
 
 def worker(conn, *args):
@@ -995,9 +1070,10 @@ def parser():
     p.add_argument('--scratch',type=Path)
     p.add_argument('--bmu',default='auto')
     p.add_argument('--verify-labels',action='store_true')
-    p.add_argument('--resume',type=Path)
+    p.add_argument('--resume',type=Path,help='--fit only: continue from this checkpoint (copied into OUT, left unchanged); same rank count')
     p.add_argument('--reuse-pool',type=Path)
     p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
+    p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); rank 0 writes every output')
     p.add_argument('--collect',type=Path,nargs='+')
     p.add_argument('--anchor'); p.add_argument('--held-out',nargs='+')
     p.add_argument('--out',type=Path,required=True)
@@ -1169,6 +1245,13 @@ def main(argv=None):
     started = time.perf_counter()
     cli = parser()
     args = cli.parse_args(argv)
+    comm, restored = mpi_comm(args)
+    if args.mpi and comm is None:
+        cli.error('--mpi: no MPI communicator with more than one rank; launch with srun --mpi=pmix '
+                  '(or mpirun) and python -m mpi4py, with mpi4py importable')
+    if comm is not None and not (args.fit and args.reuse_pool):
+        cli.error('an MPI launch runs only --fit with --reuse-pool')
+    rank = 0 if comm is None else comm.Get_rank()
     if args.statistics_only:
         if args.fit or args.collect or args.pool_only or args.reuse_pool or args.statistics != 'inline':
             cli.error('--statistics-only cannot be combined with fit, collect, pool, or later modes')
@@ -1189,13 +1272,18 @@ def main(argv=None):
     if sum([bool(args.fit),bool(args.collect),args.pool_only]) > 1:
         raise ValueError('--fit, --collect and --pool-only are exclusive')
     if args.fit and not args.reuse_pool: raise ValueError('--fit requires --reuse-pool')
+    if args.resume is not None and not args.fit: raise ValueError('--resume requires --fit (one lattice, one seed)')
     if args.check_scaling < 0: raise ValueError('--check-scaling must be nonnegative')
     shapes = [tuple(map(int,s.split('x'))) for s in args.lattices]
     if any(len(s)!=2 or min(s)<2 for s in shapes): raise ValueError('invalid lattice')
     if len(set(args.seeds)) != len(args.seeds): raise ValueError('duplicate seeds')
+    if comm is not None: args.threads_per_seed = mpi_threads(args)
     auto_threads = args.threads_per_seed is None
     execution_plan = thread_budget(args)
     args.threads_per_seed = execution_plan['threads_per_seed']
+    if comm is not None:
+        import numba
+        numba.set_num_threads(args.threads_per_seed)
     args.code_commit = provenance()
     state = None
     if args.reuse_pool:
@@ -1216,19 +1304,21 @@ def main(argv=None):
         records,quota,disk,mismatches = inspect(args)
         if not args.pool_only:
             fit_disk_budget(args,quota*len(records),len(records[0]['names']),full_run=True)
-    args.out.mkdir()
+    if comm is not None: comm.Barrier()  # every rank has checked that OUT is fresh
+    if not rank: args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))
     os.environ['PYTHONDONTWRITEBYTECODE']='1'
     args.anchor_attrs=next(r['attrs'] for r in records if r['snapshot']==args.anchor)
-    out=args.out/'results.partial'; out.mkdir()
+    out=args.out/'results.partial'
+    if not rank: out.mkdir()
     if state is None:
         scaling=pool(args,records,quota,out)
         state = dict(records=records,quota=quota,disk=disk,mismatches=mismatches,scaling=scaling,
                      settings={k:getattr(args,k) for k in APPROVED},anchor=args.anchor,held_out=args.held_out)
     else:
         scaling=state['scaling']
-        os.symlink((directory/'pool.h5').resolve(),out/'pool.h5')
-    dump(out/'pool-state.json',state)
+        if not rank: os.symlink((directory/'pool.h5').resolve(),out/'pool.h5')
+    if not rank: dump(out/'pool-state.json',state)
     if args.pool_only:
         os.rename(out,args.out/'results'); return
     collected=[]
@@ -1264,7 +1354,10 @@ def main(argv=None):
                 import numba
                 wave_args.threads_per_seed=min(execution_plan['allocated_cpus']//len(seeds),
                                                numba.config.NUMBA_NUM_THREADS)
-            trio.extend(run_wave([(wave_args,shape,seed,scaling,out) for seed in seeds]))
+            jobs=[(wave_args,shape,seed,scaling,out) for seed in seeds]
+            # MPI: every rank trains in this process and reads the pool where it was prepared.
+            trio.extend(run_wave(jobs) if comm is None else
+                        [fit(*job,comm=comm,restored=restored,pool_file=(directory/'pool.h5').resolve()) for job in jobs])
         if args.fit or args.statistics == 'later':
             fits.extend(trio); continue
         # Decided once for the lattice and written into every seed's model before the frozen link.
@@ -1276,8 +1369,11 @@ def main(argv=None):
                             sheet_selection=sheet_selection))
         fits.extend(trio)
     if args.fit or args.statistics == 'later':
-        dump(out/'fit-results.json',dict(models=fits,settings={k:getattr(args,k) for k in APPROVED},bmu=args.bmu))
-        os.rename(out,args.out/'results'); return
+        if not rank:
+            dump(out/'fit-results.json',dict(models=fits,settings={k:getattr(args,k) for k in APPROVED},bmu=args.bmu))
+            os.rename(out,args.out/'results')
+        if comm is not None: comm.Barrier()  # the other ranks exit once rank 0 has published
+        return
     if args.collect and len(fits) != len(collected): raise ValueError('unexpected collected lattice')
     attrs=args.anchor_attrs
     physics={k:attrs.get(k,UNAVAILABLE) for k in ['b2_min','s_v','accuracy','epsilon','exponent','gamma_K','C_B_box',

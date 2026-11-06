@@ -54,13 +54,54 @@ source fit files and refuses missing seeds, duplicate fits, and mismatched pool
 or training settings. Collection currently copies label vectors as well, so
 budget four bytes per row per model on the destination filesystem.
 
+## Run one fit over four nodes (MPI)
+
+`production-fit-mpi-gp.sbatch` trains one fit on four gp-default nodes, one MPI
+rank per node with 32 threads. Every rank trains on the pool windows it owns.
+Rank 0 alone labels the pool, computes statistics and writes OUT; the other
+ranks write no persistent outputs (only their node-local Numba cache and stdout
+lines in the job log). Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
+(`/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site`
+on GP). The job runs the affinity pre-flight of
+`examples/slurm_scripts/scale_out/common.sh` first and writes it to `$OUT-launch`.
+Both seeds share the job name `so-sweep1` with `--dependency=singleton`, so the
+second waits for the first. The job runs in, and writes its Slurm log to,
+`/lagoon/trungha/bbh-output/for-awesom-2026-10-28`; keep OUT and the collection
+under that root too. Submit both seeds, then collect them:
+
+```bash
+export REPO=/absolute/aweSOM VENV=/absolute/venv POOL=/absolute/pool-output/results
+export MPI_SITE=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site
+export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5 LATTICE=91x64
+FITS=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/fits-mpi; mkdir -p "$FITS"
+for SEED in 42 43; do
+  SEED=$SEED OUT=$FITS/$LATTICE-s$SEED sbatch "$REPO/examples/grmhd-bbh/scale-out/production-fit-mpi-gp.sbatch"
+done
+# after both jobs end:
+"$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
+  --inputs "$INPUT_1" "$INPUT_2" --anchor 94208 --held-out 405504 \
+  --rows-per-snapshot 500000000 --rows-per-epoch 1000000000 --r-min 8 \
+  --lattices "$LATTICE" --reuse-pool "$POOL" --out "$FITS/collection-$LATTICE" \
+  --collect "$FITS/$LATTICE-s42/results" "$FITS/$LATTICE-s43/results"
+```
+
+Wall time: training takes about `EPOCHS * ROWS_PER_EPOCH / (2.0e6 * 0.93 * 4)`
+seconds (one node measured about 2.0e6 rows/s on real data at 40 epochs; four
+nodes at about 0.93 efficiency): 1.5 h for 40 epochs of 1e9 rows. Rank 0 then
+labels the whole pool on one node, about `POOL_ROWS / 2.0e6` seconds, and inline
+statistics add about an hour at 1e9 rows. The six-hour limit covers 1e9 rows.
+The fit record carries `ranks`, `rank_hostnames`, `rank_numba_threads` and
+`affinity_restored` (null on a rank where MPI_Init left its CPU set alone).
+`--mpi` makes a launch without a multi-rank communicator fail; an MPI launch
+runs only `--fit` with `--reuse-pool`.
+
 For GH200, submit `production-fit-tigris.sbatch` with the site's partition name
 on the `sbatch` command line. It requests 72 CPUs and 400 GB. The
 `production-fit-grace.sbatch` variant requests 144 CPUs and 400 GB. Confirm the
 site's memory limits first. Neither template assumes an x86 instruction set or
 requires `numactl`. Install NumPy, SciPy, h5py, scikit-learn, and Numba wheels for
-linux-aarch64, or build them on site. MPI and CUDA dependencies remain optional
-and are not imported by this driver.
+linux-aarch64, or build them on site. MPI and CUDA dependencies remain optional;
+the driver imports mpi4py only under `--mpi` or an MPI launcher.
 
 `--groups 64` preserves accumulator rounding. Set `GROUPS_COUNT=128` on 144 cores
 to try more parallel accumulator tasks; this changes the last bits. Two workers
