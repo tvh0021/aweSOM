@@ -88,14 +88,15 @@ def test_affinity_check_skipped_without_sched_getaffinity(monkeypatch):
     assert scale_out.affinity_check(32, 0) == -1
 
 
-def _run(tmp_path, name, ranks, nodes, affinity, rate, lattice="91x64"):
+def _run(tmp_path, name, ranks, nodes, affinity, rate, lattice="91x64", restored=None):
     d = tmp_path / "runs" / name
     d.mkdir(parents=True)
     r = dict(settings=dict(lattice=lattice, n=int(1e8)), ranks=ranks, n_nodes=nodes, threads_per_rank=32,
              total_threads=32 * ranks, rows_per_second=rate, training_wall_seconds=5e8 / rate,
              first_epoch_rows_per_second=rate, later_epoch_rows_per_second=rate, reduce_seconds_total=0.0,
              io_wait_total=0.0, peak_rss_bytes_per_rank=[2**30] * ranks, epochs=[dict(rank_pass_seconds=None)],
-             per_rank=[dict(affinity=list(range(affinity)))] * ranks, environment={}, nodes=[])
+             per_rank=[dict(affinity=list(range(affinity)), affinity_restored=restored)] * ranks,
+             environment={}, nodes=[])
     (d / "run.json").write_text(json.dumps(r))
     (d / "progress.log").write_text("")
 
@@ -116,3 +117,130 @@ def test_summary_excludes_under_pinned_runs_and_lists_unfinished(tmp_path):
     assert set(gate["efficiency"]["91x64"]) == {"4"}
     assert abs(gate["efficiency"]["91x64"]["4"] - 9.7 / (4 * 2.7)) < 1e-12
     assert "91x64: no 2-node run at 1e8 rows" in gate["reasons"]
+
+
+class FakeAffinity:
+    """sched_getaffinity / sched_setaffinity of one thread; ``allowed`` is the cgroup."""
+
+    def __init__(self, now, allowed):
+        self.now, self.allowed, self.calls = set(now), set(allowed), []
+
+    def get(self, pid):
+        assert pid == 0
+        return set(self.now)
+
+    def put(self, pid, cpus):
+        self.calls.append(set(cpus))
+        if not set(cpus) <= self.allowed:
+            raise OSError(22, "Invalid argument")
+        self.now = set(cpus)
+
+
+def test_restore_affinity_gives_back_the_saved_set(capsys):
+    # Job 8444: 32 CPUs before MPI_Init, CPU 0 after; the cgroup still allows all 32.
+    fake = FakeAffinity({0}, range(32))
+    rec = scale_out.restore_affinity(frozenset(range(32)), 1, get=fake.get, put=fake.put)
+    assert rec == dict(before=32, after_init=1, cpus_after_init=[0], after_restore=32)
+    assert fake.now == set(range(32)) and fake.calls == [set(range(32))]
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "rank 1 on" in err and "from 32 to 1 CPUs [0]; restored to 32" in err
+
+
+def test_restore_affinity_does_nothing_if_the_set_did_not_shrink(capsys):
+    for now in (range(32), range(16)):  # unchanged; or a half-node rank whose saved set was 16
+        fake = FakeAffinity(now, range(32))
+        assert scale_out.restore_affinity(frozenset(now), 0, get=fake.get, put=fake.put) is None
+        assert fake.calls == []
+    assert scale_out.restore_affinity(None, 0, get=fake.get, put=fake.put) is None
+    assert capsys.readouterr().err == ""
+
+
+def test_restore_affinity_records_a_refused_set_and_affinity_check_then_fails(monkeypatch):
+    fake = FakeAffinity({0}, {0})  # a cgroup that no longer allows the saved CPUs
+    rec = scale_out.restore_affinity(frozenset(range(32)), 0, get=fake.get, put=fake.put)
+    assert rec["after_restore"] == 1 and rec["error"].startswith("OSError")
+    monkeypatch.setattr(scale_out.os, "sched_getaffinity", fake.get, raising=False)
+    with pytest.raises(RuntimeError, match="after MPI_Init and the restore"):
+        scale_out.affinity_check(32, 0)
+
+
+def test_summary_marks_restored_runs_and_keeps_healthy_numbers(tmp_path):
+    _run(tmp_path, "91x64-n1e8-nodes1", 1, 1, 32, 2.7e6)
+    _run(tmp_path, "91x64-n1e8-nodes2", 2, 2, 32, 5.3e6,
+         restored=dict(before=32, after_init=1, after_restore=32, cpus_after_init=[0]))
+    assert summarize.main(["--out", str(tmp_path / "summary"), str(tmp_path)]) == 0
+    md = (tmp_path / "summary" / "summary.md").read_text()
+    assert "| 1 x 32 | 32 |" in md
+    assert "| 2 x 32 | 32 (restored) |" in md
+    gate = json.loads((tmp_path / "summary" / "gate.json").read_text())
+    assert abs(gate["efficiency"]["91x64"]["2"] - 5.3 / (2 * 2.7)) < 1e-12
+
+
+def _bash(script, *args):
+    import subprocess
+
+    return subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; {script}', *args], capture_output=True, text=True)
+
+
+def test_launch_cmd_turns_psm_affinity_off_and_keeps_the_slurm_binding():
+    out = _bash('LAUNCH=srun-pmix; launch_cmd 2 1 32 none; printf "%s\\n" "${CMD[@]}"')
+    assert out.returncode == 0, out.stderr
+    cmd = out.stdout.splitlines()
+    srun = cmd.index("srun")
+    assert cmd[0] == "env"
+    assert {"HFI_NO_CPUAFFINITY=1", "PSM3_NO_CPUAFFINITY=1", "IPATH_NO_CPUAFFINITY=1"} <= set(cmd[:srun])
+    assert not any("binding_policy" in x for x in cmd)
+    assert cmd[srun + 1:] == ["--mpi=pmix", "--nodes=2", "--ntasks=2", "--ntasks-per-node=1", "--cpus-per-task=32",
+                              "--distribution=block:block", "--cpu-bind=verbose,cores"]
+    out = _bash('LAUNCH=mpirun; MPIRUN=mpirun; NODES=(h1 h2); launch_cmd 2 1 32 none; printf "%s\\n" "${CMD[@]}"')
+    assert out.returncode == 0, out.stderr
+    cmd = out.stdout.splitlines()
+    assert "HFI_NO_CPUAFFINITY=1" in cmd[:cmd.index("mpirun")]
+    for v in ("HFI_NO_CPUAFFINITY", "PSM3_NO_CPUAFFINITY", "IPATH_NO_CPUAFFINITY"):
+        assert cmd[cmd.index(v) - 1] == "-x"
+
+
+def test_affinity_report_warns_but_passes_when_the_restore_fired(tmp_path):
+    a = "AFFINITY rank={r} size=2 host=gp-n001{r} before_init=32 after_init={a} restored={x}\n"
+    f = tmp_path / "affinity-nodes2.txt"
+    f.write_text(a.format(r=0, a=32, x=0) + a.format(r=1, a=32, x=0))
+    out = _bash('affinity_report nodes2 "$0" 2 32', str(f))
+    assert out.returncode == 0 and "WARNING" not in out.stdout + out.stderr
+    assert out.stdout.strip() == "affinity pre-flight nodes2: 2 rank(s), each >= 32 CPUs after MPI_Init"
+    f.write_text(a.format(r=0, a=1, x=32) + a.format(r=1, a=32, x=0))
+    out = _bash('affinity_report nodes2 "$0" 2 32', str(f))
+    assert out.returncode == 0
+    warn = [x for x in out.stdout.splitlines() if x.startswith("WARNING")]
+    assert len(warn) == 1 and "on 1 rank(s)" in warn[0] and "HFI_NO_CPUAFFINITY=1" in warn[0]
+    f.write_text(a.format(r=0, a=1, x=1) + a.format(r=1, a=32, x=0))
+    out = _bash('affinity_report nodes2 "$0" 2 32', str(f))
+    assert out.returncode == 1 and "FAILED" in out.stderr
+
+
+def _verdict(tmp_path, text, nr, cpus):
+    import subprocess
+
+    f = tmp_path / "affinity.txt"
+    f.write_text(text)
+    out = subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; affinity_verdict "$0" "$1" "$2"', str(f), str(nr),
+                          str(cpus)], capture_output=True, text=True, check=True).stdout
+    lines = out.splitlines()
+    assert lines[-1].startswith("RESTORED ")
+    return lines[:-1], int(lines[-1].split()[1])
+
+
+def test_preflight_verdict_accepts_restored_ranks_and_flags_short_ones(tmp_path):
+    a = "AFFINITY rank={r} size=2 host=gp-n001{r} before_init=32 after_init={a} restored={x}\n"
+    srun_noise = "cpu-bind=MASK - gp-n0015, task  0  0 [2245488]: mask 0xffffffff set\n"
+    # 8444 with the workaround: both ranks dropped to 1 CPU and got 32 back.
+    assert _verdict(tmp_path, srun_noise + a.format(r=0, a=1, x=32) + a.format(r=1, a=1, x=32), 2, 32) == ([], 2)
+    # Nothing to restore.
+    assert _verdict(tmp_path, a.format(r=0, a=32, x=0) + a.format(r=1, a=32, x=0), 2, 32) == ([], 0)
+    # The restore fired but came back short; a missing rank.
+    bad, fired = _verdict(tmp_path, a.format(r=0, a=1, x=1) + a.format(r=1, a=32, x=0), 2, 32)
+    assert bad == ["rank 0 on gp-n0010: 1 CPUs after MPI_Init and the restore (32 before), needs 32"] and fired == 1
+    bad, _ = _verdict(tmp_path, a.format(r=0, a=32, x=0), 2, 32)
+    assert bad == ["1 of 2 ranks reported"]
+    # Old lines without restored= (kit 0f41635) still parse.
+    old = "AFFINITY rank=0 size=1 host=h before_init=32 after_init=1\n"
+    assert _verdict(tmp_path, old, 1, 32) == (["rank 0 on h: 1 CPUs after MPI_Init (32 before), needs 32"], 0)
