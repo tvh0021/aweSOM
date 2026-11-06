@@ -231,11 +231,12 @@ def source_info() -> dict:
 def restore_affinity(saved, rank: int, get=None, put=None):
     """Give this thread back the CPU set ``saved`` if MPI_Init shrank it; None if it did not.
 
-    Jobs 8413 and 8444 (srun --mpi=pmix, 1 rank x 32 CPUs per node): Slurm bound each rank
-    to all 32 CPUs, and the CPU set was 1 CPU right after ``from mpi4py import MPI``, even
-    with OMPI_MCA_hwloc_base_binding_policy=none. The cause is still open (affinity-round2.md);
-    this restore is the guard. The Slurm cgroup still allows every allocated CPU, so setting
-    the saved set back works. affinity_check verifies the result on every rank.
+    Jobs 8413 and 8444 (srun --mpi=pmix, 1 rank x 32 CPUs per node): each rank held 1 CPU
+    right after ``from mpi4py import MPI``. Job 8448 found the caller: libpsm2's hfi_userinit
+    (Omni-Path, reached through Open MPI's btl ofi and libfabric psmx2) pins a process whose
+    mask is the whole node. launch_cmd in common.sh now sets HFI_NO_CPUAFFINITY=1, so this
+    restore should not fire; it stays as the guard. The Slurm cgroup still allows every
+    allocated CPU, so setting the saved set back works. affinity_check verifies the result on every rank.
     Call it right after MPI init and before ``numba.set_num_threads``, which starts numba's
     workers (they inherit this thread's CPU set when they are created; numba starts them
     lazily, at set_num_threads or the first parallel call). Threads MPI started inside

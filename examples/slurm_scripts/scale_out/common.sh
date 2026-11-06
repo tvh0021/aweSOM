@@ -167,28 +167,32 @@ hostlist() {  # first $1 nodes, $2 slots each: h1:2,h2:2
 # launch (environment + launcher + flags) that run_one and affinity_preflight both use.
 # srun: Slurm binds each rank to its --cpus-per-task cores (--cpu-bind=verbose,cores, ranks
 # packed block:block, so 2 ranks x 16 on a node land one per socket).
-# Jobs 8413 and 8444 (2 and 4 nodes, 1 rank x 32 CPUs per node, srun --mpi=pmix): Slurm set
-# mask 0xffffffff, the whole node, and each rank held 1 CPU right after MPI_Init. 8444 had
-# OMPI_MCA_hwloc_base_binding_policy=none in the environment and still lost the CPUs, so
-# that setting is not the fix; the cause is still open (affinity-round2.md, bind_probe.sbatch).
-# The guard is the restore: scale_out.py and the pre-flight save the CPU set before MPI_Init
-# and set it back afterwards if it shrank. The MCA setting and the Slurm flags stay (harmless).
-# 2 ranks x 16 on one node (half-node masks, job 8409) were never affected.
+# NO_AFFINITY: GP nodes have Intel Omni-Path (hfi1_0). In MPI_Init, Open MPI's btl ofi opens
+# libfabric's psmx2 provider, and libpsm2's hfi_userinit pins a process whose mask is the
+# whole node to one CPU (jobs 8413, 8444: 32 -> 1). Half-node masks (2 ranks x 16) are left
+# alone. HFI_NO_CPUAFFINITY=1 turns this off; the PSM3/IPATH names cover the other PSM
+# libraries. Evidence: job 8448 (bind_probe.sbatch), whose strace names libpsm2 as the
+# caller of sched_setaffinity(0, [0]), and whose cases with Open MPI's binding policy set
+# lose the CPU all the same, so that policy is irrelevant (affinity-round2.md).
+# --mpi=pmi2 and pml ucx abort in MPI_Init on GP. The 1-rank path of run_one (plain srun, no
+# MPI) is not affected. The restore in scale_out.py and the pre-flight stay as the guard.
 # BIND (socket or none) only changes mpirun's --map-by. mpirun binds each rank to
 # CPUS_PER_RANK cores itself (--map-by ...:pe=N --bind-to core).
+NO_AFFINITY=(HFI_NO_CPUAFFINITY=1 PSM3_NO_CPUAFFINITY=1 IPATH_NO_CPUAFFINITY=1)
 launch_cmd() {
   local nn=$1 rpn=$2 cpus=$3 bind=$4 nr=$(($1 * $2)) mb="ppr:$2:node:pe=$3"
   [ "$bind" = socket ] && mb="ppr:1:package:pe=$cpus"
   case $LAUNCH in
-    srun-*) CMD=(env NUMBA_NUM_THREADS="$cpus" OMPI_MCA_hwloc_base_binding_policy=none
+    srun-*) CMD=(env NUMBA_NUM_THREADS="$cpus" "${NO_AFFINITY[@]}"
                  srun --mpi="${LAUNCH#srun-}" --nodes="$nn" --ntasks="$nr" --ntasks-per-node="$rpn"
                  --cpus-per-task="$cpus" --distribution=block:block --cpu-bind=verbose,cores);;
-    mpirun) CMD=(env NUMBA_NUM_THREADS="$cpus"
+    mpirun) CMD=(env NUMBA_NUM_THREADS="$cpus" "${NO_AFFINITY[@]}"
                  "$MPIRUN" -np "$nr" --host "$(hostlist "$nn" "$rpn")" --map-by "$mb" --bind-to core
                  --report-bindings -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x NUMBA_NUM_THREADS
                  -x OMP_NUM_THREADS -x OPENBLAS_NUM_THREADS -x MKL_NUM_THREADS -x SCALE_CACHE_ROOT
                  -x HDF5_USE_FILE_LOCKING -x PYTHONUNBUFFERED -x PYTHONDONTWRITEBYTECODE -x TMPDIR
-                 -x MPLCONFIGDIR ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI});;
+                 -x MPLCONFIGDIR -x HFI_NO_CPUAFFINITY -x PSM3_NO_CPUAFFINITY -x IPATH_NO_CPUAFFINITY
+                 ${MPI4PY_LIBMPI:+-x MPI4PY_LIBMPI});;
     *) echo "launch_cmd: no launcher (LAUNCH=$LAUNCH)" >&2; return 2;;
   esac
 }
@@ -226,23 +230,35 @@ affinity_verdict() {
     END { if (n != nr) printf "%d of %d ranks reported\n", n, nr; printf "RESTORED %d\n", fired + 0 }' "$1"
 }
 
+# affinity_report CASE FILE NRANKS CPUS: the pre-flight's verdict on FILE. Fails (stderr) if a
+# rank is missing or short even after the restore. With NO_AFFINITY in launch_cmd the restore
+# should never fire; if it did, print a WARNING line (the run goes on) so that a change in
+# PSM or the MPI stack that pins ranks again shows up in the job log.
+affinity_report() {
+  local case=$1 f=$2 nr=$3 cpus=$4 verdict bad fired
+  verdict=$(affinity_verdict "$f" "$nr" "$cpus")
+  fired=$(echo "$verdict" | sed -n 's/^RESTORED //p')
+  bad=$(echo "$verdict" | grep -v '^RESTORED ' || true)
+  if [ -n "$bad" ]; then
+    { echo "affinity pre-flight $case FAILED ($f):"; echo "$bad"; } >&2
+    return 1
+  fi
+  echo "affinity pre-flight $case: $nr rank(s), each >= $cpus CPUs after MPI_Init"
+  if [ "${fired:-0}" -gt 0 ]; then
+    echo "WARNING: affinity pre-flight $case: MPI_Init shrank the CPU set on $fired rank(s) despite" \
+         "${NO_AFFINITY[*]}; the restore gave the CPUs back ($f)"
+  fi
+}
+
 # affinity_preflight CASE NNODES RANKS_PER_NODE CPUS_PER_RANK BIND: start the launch of
 # run_one (same CMD) with a few lines of python. Each rank writes its host and CPU count
 # before and after MPI_Init, restores the saved CPU set if MPI_Init shrank it (as
 # scale_out.py does), and writes restored=<CPUs after the restore> (0: not needed) to
-# $OUT/probe/affinity-CASE.txt. Fails, in seconds, if a rank is missing or holds fewer than
-# CPUS_PER_RANK CPUs even after the restore; scale_out.py would run 10x slow. The first
-# call also records where Open MPI's binding policy comes from.
+# $OUT/probe/affinity-CASE.txt. affinity_report then fails, in seconds, if a rank is missing
+# or holds fewer than CPUS_PER_RANK CPUs even after the restore (scale_out.py would run 10x
+# slow), and warns if the restore had to fire.
 affinity_preflight() {
-  local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt" verdict bad fired
-  local nr=$((nn * rpn))
-  if [ ! -e "$OUT/probe/ompi-binding.txt" ]; then
-    { echo "== OMPI_MCA_* in the batch environment"; env | grep '^OMPI_MCA_' || echo none
-      echo "== ompi_info binding_policy"; ompi_info --param hwloc base --level 9 2>&1 | grep -i binding_policy
-      local conf; conf=$(dirname "$(dirname "$(command -v ompi_info 2>/dev/null || echo /x/x/x)")")/etc/openmpi-mca-params.conf
-      echo "== $conf (non-comment lines)"; grep -v '^[[:space:]]*\(#\|$\)' "$conf" 2>&1
-    } > "$OUT/probe/ompi-binding.txt" 2>&1 || true
-  fi
+  local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt"
   launch_cmd "$nn" "$rpn" "$cpus" "$bind" || return 2
   timeout 120 "${CMD[@]}" $PY -c '
 import os, socket
@@ -257,14 +273,7 @@ if after < len(saved):
 print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={socket.gethostname()} "
       f"before_init={len(saved)} after_init={after} restored={restored}", flush=True)
 ' > "$f" 2>&1 || true
-  verdict=$(affinity_verdict "$f" "$nr" "$cpus")
-  fired=$(echo "$verdict" | sed -n 's/^RESTORED //p')
-  bad=$(echo "$verdict" | grep -v '^RESTORED ' || true)
-  if [ -n "$bad" ]; then
-    { echo "affinity pre-flight $case FAILED ($f):"; echo "$bad"; } >&2
-    return 1
-  fi
-  echo "affinity pre-flight $case: $nr rank(s), each >= $cpus CPUs after MPI_Init; restore fired on ${fired:-0} rank(s)"
+  affinity_report "$case" "$f" $((nn * rpn)) "$cpus"
 }
 
 r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }

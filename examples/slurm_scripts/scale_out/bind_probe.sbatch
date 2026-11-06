@@ -17,9 +17,11 @@
 # The 8413/8444 condition is a task mask that covers the whole node. On lm-n0001 (debug, 48
 # CPUs) a 32-CPU task covers 2/3 of it, so the job prints a warning; to reproduce the
 # condition submit with --partition=gp-default (32 CPUs = one whole gp node).
-# Cases: A launch_cmd as run_one uses it (pmix, --cpu-bind=verbose,cores, MCA policy none);
+# Job 8448 answered it: libpsm2 (Omni-Path) pins the rank in MPI_Init; J is the fix, now in
+# launch_cmd (NO_AFFINITY). base() takes NO_AFFINITY out again so that A still shows the loss.
+# Cases: A launch_cmd without NO_AFFINITY (pmix, --cpu-bind=verbose,cores);
 # B A + ess/hwloc/pmix/pml/mtl verbose; C --mpi=pmi2; D --cpu-bind=verbose,none;
-# E A + OMPI_MCA_orte_bound_at_launch=1; F A with policy core; G 2 ranks x half the CPUs;
+# E A + OMPI_MCA_orte_bound_at_launch=1; F A + MCA binding policy core; G 2 ranks x half the CPUs;
 # H A + the restore of scale_out.py; I env and mask of the task without MPI;
 # J A + HFI/PSM3/IPATH_NO_CPUAFFINITY=1; K A with pml ob1 + btl self,vader,tcp (no fabric
 # library); L A with pml ucx + btl self,vader; M A under strace (sched_setaffinity callers).
@@ -63,8 +65,8 @@ run_case() {
   printf 'CASE %s rc=%s %s | %s\n' "$name" "$rc" "${s:-no BIND line}" "$desc"
 }
 
-# Edit CMD (from launch_cmd): add VAR=VAL just before srun (they override launch_cmd's), or
-# replace one element.
+# Edit CMD (from launch_cmd): add VAR=VAL just before srun (they override launch_cmd's),
+# replace one element, or drop the elements equal to any argument.
 cmd_env() {
   local out=() x put=no
   for x in "${CMD[@]}"; do
@@ -77,9 +79,15 @@ cmd_sub() {
   local i
   for i in "${!CMD[@]}"; do [ "${CMD[$i]}" = "$1" ] && CMD[$i]=$2; done
 }
-base() { LAUNCH=${1:-srun-pmix}; launch_cmd 1 1 "$C" none; }
+cmd_drop() {
+  local out=() x y keep
+  for x in "${CMD[@]}"; do keep=yes; for y in "$@"; do [ "$x" = "$y" ] && keep=no; done
+    [ "$keep" = yes ] && out+=("$x"); done
+  CMD=("${out[@]}")
+}
+base() { LAUNCH=${1:-srun-pmix}; launch_cmd 1 1 "$C" none; cmd_drop "${NO_AFFINITY[@]}"; }
 
-base; run_case A "launch_cmd: pmix, cpu-bind cores, policy none" -- "${CMD[@]}" $PY "$BP" --case A
+base; run_case A "launch_cmd without NO_AFFINITY: pmix, cpu-bind cores" -- "${CMD[@]}" $PY "$BP" --case A
 
 base; cmd_env OMPI_MCA_ess_base_verbose=10 OMPI_MCA_hwloc_base_verbose=10 OMPI_MCA_pmix_base_verbose=10 \
   OMPI_MCA_pml_base_verbose=10 OMPI_MCA_mtl_base_verbose=10
@@ -95,10 +103,10 @@ run_case D "A with --cpu-bind=verbose,none" -- "${CMD[@]}" $PY "$BP" --case D
 base; cmd_env OMPI_MCA_orte_bound_at_launch=1
 run_case E "A + OMPI_MCA_orte_bound_at_launch=1" -- "${CMD[@]}" $PY "$BP" --case E
 
-base; cmd_sub OMPI_MCA_hwloc_base_binding_policy=none OMPI_MCA_hwloc_base_binding_policy=core
-run_case F "A with OMPI_MCA_hwloc_base_binding_policy=core" -- "${CMD[@]}" $PY "$BP" --case F
+base; cmd_env OMPI_MCA_hwloc_base_binding_policy=core
+run_case F "A + OMPI_MCA_hwloc_base_binding_policy=core" -- "${CMD[@]}" $PY "$BP" --case F
 
-LAUNCH=srun-pmix; launch_cmd 1 2 $((C / 2)) none
+LAUNCH=srun-pmix; launch_cmd 1 2 $((C / 2)) none; cmd_drop "${NO_AFFINITY[@]}"
 run_case G "2 ranks x $((C / 2)) CPUs, one node (8409 shape)" -- "${CMD[@]}" $PY "$BP" --case G
 
 base; run_case H "A + restore of the saved CPU set (the workaround)" -- "${CMD[@]}" $PY "$BP" --case H --restore
@@ -108,8 +116,8 @@ base; run_case I "A's srun, no MPI: env, mask, python" -- "${CMD[@]}" bash -c \
    env | grep "^OMPI_MCA_hwloc_base_binding_policy="; grep Cpus_allowed_list /proc/self/status; taskset -p $$
    "$0" "$1" --case I --no-mpi' "$PY" "$BP"
 
-base; cmd_env HFI_NO_CPUAFFINITY=1 PSM3_NO_CPUAFFINITY=1 IPATH_NO_CPUAFFINITY=1
-run_case J "A + HFI/PSM3/IPATH_NO_CPUAFFINITY=1 (PSM affinity off)" -- "${CMD[@]}" $PY "$BP" --case J
+base; cmd_env "${NO_AFFINITY[@]}"
+run_case J "A + HFI/PSM3/IPATH_NO_CPUAFFINITY=1 (launch_cmd as run_one uses it)" -- "${CMD[@]}" $PY "$BP" --case J
 
 base; cmd_env OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp
 run_case K "A with pml ob1, btl self,vader,tcp (no fabric library)" -- "${CMD[@]}" $PY "$BP" --case K

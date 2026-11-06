@@ -9,6 +9,8 @@ per-core speed; it is arithmetic, not a measurement.
 
 A run in which some rank held fewer CPUs than threads (``affinity`` in ``per_rank``; job
 8413) is marked UNDER-PINNED and left out of every efficiency, the projection and the gate.
+A run in which scale_out.py restored a rank's CPU set after MPI_Init (``affinity_restored``)
+shows e.g. "32 (restored)" in the min CPUs column.
 Run directories with ``progress.log`` but no ``run.json`` (killed mid-run) are listed as
 unfinished; the summary covers the finished runs, so it also works on a job killed mid-sweep.
 
@@ -54,6 +56,11 @@ def min_cpus(r):
     """Fewest CPUs any rank of run ``r`` was bound to, or None if not recorded."""
     counts = [len(x["affinity"]) for x in r.get("per_rank", []) if x.get("affinity")]
     return min(counts) if counts else None
+
+
+def restored(r):
+    """True if scale_out.py had to restore the CPU set after MPI_Init on some rank."""
+    return any(x.get("affinity_restored") for x in r.get("per_rank", []))
 
 
 def under_pinned(r):
@@ -134,6 +141,8 @@ def main(argv=None):
         per_thread = rate / r["total_threads"]
         teff = neff = None
         pinned = "" if min_cpus(r) is None else str(min_cpus(r))
+        if pinned and restored(r):
+            pinned += " (restored)"
         if under_pinned(r):
             pinned += " UNDER-PINNED"
         elif r["ranks"] == 1 and k in fewest:
