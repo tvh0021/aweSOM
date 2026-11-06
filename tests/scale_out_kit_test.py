@@ -116,3 +116,77 @@ def test_summary_excludes_under_pinned_runs_and_lists_unfinished(tmp_path):
     assert set(gate["efficiency"]["91x64"]) == {"4"}
     assert abs(gate["efficiency"]["91x64"]["4"] - 9.7 / (4 * 2.7)) < 1e-12
     assert "91x64: no 2-node run at 1e8 rows" in gate["reasons"]
+
+
+class FakeAffinity:
+    """sched_getaffinity / sched_setaffinity of one thread; ``allowed`` is the cgroup."""
+
+    def __init__(self, now, allowed):
+        self.now, self.allowed, self.calls = set(now), set(allowed), []
+
+    def get(self, pid):
+        assert pid == 0
+        return set(self.now)
+
+    def put(self, pid, cpus):
+        self.calls.append(set(cpus))
+        if not set(cpus) <= self.allowed:
+            raise OSError(22, "Invalid argument")
+        self.now = set(cpus)
+
+
+def test_restore_affinity_gives_back_the_saved_set(capsys):
+    # Job 8444: 32 CPUs before MPI_Init, CPU 0 after; the cgroup still allows all 32.
+    fake = FakeAffinity({0}, range(32))
+    rec = scale_out.restore_affinity(frozenset(range(32)), 1, get=fake.get, put=fake.put)
+    assert rec == dict(before=32, after_init=1, cpus_after_init=[0], after_restore=32)
+    assert fake.now == set(range(32)) and fake.calls == [set(range(32))]
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "rank 1 on" in err and "from 32 to 1 CPUs [0]; restored to 32" in err
+
+
+def test_restore_affinity_does_nothing_if_the_set_did_not_shrink(capsys):
+    for now in (range(32), range(16)):  # unchanged; or a half-node rank whose saved set was 16
+        fake = FakeAffinity(now, range(32))
+        assert scale_out.restore_affinity(frozenset(now), 0, get=fake.get, put=fake.put) is None
+        assert fake.calls == []
+    assert scale_out.restore_affinity(None, 0, get=fake.get, put=fake.put) is None
+    assert capsys.readouterr().err == ""
+
+
+def test_restore_affinity_records_a_refused_set_and_affinity_check_then_fails(monkeypatch):
+    fake = FakeAffinity({0}, {0})  # a cgroup that no longer allows the saved CPUs
+    rec = scale_out.restore_affinity(frozenset(range(32)), 0, get=fake.get, put=fake.put)
+    assert rec["after_restore"] == 1 and rec["error"].startswith("OSError")
+    monkeypatch.setattr(scale_out.os, "sched_getaffinity", fake.get, raising=False)
+    with pytest.raises(RuntimeError, match="after MPI_Init and the restore"):
+        scale_out.affinity_check(32, 0)
+
+
+def _verdict(tmp_path, text, nr, cpus):
+    import subprocess
+
+    f = tmp_path / "affinity.txt"
+    f.write_text(text)
+    out = subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; affinity_verdict "$0" "$1" "$2"', str(f), str(nr),
+                          str(cpus)], capture_output=True, text=True, check=True).stdout
+    lines = out.splitlines()
+    assert lines[-1].startswith("RESTORED ")
+    return lines[:-1], int(lines[-1].split()[1])
+
+
+def test_preflight_verdict_accepts_restored_ranks_and_flags_short_ones(tmp_path):
+    a = "AFFINITY rank={r} size=2 host=gp-n001{r} before_init=32 after_init={a} restored={x}\n"
+    srun_noise = "cpu-bind=MASK - gp-n0015, task  0  0 [2245488]: mask 0xffffffff set\n"
+    # 8444 with the workaround: both ranks dropped to 1 CPU and got 32 back.
+    assert _verdict(tmp_path, srun_noise + a.format(r=0, a=1, x=32) + a.format(r=1, a=1, x=32), 2, 32) == ([], 2)
+    # Nothing to restore.
+    assert _verdict(tmp_path, a.format(r=0, a=32, x=0) + a.format(r=1, a=32, x=0), 2, 32) == ([], 0)
+    # The restore fired but came back short; a missing rank.
+    bad, fired = _verdict(tmp_path, a.format(r=0, a=1, x=1) + a.format(r=1, a=32, x=0), 2, 32)
+    assert bad == ["rank 0 on gp-n0010: 1 CPUs after MPI_Init and the restore (32 before), needs 32"] and fired == 1
+    bad, _ = _verdict(tmp_path, a.format(r=0, a=32, x=0), 2, 32)
+    assert bad == ["1 of 2 ranks reported"]
+    # Old lines without restored= (kit 0f41635) still parse.
+    old = "AFFINITY rank=0 size=1 host=h before_init=32 after_init=1\n"
+    assert _verdict(tmp_path, old, 1, 32) == (["rank 0 on h: 1 CPUs after MPI_Init (32 before), needs 32"], 0)

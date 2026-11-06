@@ -165,16 +165,17 @@ hostlist() {  # first $1 nodes, $2 slots each: h1:2,h2:2
 
 # launch_cmd NNODES RANKS_PER_NODE CPUS_PER_RANK BIND: set the array CMD to the multi-rank
 # launch (environment + launcher + flags) that run_one and affinity_preflight both use.
-# srun: Slurm binds each rank to its --cpus-per-task cores (--cpu-bind=cores, ranks packed
-# block:block, so 2 ranks x 16 on a node land one per socket), and
-# OMPI_MCA_hwloc_base_binding_policy=none stops Open MPI from rebinding the rank in MPI_Init.
-# Job 8413 (2 and 4 nodes, 1 rank x 32 CPUs per node, srun --mpi=pmix): Slurm applied
-# mask 0xFFFFFFFF, the whole node, and Open MPI 4.1.6 then rebound every rank to core 0,
-# because a rank whose mask equals the node counts as "not bound at launch"
-# (orte/mca/ess/base/ess_base_fns.c). --cpu-bind=cores alone gives the same full mask, so the
-# MCA setting is the part that fixes it. BIND (socket or none) only changes mpirun's --map-by.
-# mpirun binds each rank to CPUS_PER_RANK cores itself (--map-by ...:pe=N --bind-to core)
-# and marks the ranks bound at launch, so Open MPI leaves them alone.
+# srun: Slurm binds each rank to its --cpus-per-task cores (--cpu-bind=verbose,cores, ranks
+# packed block:block, so 2 ranks x 16 on a node land one per socket).
+# Jobs 8413 and 8444 (2 and 4 nodes, 1 rank x 32 CPUs per node, srun --mpi=pmix): Slurm set
+# mask 0xffffffff, the whole node, and each rank held 1 CPU right after MPI_Init. 8444 had
+# OMPI_MCA_hwloc_base_binding_policy=none in the environment and still lost the CPUs, so
+# that setting is not the fix; the cause is still open (affinity-round2.md, bind_probe.sbatch).
+# The guard is the restore: scale_out.py and the pre-flight save the CPU set before MPI_Init
+# and set it back afterwards if it shrank. The MCA setting and the Slurm flags stay (harmless).
+# 2 ranks x 16 on one node (half-node masks, job 8409) were never affected.
+# BIND (socket or none) only changes mpirun's --map-by. mpirun binds each rank to
+# CPUS_PER_RANK cores itself (--map-by ...:pe=N --bind-to core).
 launch_cmd() {
   local nn=$1 rpn=$2 cpus=$3 bind=$4 nr=$(($1 * $2)) mb="ppr:$2:node:pe=$3"
   [ "$bind" = socket ] && mb="ppr:1:package:pe=$cpus"
@@ -209,13 +210,31 @@ run_one() {
   "${CMD[@]}" $PY -m mpi4py "$KIT/scale_out.py" --mpi --out "$dir" --threads "$cpus" "$@" > "$log" 2>&1
 }
 
+# affinity_verdict FILE NRANKS CPUS: read the AFFINITY lines of a pre-flight; print one line
+# per problem (nothing if every rank is fine). A rank is fine if it holds >= CPUS CPUs after
+# MPI_Init, or after the restore when the restore fired (restored=<CPUs after the restore>;
+# restored=0 or absent: the set did not shrink). The last line, "RESTORED n", counts the
+# ranks where the restore fired.
+affinity_verdict() {
+  awk -v nr="$2" -v cpus="$3" '
+    /^AFFINITY / { n++; delete v; for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                   got = v["after_init"] + 0
+                   if (v["restored"] + 0 > 0) { got = v["restored"] + 0; fired++ }
+                   if (got < cpus) printf "rank %s on %s: %d CPUs after MPI_Init%s (%s before), needs %d\n",
+                                          v["rank"], v["host"], got, (v["restored"] + 0 > 0 ? " and the restore" : ""),
+                                          v["before_init"], cpus }
+    END { if (n != nr) printf "%d of %d ranks reported\n", n, nr; printf "RESTORED %d\n", fired + 0 }' "$1"
+}
+
 # affinity_preflight CASE NNODES RANKS_PER_NODE CPUS_PER_RANK BIND: start the launch of
 # run_one (same CMD) with a few lines of python. Each rank writes its host and CPU count
-# before and after MPI_Init to $OUT/probe/affinity-CASE.txt. Fails, in seconds, if a rank is
-# missing or holds fewer than CPUS_PER_RANK CPUs after MPI_Init; scale_out.py would run 10x
-# slow. The first call also records where Open MPI's binding policy comes from.
+# before and after MPI_Init, restores the saved CPU set if MPI_Init shrank it (as
+# scale_out.py does), and writes restored=<CPUs after the restore> (0: not needed) to
+# $OUT/probe/affinity-CASE.txt. Fails, in seconds, if a rank is missing or holds fewer than
+# CPUS_PER_RANK CPUs even after the restore; scale_out.py would run 10x slow. The first
+# call also records where Open MPI's binding policy comes from.
 affinity_preflight() {
-  local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt" bad
+  local case=$1 nn=$2 rpn=$3 cpus=$4 bind=$5 f="$OUT/probe/affinity-$1.txt" verdict bad fired
   local nr=$((nn * rpn))
   if [ ! -e "$OUT/probe/ompi-binding.txt" ]; then
     { echo "== OMPI_MCA_* in the batch environment"; env | grep '^OMPI_MCA_' || echo none
@@ -227,22 +246,25 @@ affinity_preflight() {
   launch_cmd "$nn" "$rpn" "$cpus" "$bind" || return 2
   timeout 120 "${CMD[@]}" $PY -c '
 import os, socket
-before = len(os.sched_getaffinity(0))
+saved = os.sched_getaffinity(0)
 from mpi4py import MPI
 c = MPI.COMM_WORLD
+after = len(os.sched_getaffinity(0))
+restored = 0
+if after < len(saved):
+    os.sched_setaffinity(0, saved)
+    restored = len(os.sched_getaffinity(0))
 print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={socket.gethostname()} "
-      f"before_init={before} after_init={len(os.sched_getaffinity(0))}", flush=True)
+      f"before_init={len(saved)} after_init={after} restored={restored}", flush=True)
 ' > "$f" 2>&1 || true
-  bad=$(awk -v nr="$nr" -v cpus="$cpus" '
-    /^AFFINITY / { n++; for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
-                   if (v["after_init"] + 0 < cpus) printf "rank %s on %s: %s CPUs after MPI_Init (%s before), needs %d\n",
-                                                          v["rank"], v["host"], v["after_init"], v["before_init"], cpus }
-    END { if (n != nr) printf "%d of %d ranks reported\n", n, nr }' "$f")
+  verdict=$(affinity_verdict "$f" "$nr" "$cpus")
+  fired=$(echo "$verdict" | sed -n 's/^RESTORED //p')
+  bad=$(echo "$verdict" | grep -v '^RESTORED ' || true)
   if [ -n "$bad" ]; then
     { echo "affinity pre-flight $case FAILED ($f):"; echo "$bad"; } >&2
     return 1
   fi
-  echo "affinity pre-flight $case: $nr rank(s), each >= $cpus CPUs after MPI_Init"
+  echo "affinity pre-flight $case: $nr rank(s), each >= $cpus CPUs after MPI_Init; restore fired on ${fired:-0} rank(s)"
 }
 
 r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }

@@ -22,6 +22,11 @@ from __future__ import annotations
 import os
 import sys
 
+# CPU set this process started with, saved before anything can initialise MPI. `python -m
+# mpi4py scale_out.py` runs this file before it imports mpi4py.MPI (mpi4py/run.py imports MPI
+# only to abort on an exception), and MPI_Init happens later, in get_comm(). See restore_affinity.
+AFFINITY_AT_START = frozenset(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
+
 
 def _launcher_rank() -> int:
     for k in ("OMPI_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK", "SLURM_PROCID"):
@@ -223,12 +228,46 @@ def source_info() -> dict:
     return info
 
 
+def restore_affinity(saved, rank: int, get=None, put=None):
+    """Give this thread back the CPU set ``saved`` if MPI_Init shrank it; None if it did not.
+
+    Jobs 8413 and 8444 (srun --mpi=pmix, 1 rank x 32 CPUs per node): Slurm bound each rank
+    to all 32 CPUs, and the CPU set was 1 CPU right after ``from mpi4py import MPI``, even
+    with OMPI_MCA_hwloc_base_binding_policy=none. The cause is still open (affinity-round2.md);
+    this restore is the guard. The Slurm cgroup still allows every allocated CPU, so setting
+    the saved set back works. affinity_check verifies the result on every rank.
+    Call it right after MPI init and before ``numba.set_num_threads``, which starts numba's
+    workers (they inherit this thread's CPU set when they are created; numba starts them
+    lazily, at set_num_threads or the first parallel call). Threads MPI started inside
+    MPI_Init keep their narrowed set. Returns {before, after_init, after_restore, cpus_after_init}
+    and writes one line to stderr when it acts; a failed set is recorded, not raised.
+    """
+    get = get or getattr(os, "sched_getaffinity", None)
+    put = put or getattr(os, "sched_setaffinity", None)
+    if saved is None or get is None or put is None:
+        return None
+    now = set(get(0))
+    if len(now) >= len(saved):
+        return None
+    rec = dict(before=len(saved), after_init=len(now), cpus_after_init=sorted(now))
+    try:
+        put(0, set(saved))
+    except OSError as e:
+        rec["error"] = f"{type(e).__name__}: {e}"
+    rec["after_restore"] = len(set(get(0)))
+    print(f"rank {rank} on {platform.node()}: CPU set shrank in MPI_Init from {rec['before']} to "
+          f"{rec['after_init']} CPUs {rec['cpus_after_init'][:8]}; restored to {rec['after_restore']}"
+          + (f" ({rec['error']})" if "error" in rec else ""), file=sys.stderr, flush=True)
+    return rec
+
+
 def affinity_check(threads: int, rank: int, comm=None) -> int:
     """CPU count of this rank. Raises on every rank if any rank holds fewer than ``threads``
     CPUs (gathered, so all ranks stop together, before any data or training).
 
-    Job 8413: Open MPI rebound every rank of a 1-rank-per-node srun to one CPU, and the
-    32 numba threads ran 10x slow on it. Skipped where ``os.sched_getaffinity`` is missing.
+    Job 8413: every rank of a 1-rank-per-node srun ended up on one CPU after MPI_Init, and
+    the 32 numba threads ran 10x slow on it. Runs after restore_affinity, so it fails only if
+    the restore did not give the CPUs back. Skipped where ``os.sched_getaffinity`` is missing.
     """
     if not hasattr(os, "sched_getaffinity"):
         return -1
@@ -236,8 +275,8 @@ def affinity_check(threads: int, rank: int, comm=None) -> int:
     every = comm.allgather(mine) if comm is not None else [mine]
     bad = [f"rank {r} on {h}: affinity {n} CPUs < {threads} threads" for r, h, n in every if n < threads]
     if bad:
-        raise RuntimeError("CPU affinity too small, refusing to run (srun needs --cpu-bind=cores and "
-                           "OMPI_MCA_hwloc_base_binding_policy=none, see README): " + "; ".join(bad))
+        raise RuntimeError("CPU affinity too small after MPI_Init and the restore, refusing to run "
+                           "(see README, cluster notes): " + "; ".join(bad))
     return mine[2]
 
 
@@ -274,6 +313,8 @@ def main(argv=None) -> int:
 
         comm = get_comm()
     rank, size = (comm.Get_rank(), comm.Get_size()) if comm is not None else (0, 1)
+    # Before numba.set_num_threads below, which starts numba's thread pool.
+    restored = restore_affinity(AFFINITY_AT_START, rank)
     affinity_check(args.threads, rank, comm)
     out = args.out
     if rank == 0:
@@ -334,7 +375,7 @@ def main(argv=None) -> int:
         raise RuntimeError("training returned invalid weights")
 
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
-    mine = dict(rank=rank, hostname=platform.node(), pid=os.getpid(), affinity=affinity,
+    mine = dict(rank=rank, hostname=platform.node(), pid=os.getpid(), affinity=affinity, affinity_restored=restored,
                 numba_threads=numba.get_num_threads(), threading_layer=numba.threading_layer(),
                 owned_chunks=len(src.owned), owned_rows=src.owned_rows, generate_seconds=src.generate_seconds,
                 init_rows_seconds=src.rows_seconds, warmup_seconds=warmup, training_wall_seconds=wall,
