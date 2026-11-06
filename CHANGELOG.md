@@ -4,6 +4,49 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-11-05
+
+This release speeds up training and adds a `history` keyword to
+`train_lattice`.
+
+**Training results are unchanged: for the same seed, data and settings,
+v1.6.0 trains bit for bit the same lattice, U-matrix, snapshots and clusters
+as v1.5.0.** Training is 6 to 9 times faster with the default `history=True`
+and 12 to 13 times faster with `history=False` (binary black hole features,
+29x20 and 51x36 lattices, 100,000 and 1,000,000 steps). `train_lattice` has a
+new `history` keyword.
+
+### Added
+
+- `history` keyword for `Lattice.train_lattice`. The default `history=True`
+  keeps the snapshots in `lattice_history` and `umat_history` every
+  `save_frequency` steps, as before. `history=False` skips them; the final
+  lattice and U-matrix are still computed.
+- Compiled numba kernels for the online training steps (`_som_schedule`,
+  `_som_train_steps`, `_som_train_steps_aos`, `_pairwise_sum`,
+  `_neighborhood_weight`, `_first_argmin`). They repeat the NumPy loop's
+  floating-point operations in the same order, so the results are bitwise
+  equal.
+- Tests: `tests/fast_som_test.py` (the kernels against a frozen copy of the
+  NumPy loop, both history settings, restarts) and
+  `test_final_umat_uses_final_lattice_without_history` in `tests/som_test.py`.
+- `BENCHMARKS.md`: training and labelling times for every release since
+  v1.1.0, with speed-ups against the previous release and against v1.1.0;
+  updated with every release.
+
+### Changed
+
+- `Lattice.fast_som` computes the learning rate and neighborhood schedule up
+  front and runs the training steps in numba between progress messages and
+  snapshots. The progress, shrink and decay messages are unchanged.
+- A `restart_lattice` is copied in C order before training, so a
+  Fortran-ordered restart array now trains exactly like a C-ordered one.
+  v1.5.0 summed features in a different order for Fortran-ordered arrays
+  with eight or more features, so such restarts can differ from v1.5.0.
+- The learning-rate schedule is computed in float64. A NumPy float32
+  `alpha_0` was decayed in float32 by v1.5.0; with a Python float, the
+  usual case, nothing changes.
+
 ## [1.5.0] - 2026-11-05
 
 This release makes training reproducible for a given seed, computes the final
@@ -315,6 +358,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/tvh0021/aweSOM/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tvh0021/aweSOM/compare/v1.2.0...v1.3.0

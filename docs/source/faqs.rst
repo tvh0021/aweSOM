@@ -50,6 +50,7 @@ in how they modify the number of clusters, so it is recommended to start with th
 Is training reproducible?
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 Since v1.5.0, ``train_lattice`` draws the initial lattice and the sample order from ``map.seed`` (42 by default; set it before training), so the same seed and data give the same lattice.
+For large runs, ``train_lattice(..., history=False)`` skips the snapshots in ``lattice_history`` and ``umat_history``; the final lattice and U-matrix are the same.
 
 How do I assign clusters to new data?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -137,7 +137,9 @@ class Lattice:
         rng = np.random.default_rng(self.seed)
 
         if self.restart_lattice is not None:
-            lattice = np.array(self.restart_lattice, dtype=np.float64, copy=True)
+            # C order: the step kernels sum features in NumPy's C-contiguous order,
+            # so a Fortran-ordered restart array trains the same as a C-ordered one
+            lattice = np.array(self.restart_lattice, dtype=np.float64, order="C", copy=True)
         else:
             if self.init == "uniform":
                 # vector with small init values for all nodes
@@ -1600,6 +1602,7 @@ def _assign_cluster_to_data_kernel(
         ]
     return cluster_id
 
+
 @njit()
 def _som_schedule(
     n_steps: int,
@@ -1776,7 +1779,8 @@ def _som_train_steps(
             for f in range(n_features):
                 xf = xk[k, f]
                 row = lt[f]
-                if any_zero:  # nodes with zero weight are skipped, as in the reference
+                if any_zero:  # zero-weight nodes are skipped; the NumPy form subtracts
+                    # diff * 0.0 there, which differs only for non-finite differences
                     for x in range(x0, x1):
                         g = wrow[x]
                         if g != 0.0:
