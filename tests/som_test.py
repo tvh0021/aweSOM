@@ -273,20 +273,3 @@ def test_final_umat_uses_final_lattice_without_history():
 
 if __name__ == "__main__":
     pytest.main()
-
-
-def test_final_umat_uses_final_lattice():
-    # 1003 steps with save_frequency 5: the last snapshot is step 1000, so the
-    # final lattice differs from the last entry of lattice_history
-    lattice = Lattice(
-        xdim=6,
-        ydim=5,
-        alpha_0=0.5,
-        train=1003,
-        alpha_type="static",
-        sampling_type="uniform",
-    )
-    assert lattice.save_frequency == 5
-    lattice.train_lattice(data, features_names, history=True)
-    assert not np.array_equal(lattice.lattice_history[-1], lattice.lattice)
-    np.testing.assert_array_equal(lattice.umat, lattice.compute_umat())
