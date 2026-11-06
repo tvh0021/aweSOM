@@ -6,11 +6,14 @@ The orchestration runs each fit in a fresh worker, as in cluster/kit/check7.py.
 Sheet-candidate selection (user-approved consensus rule, synthesis opus.md D1-D15):
 each fit records its candidates, clusters whose one-vs-rest rank effects on the
 training rows satisfy E(log_chi_B) > 0, E(log_grad_ln_b2) > 0 and E(log_beta_inv) < 0.
-After every seed of a lattice is fitted, main() selects once for the group: the
-first candidates (largest E(log_chi_B)) are selected sheet clusters when they are
-mutual best Jaccard matches for every seed pair, and the second ones join only if
-they are reproduced too. The IDs are frozen in each model as selected_sheet_clusters
-(alias sheet_clusters for older readers). A "sheet" proper needs the offline
+After every seed of a lattice is fitted, main() selects once for the group with the
+top-two rule (user-approved 2026-11-06): each seed's first two candidates (largest
+E(log_chi_B)) are eligible; the first pick is the tuple, one eligible candidate per
+seed, that is mutual best by Jaccard for every seed pair and has the largest minimum
+E(log_chi_B); the unused eligible candidates join as a second pick only if they are
+mutual best too. The audit also records what the previous first-candidates-only rule
+gives. The IDs are frozen in each model as selected_sheet_clusters (alias
+sheet_clusters for older readers). A "sheet" proper needs the offline
 spatial check, which this driver does not run.
 """
 from __future__ import annotations
@@ -477,11 +480,23 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
 
 # Sheet-candidate signature (opus.md D1): the sign of each feature's rank effect, strict.
 SIGNATURE = (('log_chi_B', 1), ('log_grad_ln_b2', 1), ('log_beta_inv', -1))
-SELECTION_RULE = ('candidate: E(log_chi_B) > 0 and E(log_grad_ln_b2) > 0 and E(log_beta_inv) < 0, '
-                  'E = 2 AUC - 1 one-vs-rest on the training rows, ordered by E(log_chi_B) descending; '
+CANDIDATE_RULE = ('candidate: E(log_chi_B) > 0 and E(log_grad_ln_b2) > 0 and E(log_beta_inv) < 0, '
+                  'E = 2 AUC - 1 one-vs-rest on the training rows, ordered by E(log_chi_B) descending, '
+                  'then cluster ID; ')
+SELECTION_RULE = (CANDIDATE_RULE +
+                  'eligible: the first two candidates of each seed; first pick: among tuples of one eligible '
+                  'candidate per seed that are mutual best Jaccard matches (over all clusters) for every seed '
+                  'pair, the one with the largest minimum E(log_chi_B), the first enumerated in candidate order '
+                  'on exact ties; second pick: the unused eligible candidate of every seed, if each seed has one '
+                  'and they are mutual best for every seed pair; at most two; fewer than two seeds is '
+                  'unavailable; no magnitude thresholds')
+# The rule approved before 2026-11-06; its outcome is still recorded as approved_rule_outcome.
+PREVIOUS_SELECTION_RULE = (CANDIDATE_RULE +
                   'selected sheet cluster: the first candidate of every seed when they are mutual best '
                   'Jaccard matches for every seed pair, plus the second candidates when those are too; '
                   'at most two; fewer than two seeds is unavailable; no magnitude thresholds')
+# Not a tuning knob: the existing at-most-two picks fix how many candidates per seed are eligible.
+ELIGIBLE_PER_SEED = 2
 # The rejected median thresholds, kept only as a diagnostic label for comparison with older runs.
 LEGACY_THRESHOLDS = dict(log_chi_B_gt=1., log_beta_inv_lt=.5)
 
@@ -574,52 +589,111 @@ def mutual_best(J):
     return flags
 
 
-def select_group(orders, jaccard):
-    """Decide the selected sheet clusters once for a lattice group (opus.md D4, D6, D15).
+def mutual_pair(J, a, b):
+    """Audit entry for clusters a (rows of J) and b (columns): mutual best over all clusters."""
+    best_a, best_b = int(np.argmax(J[a])), int(np.argmax(J[:, b]))
+    return dict(clusters=[a, b], jaccard=float(J[a, b]), best_of_first=best_a, best_of_second=best_b,
+                mutual=best_a == b and best_b == a)
 
-    orders: seed -> candidate IDs by E(log_chi_B) descending.
-    jaccard: (seed_i, seed_j) -> Jaccard matrix for every pair in seed order.
-    Returns picks per seed and the audit; status is selected, none or unavailable."""
+
+def check_tuple(seeds, members, jaccard):
+    """Pairwise mutual-best check of one cluster per seed (members: seed -> cluster)."""
+    pairs = {f'{i}-{j}': mutual_pair(jaccard[(i, j)], members[i], members[j]) for i, j in jaccard}
+    return dict(reproduced=all(p['mutual'] for p in pairs.values()),
+                candidates={s: members[s] for s in seeds}, pairs=pairs)
+
+
+def approved_rule_outcome(orders, jaccard):
+    """The previous rule (first candidates only), kept for the audit; picks and outcome."""
     seeds = list(orders)
     picks = {s: [] for s in seeds}
-    audit = dict(seeds=seeds, rule=SELECTION_RULE, first=None, second=None)
+    outcome = dict(rule=PREVIOUS_SELECTION_RULE, status=None, reason=None, selected=picks)
     if len(seeds) < 2:
-        return picks, dict(audit, status='unavailable',
-                           reason=f'fewer than two seeds ({len(seeds)}): reproduction cannot be checked')
+        return dict(outcome, status='unavailable',
+                    reason=f'fewer than two seeds ({len(seeds)}): reproduction cannot be checked')
     empty = [s for s in seeds if not orders[s]]
     if empty:
-        return picks, dict(audit, status='none', reason=f'empty signature set in seed(s) {empty}')
-
-    def check(rank):
-        missing = [s for s in seeds if len(orders[s]) <= rank]
-        if missing:
-            return dict(reproduced=False, missing_in_seeds=missing, pairs={})
-        pairs = {}
-        for i, j in jaccard:
-            a, b = orders[i][rank], orders[j][rank]
-            J = jaccard[(i, j)]
-            pairs[f'{i}-{j}'] = dict(clusters=[a, b], jaccard=float(J[a, b]),
-                                     best_of_first=int(np.argmax(J[a])), best_of_second=int(np.argmax(J[:, b])),
-                                     mutual=int(np.argmax(J[a])) == b and int(np.argmax(J[:, b])) == a)
-        return dict(reproduced=all(p['mutual'] for p in pairs.values()),
-                    candidates={s: orders[s][rank] for s in seeds}, pairs=pairs)
-
-    first = check(0); audit['first'] = first
+        return dict(outcome, status='none', reason=f'empty signature set in seed(s) {empty}')
+    first = check_tuple(seeds, {s: orders[s][0] for s in seeds}, jaccard)
     if not first['reproduced']:
         failed = [k for k, p in first['pairs'].items() if not p['mutual']]
-        return picks, dict(audit, status='none',
-                           reason=f'first candidates are not mutual best Jaccard matches for pair(s) {failed}')
+        return dict(outcome, status='none',
+                    reason=f'first candidates are not mutual best Jaccard matches for pair(s) {failed}')
     for s in seeds: picks[s].append(orders[s][0])
-    second = check(1); audit['second'] = second
-    if second['reproduced']:
-        for s in seeds: picks[s].append(orders[s][1])
-        reason = 'first and second candidates reproduced across every seed pair'
-    elif second.get('missing_in_seeds'):
-        reason = f"first candidates reproduced; no second candidate in seed(s) {second['missing_in_seeds']}"
+    missing = [s for s in seeds if len(orders[s]) < 2]
+    if missing:
+        reason = f'first candidates reproduced; no second candidate in seed(s) {missing}'
     else:
-        failed = [k for k, p in second['pairs'].items() if not p['mutual']]
-        reason = f'first candidates reproduced; second candidates not mutual for pair(s) {failed}'
-    return picks, dict(audit, status='selected', reason=reason)
+        second = check_tuple(seeds, {s: orders[s][1] for s in seeds}, jaccard)
+        if second['reproduced']:
+            for s in seeds: picks[s].append(orders[s][1])
+            reason = 'first and second candidates reproduced across every seed pair'
+        else:
+            failed = [k for k, p in second['pairs'].items() if not p['mutual']]
+            reason = f'first candidates reproduced; second candidates not mutual for pair(s) {failed}'
+    return dict(outcome, status='selected', reason=reason)
+
+
+def select_group(orders, jaccard, chi):
+    """Decide the selected sheet clusters once for a lattice group with the top-two rule.
+
+    orders: seed -> candidate IDs by E(log_chi_B) descending, then ID.
+    jaccard: (seed_i, seed_j) -> Jaccard matrix for every pair in seed order.
+    chi: seed -> {cluster: E(log_chi_B)} for at least every candidate.
+    Each seed's first two candidates are eligible. The first pick is the tuple, one eligible
+    candidate per seed, that is pairwise mutual best and has the largest minimum E(log_chi_B);
+    tuples run in candidate order and only a strictly larger score replaces the winner. The
+    second pick is the unused eligible candidate of every seed, if each seed has one and they
+    are pairwise mutual best. Returns picks per seed and the audit; status is selected, none
+    or unavailable. The audit also carries the previous rule's outcome."""
+    import itertools
+    seeds = list(orders)
+    picks = {s: [] for s in seeds}
+    eligible = {s: list(orders[s][:ELIGIBLE_PER_SEED]) for s in seeds}
+    audit = dict(seeds=seeds, rule=SELECTION_RULE,
+                 eligible={s: [dict(cluster=c, E_log_chi_B=float(chi[s][c])) for c in eligible[s]] for s in seeds},
+                 tuples=[], first=None, second=None, status=None, reason=None,
+                 approved_rule_outcome=approved_rule_outcome(orders, jaccard))
+    if len(seeds) < 2:
+        audit.update(status='unavailable',
+                     reason=f'fewer than two seeds ({len(seeds)}): reproduction cannot be checked')
+        return picks, audit
+    empty = [s for s in seeds if not orders[s]]
+    if empty:
+        audit.update(status='none', reason=f'empty signature set in seed(s) {empty}')
+        return picks, audit
+    winner = None
+    for members in itertools.product(*(eligible[s] for s in seeds)):
+        members = dict(zip(seeds, members))
+        score = min(float(chi[s][c]) for s, c in members.items())
+        checked = check_tuple(seeds, members, jaccard)
+        audit['tuples'].append(dict(candidates=members, min_E_log_chi_B=score,
+                                    mutual={k: p['mutual'] for k, p in checked['pairs'].items()},
+                                    all_mutual=checked['reproduced']))
+        if checked['reproduced'] and (winner is None or score > winner[0]):
+            winner = (score, checked)
+    if winner is None:
+        audit.update(status='none', reason='no tuple of eligible candidates is mutual best for every seed pair')
+        return picks, audit
+    first = dict(winner[1], min_E_log_chi_B=winner[0])
+    audit['first'] = first
+    for s in seeds: picks[s].append(first['candidates'][s])
+    unused = {s: [c for c in eligible[s] if c != first['candidates'][s]] for s in seeds}
+    missing = [s for s in seeds if len(unused[s]) != 1]
+    if missing:
+        audit['second'] = dict(reproduced=False, missing_in_seeds=missing, pairs={})
+        reason = f'first pick made; no unused eligible candidate in seed(s) {missing}'
+    else:
+        second = check_tuple(seeds, {s: unused[s][0] for s in seeds}, jaccard)
+        audit['second'] = second
+        if second['reproduced']:
+            for s in seeds: picks[s].append(unused[s][0])
+            reason = 'first pick made; the unused eligible candidates are mutual best for every seed pair too'
+        else:
+            failed = [k for k, p in second['pairs'].items() if not p['mutual']]
+            reason = f'first pick made; unused eligible candidates not mutual for pair(s) {failed}'
+    audit.update(status='selected', reason=reason)
+    return picks, audit
 
 
 def seed_overlap(jaccard):
@@ -649,11 +723,12 @@ def group_selection(out, recs, chunk):
         raise ValueError('statistics are deferred; run --statistics-only before selection')
     seeds = [r['seed'] for r in recs]
     orders = {r['seed']: list(r['sheet_candidates']['order']) for r in recs}
+    chi = {r['seed']: {c['cluster']: c['E_log_chi_B'] for c in r['sheet_candidates']['clusters']} for r in recs}
     sizes = {r['seed']: len(r['cluster_effects']) for r in recs}
     labels = {r['seed']: np.load(out/f"{r['tag']}-labels.npy", mmap_mode='r') for r in recs}
     jaccard = {(i, j): jaccard_matrix(labels[i], labels[j], sizes[i], sizes[j], chunk)
                for i, j in itertools.combinations(seeds, 2)}
-    picks, audit = select_group(orders, jaccard)
+    picks, audit = select_group(orders, jaccard, chi)
     overlap = seed_overlap(jaccard)
     for r in recs:
         s = r['seed']
