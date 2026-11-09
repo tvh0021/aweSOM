@@ -6,7 +6,7 @@ import types
 import numpy as np
 import pytest
 
-from aweSOM import _gpu
+from aweSOM import _gpu, _gpu_screen
 from aweSOM.inference import _bmu_kernel, predict
 from aweSOM.stream import _BMU, predict_stream
 
@@ -83,8 +83,9 @@ class Stream:
         self.syncs += 1
 
 
+@pytest.mark.parametrize('screen', [False, True])
 @pytest.mark.parametrize('overlap', [True, False])
-def test_staging(monkeypatch, overlap):
+def test_staging(monkeypatch, overlap, screen):
     allocations, sources = [], []
 
     def pinned(n):
@@ -111,8 +112,10 @@ def test_staging(monkeypatch, overlap):
                                    alloc_pinned_memory=pinned, get_current_stream=Stream))
     monkeypatch.setitem(sys.modules, 'cupy', cp)
     _gpu._kernels.cache_clear()
+    _gpu_screen._kernels.cache_clear()
     w = np.arange(28.).reshape(7, 4)
-    search = _gpu.GpuSearcher(w, 7, 1, chunk=3, overlap=overlap)
+    cls = _gpu_screen.GpuScreenSearcher if screen else _gpu.GpuSearcher
+    search = cls(w, 7, 1, chunk=3, overlap=overlap)
     for dtype in [np.float32, np.float64]:
         x = np.arange(88., dtype=dtype).reshape(22, 4)[::2]  # noncontiguous
         idx, d2 = np.empty(11, np.int32), np.empty(11)
@@ -128,6 +131,7 @@ def test_staging(monkeypatch, overlap):
         assert len(search.slots) == (2 if overlap else 1)
         assert all(len(s['owners']) == 3 for s in search.slots)
     _gpu._kernels.cache_clear()
+    _gpu_screen._kernels.cache_clear()
 
 
 @pytest.mark.parametrize('bmu', ['numba', 'auto', 'screen', 'patch'])

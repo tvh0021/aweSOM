@@ -461,6 +461,7 @@ class _BMU:
     original node IDs and reference arithmetic, including the lowest-index tie
     rule.
 
+    ``"cuda_screen"`` certifies a float32 winner or falls back to float64.
     ``"cuda"`` uses optional CuPy float64 brute force in every epoch.
     ``"auto"`` times the screen and patch searches on the first rows of the
     first chunk and keeps the faster one for the pass (both are exact, with
@@ -476,6 +477,9 @@ class _BMU:
         if kind == "cuda":
             from ._gpu import GpuSearcher
             self.gpu = GpuSearcher(self.w, xdim, ydim)
+        if kind == "cuda_screen":
+            from ._gpu_screen import GpuScreenSearcher
+            self.gpu = GpuScreenSearcher(self.w, xdim, ydim)
         self.feature = first_epoch
         if kind in ("screen", "patch", "auto") and (
             not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15
@@ -491,7 +495,7 @@ class _BMU:
                 self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
-        if kind == "cuda":
+        if kind in ("cuda", "cuda_screen"):
             return self.gpu(block, idx, d2)
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
@@ -662,7 +666,8 @@ def train_batch_stream(
             float64), ``"patch"`` (bounding-ball pruned search over lattice
             patches, :func:`aweSOM.inference.best_match_nodes_patch`; the first
             epoch uses feature-space groups with certified bounds) or ``"numba"``
-            (float64 brute force). All four give the exact float64 BMU
+            (float64 brute force). Optional ``"cuda"`` and ``"cuda_screen"``
+            use CuPy. All give the exact float64 BMU
             (bitwise-equal labels), so the weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified
             block sample every epoch; see the module docstring). 1.0 = all rows.
@@ -715,8 +720,8 @@ def train_batch_stream(
         measured on the next epoch's sample. ``hits`` is empty when
         ``final_pass="none"``.
     """
-    if bmu not in ("auto", "screen", "patch", "numba", "cuda"):
-        raise ValueError('bmu must be "auto", "screen", "patch", "numba" or "cuda"')
+    if bmu not in ("auto", "screen", "patch", "numba", "cuda", "cuda_screen"):
+        raise ValueError('bmu must be "auto", "screen", "patch", "numba", "cuda" or "cuda_screen"')
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError("sample_fraction must be in (0, 1]")
     if final_pass not in ("full", "sample", "none"):
@@ -953,7 +958,7 @@ def predict_stream(
             ``h5py.Dataset``); allocated in memory if None.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
-        backend: ``predict`` backend, including optional ``"cuda"``.
+        backend: ``predict`` backend, including optional ``"cuda"`` and ``"cuda_screen"``.
             Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
@@ -971,7 +976,7 @@ def predict_stream(
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
     pos = 0
-    gpu = _BMU(weights, "cuda", len(weights), 1) if backend == "cuda" else None
+    gpu = _BMU(weights, backend, len(weights), 1) if backend in ("cuda", "cuda_screen") else None
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if gpu is not None and len(clusters) != len(weights):
         raise ValueError("node_cluster must have one entry per node")
