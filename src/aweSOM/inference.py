@@ -987,6 +987,7 @@ def predict(
     return_distance: bool = False,
     backend: str = "screen",
     lattice_shape: tuple[int, int] | None = None,
+    hint: np.ndarray | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
 
@@ -1001,6 +1002,8 @@ def predict(
     bitwise equal to ``"numba"``; needs ``lattice_shape``), the fastest exact
     CPU path on trained lattices of a few thousand nodes or more.
     ``backend="cuda"`` runs the optional exact float64 CuPy search.
+    ``backend="cuda_prune"`` uses exact box pruning, optionally warm-started
+    with one previous BMU per row in ``hint``.
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -1016,9 +1019,10 @@ def predict(
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
         backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"``,
-            ``"patch"``, ``"cuda"`` or ``"jax"``. Defaults to ``"screen"``.
+            ``"patch"``, ``"cuda"``, ``"cuda_prune"`` or ``"jax"``. Defaults to ``"screen"``.
         lattice_shape (tuple[int, int] | None, optional): ``(xdim, ydim)``,
-            required by ``backend="patch"``.
+            required by ``backend="patch"``; optional locality for ``"cuda_prune"``.
+        hint (np.ndarray | None, optional): Previous int32 BMU per row for CUDA pruning.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]
@@ -1046,6 +1050,12 @@ def predict(
         nodes_idx, dist2 = best_match_nodes_patch(
             weights, data, *lattice_shape, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
+    elif backend == "cuda_prune":
+        from ._gpu_prune import best_match_nodes_cuda_prune
+        nodes_idx, dist2 = best_match_nodes_cuda_prune(
+            weights, data, lattice_shape=lattice_shape, hint=hint,
+            chunk=DEFAULT_CHUNK if chunk is None else chunk
+        )
     elif backend == "cuda":
         from ._gpu import best_match_nodes_cuda
         nodes_idx, dist2 = best_match_nodes_cuda(
@@ -1054,7 +1064,7 @@ def predict(
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda", "cuda_prune" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)

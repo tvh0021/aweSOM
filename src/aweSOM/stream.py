@@ -473,6 +473,9 @@ class _BMU:
                  first_epoch: bool = False):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
+        if kind == "cuda_prune":
+            from ._gpu_prune import PruneGpuSearcher
+            self.gpu = PruneGpuSearcher(self.w, (xdim, ydim))
         if kind == "cuda":
             from ._gpu import GpuSearcher
             self.gpu = GpuSearcher(self.w, xdim, ydim)
@@ -491,7 +494,7 @@ class _BMU:
                 self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
-        if kind == "cuda":
+        if kind in ("cuda", "cuda_prune"):
             return self.gpu(block, idx, d2)
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
@@ -941,6 +944,7 @@ def predict_stream(
     lattice_shape: Optional[tuple[int, int]] = None,
     prefetch: bool = True,
     n_samples: Optional[int] = None,
+    hint: Optional[np.ndarray] = None,
 ) -> tuple[Any, dict[str, float]]:
     """Label every row of a streamed source with :func:`aweSOM.inference.predict`.
 
@@ -953,11 +957,12 @@ def predict_stream(
             ``h5py.Dataset``); allocated in memory if None.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
-        backend: ``predict`` backend, including optional ``"cuda"``.
+        backend: ``predict`` backend, including optional ``"cuda"`` and ``"cuda_prune"``.
             Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
+        hint: Previous int32 BMU per source row for ``"cuda_prune"``.
 
     Returns:
         ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute.
@@ -972,6 +977,10 @@ def predict_stream(
     t_start = time.perf_counter()
     pos = 0
     gpu = _BMU(weights, "cuda", len(weights), 1) if backend == "cuda" else None
+    if backend == "cuda_prune":
+        from ._gpu_prune import PruneGpuSearcher, _hints
+        gpu = PruneGpuSearcher(weights, lattice_shape, chunk=chunk)
+        hint = _hints(hint, source.n, len(weights)) if hint is not None else None
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if gpu is not None and len(clusters) != len(weights):
         raise ValueError("node_cluster must have one entry per node")
@@ -979,7 +988,10 @@ def predict_stream(
         t0 = time.perf_counter()
         if gpu is not None:
             idx, d2 = np.empty(len(c), np.int32), np.empty(len(c), np.float64)
-            gpu(c, idx, d2)
+            if backend == "cuda_prune":
+                gpu(c, idx, d2, None if hint is None else hint[pos:pos + len(c)])
+            else:
+                gpu(c, idx, d2)
             labels = clusters[idx]
             res = (labels, np.sqrt(d2)) if out_distance is not None else labels
         else:
