@@ -125,7 +125,8 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     out = prepared.tmp/'mpi2'
     argv = [*prepared.base, '--out', str(out), '--reuse-pool', str(prepared.pool), '--fit', '4x3', '42', '--mpi']
     writes = run_ranks(2, argv, out)
-    assert writes[0] and not writes[1]  # rank 0 wrote every output, rank 1 nothing
+    # Rank 0 wrote every output; rank 1 wrote only its rows of the three label files.
+    assert writes[0] and sorted(writes[1]) == sorted(f"open {out}/results.partial/4x3-s42-{k}.npy" for k in ("labels", "nodes", "distances"))
     results = out/'results'
     a = SOMModel.load(results/'4x3-s42.h5').weights
     b = SOMModel.load(prepared.single/'4x3-s42.h5').weights
