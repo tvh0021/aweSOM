@@ -117,7 +117,8 @@ class GpuSearcher:
         if dtype == self.dtype and capacity <= self.capacity:
             return
         self.wait()  # queued results live in the slots about to be replaced
-        self.slots = []
+        # Reset first, so a failed allocation leaves a state that reallocates.
+        self.slots, self.capacity, self.dtype, self.turn = [], 0, None, 0
         for stream in self.streams:
             owners, arrays = zip(*(_pinned(self.cp, shape, dt) for shape, dt in
                                   [((capacity, self.features), dtype),
@@ -126,15 +127,16 @@ class GpuSearcher:
                 device = [self.cp.empty(a.shape, a.dtype) for a in arrays]
             self.slots.append(dict(owners=owners, host=arrays, device=device,
                                    labels=None, pending=None))
-        self.capacity, self.dtype, self.turn = capacity, dtype, 0
+        self.capacity, self.dtype = capacity, dtype
 
     def cluster_map(self, node_cluster, dtype=np.int32):
         """Upload a node -> label table for :meth:`submit`.
 
-        ``dtype`` is the label dtype, at most 4 bytes; the caller chooses one
-        that holds every entry, so the gather equals ``node_cluster[idx]``.
+        ``dtype`` is the label dtype, at most 4 bytes, used in native byte
+        order; the caller chooses one that holds every entry, so the gather
+        equals ``node_cluster[idx]``.
         """
-        table = np.asarray(node_cluster).astype(dtype).ravel()
+        table = np.asarray(node_cluster).astype(np.dtype(dtype).newbyteorder('=')).ravel()
         if len(table) != self.nodes or table.dtype.itemsize > 4:
             raise ValueError('need one label per node in a dtype of at most 4 bytes')
         table = self.cp.asarray(table)
@@ -147,7 +149,7 @@ class GpuSearcher:
         stream.synchronize()
         pending, slot['pending'] = slot['pending'], None
         if pending is not None:
-            _, out, host, d2, host_d2 = pending
+            _, out, host, d2, host_d2, _ = pending
             out[...] = host
             if d2 is not None:
                 d2[...] = host_d2
@@ -164,7 +166,9 @@ class GpuSearcher:
     def wait(self, token=None):
         """Write the results of every ``submit`` up to ``token`` (all when None)."""
         try:
-            for slot, stream in zip(self.slots, self.streams):
+            for i in range(len(self.slots)):  # oldest first: the next slot to reuse
+                k = (self.turn + i) % len(self.slots)
+                slot, stream = self.slots[k], self.streams[k]
                 pending = slot['pending']
                 if pending is not None and (token is None or pending[0] <= token):
                     self._finish(slot, stream)
@@ -180,8 +184,9 @@ class GpuSearcher:
         table's dtype. ``d2`` (optional, float64) receives squared distances;
         without it they are not copied off the device. Results are written on
         the host by a later ``submit`` that reuses their slot, or by ``wait``;
-        ``block`` may be reused as soon as this returns. On an error all
-        queued work is dropped.
+        ``block`` may be reused as soon as this returns. An error after the
+        argument checks drops all queued work; a rejected argument leaves
+        earlier submits queued.
         """
         x = np.asarray(block)
         if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
@@ -222,8 +227,9 @@ class GpuSearcher:
                     result.get(out=host_out, stream=stream, blocking=False)
                     if d2 is not None:
                         dev[2][:n].get(out=host[2][:n], stream=stream, blocking=False)
+                # The table stays referenced until the queued gather has run.
                 slot['pending'] = (self.token, out[start:stop], host_out,
-                                   None if d2 is None else d2[start:stop], host[2][:n])
+                                   None if d2 is None else d2[start:stop], host[2][:n], clusters)
         except BaseException:
             self.cancel()
             raise

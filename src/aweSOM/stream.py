@@ -1040,8 +1040,10 @@ def _label_queued(gpu, clusters, chunks, out, out_distance, stats) -> int:
 
     Cluster ids are gathered on the device. Chunk ``k`` is written to ``out``
     while chunk ``k + 1`` runs, so the device does not idle between chunks.
-    An in-memory ``out`` of the label dtype receives labels straight from the
-    pinned staging buffers; other outputs go through two reused host buffers.
+    An ndarray ``out`` (memmaps included) of the label dtype receives labels
+    straight from the pinned staging buffers, on the same host thread and at
+    the same point between launches as a buffered write, so its write time is
+    counted as compute; other outputs go through two reused host buffers.
     Distances leave the device only when ``out_distance`` is given.
     """
     dt = _label_dtype(out, clusters)

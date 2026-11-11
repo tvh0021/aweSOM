@@ -45,7 +45,9 @@ def main():
 
     rows = int(args.rows)
     sub = 2**20
-    pool_rows = max(sub, args.pool // max(args.chunk, sub) * max(args.chunk, sub))
+    # A whole, positive number of predict_stream chunks, so the source cycles
+    # through the entire pool (the kernel loop handles any pool size).
+    pool_rows = max(1, args.pool // args.chunk) * args.chunk
     rng = np.random.default_rng(42)
     w = lattice()
     pool = (w[rng.integers(len(w), size=pool_rows)] +
