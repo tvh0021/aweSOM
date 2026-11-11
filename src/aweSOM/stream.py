@@ -75,6 +75,7 @@ import os
 import resource
 import sys
 import time
+import zlib
 from typing import Any, Callable, Iterable, Iterator, Optional
 
 import numba
@@ -82,6 +83,7 @@ import numpy as np
 from numba import njit, prange
 
 from ._batch_core import radius_schedule
+from ._gpu import cuda_available
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
@@ -94,7 +96,11 @@ from .inference import (
 )
 
 __all__ = [
+    "BMUSearcher",
     "NpyReader",
+    "NpyWriter",
+    "cuda_available",
+    "npy_crc32",
     "train_batch_stream",
     "read_checkpoint",
     "predict_stream",
@@ -291,6 +297,89 @@ class NpyReader:
         return np.array(np.load(self.path, mmap_mode="r")[key])
 
 
+class NpyWriter:
+    """Write row ranges of an existing C-order ``.npy`` file with plain file writes.
+
+    Made for several processes, possibly on several nodes, that fill one
+    output file: one process creates the file (for example
+    ``numpy.lib.format.open_memmap(path, mode="w+", ...)``), then every
+    process opens a writer and assigns its own rows, ``writer[a:b] = values``.
+    Each assignment is one ``pwrite`` of exactly those bytes. A writable
+    memory map would instead write back whole pages, and on a network file
+    system two nodes whose rows share a page can overwrite each other's bytes.
+
+    ``crc32`` is the zlib CRC-32 of the bytes written so far when the writes
+    covered one contiguous range in ascending order (``first`` to ``end``);
+    it is None after an out-of-order write. :func:`npy_crc32` computes the
+    same value from the file, so a reader can confirm the bytes arrived.
+    """
+
+    def __init__(self, path: str):
+        self.path = str(path)
+        with open(self.path, "rb") as fh:
+            version = np.lib.format.read_magic(fh)
+            if version == (1, 0):
+                shape, fortran, dtype = np.lib.format.read_array_header_1_0(fh)
+            else:
+                shape, fortran, dtype = np.lib.format.read_array_header_2_0(fh)
+            self.offset = fh.tell()
+        if fortran or len(shape) < 1:
+            raise ValueError("NpyWriter needs a C-order array with at least one dimension")
+        self.shape = tuple(shape)
+        self.dtype = np.dtype(dtype)
+        self.row_bytes = int(np.prod(self.shape[1:], dtype=np.int64)) * self.dtype.itemsize
+        self.fd = os.open(self.path, os.O_WRONLY)
+        self.first = self.end = None
+        self.crc32: Optional[int] = 0
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def __setitem__(self, key, value) -> None:
+        if not isinstance(key, slice) or key.step not in (None, 1):
+            raise TypeError("NpyWriter takes contiguous row slices only")
+        start, stop, _ = key.indices(self.shape[0])
+        stop = max(start, stop)
+        buf = np.ascontiguousarray(value, dtype=self.dtype)
+        if buf.shape != (stop - start, *self.shape[1:]):
+            raise ValueError(f"rows [{start}, {stop}) need shape {(stop - start, *self.shape[1:])}, got {buf.shape}")
+        view = memoryview(buf).cast("B")
+        at = self.offset + start * self.row_bytes
+        while len(view):
+            k = os.pwrite(self.fd, view, at)
+            view, at = view[k:], at + k
+        if self.first is None:
+            self.first = self.end = start
+        if self.crc32 is not None and start == self.end:
+            self.crc32 = zlib.crc32(buf, self.crc32)
+            self.end = stop
+        else:
+            self.crc32 = None
+
+    def close(self, sync: bool = True) -> None:
+        """Close the file (``fsync`` first with ``sync``). Safe to call twice."""
+        if self.fd is not None:
+            try:
+                if sync:
+                    os.fsync(self.fd)
+            finally:
+                os.close(self.fd)
+                self.fd = None
+
+
+def npy_crc32(path: str, start: int, stop: int, block: int = 2**24) -> int:
+    """zlib CRC-32 of rows ``[start, stop)`` of the ``.npy`` file ``path``.
+
+    Matches :attr:`NpyWriter.crc32` for the same rows.
+    """
+    arr = np.load(path, mmap_mode="r")
+    crc = 0
+    for a in range(int(start), int(stop), block):
+        crc = zlib.crc32(np.ascontiguousarray(arr[a:min(a + block, int(stop))]), crc)
+    del arr
+    return crc
+
+
 def _make_source(data_source: Any, n_samples: Optional[int], n_features: Optional[int] = None):
     if callable(data_source) and not hasattr(data_source, "shape"):
         return _CallableSource(data_source, n_samples, n_features)
@@ -471,18 +560,20 @@ class _BMU:
     PROBE = 16384
 
     def __init__(self, weights: np.ndarray, kind: str, xdim: int, ydim: int,
-                 first_epoch: bool = False):
+                 first_epoch: bool = False, device: Optional[int] = None):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
+        # The CUDA device is passed only when chosen, so stand-in searchers need no new argument.
+        on = {} if device is None else {"device": int(device)}
         if kind == "cuda_prune":
             from ._gpu_prune import PruneGpuSearcher
-            self.gpu = PruneGpuSearcher(self.w, (xdim, ydim))
+            self.gpu = PruneGpuSearcher(self.w, (xdim, ydim), **on)
         if kind == "cuda":
             from ._gpu import GpuSearcher
-            self.gpu = GpuSearcher(self.w, xdim, ydim)
+            self.gpu = GpuSearcher(self.w, xdim, ydim, **on)
         if kind == "cuda_screen":
             from ._gpu_screen import GpuScreenSearcher
-            self.gpu = GpuScreenSearcher(self.w, xdim, ydim)
+            self.gpu = GpuScreenSearcher(self.w, xdim, ydim, **on)
         self.feature = first_epoch
         if kind in ("screen", "patch", "auto") and (
             not np.all(np.isfinite(self.w)) or np.abs(self.w).max() > 1e15
@@ -519,6 +610,55 @@ class _BMU:
                 times[kind] = time.perf_counter() - t0
             self.kind = min(times, key=times.get)
         return self._run(self.kind, block, idx, d2)
+
+
+class BMUSearcher:
+    """Exact BMU search of fixed weights, built once and reused across calls.
+
+    For repeated small calls (for example labelling the cells of one MPI rank
+    at every step), this keeps the backend state: the patch tables, or the
+    CUDA weights, compiled kernels and staging buffers on ``device``. Backends
+    ``"patch"`` (needs ``lattice_shape``), ``"screen"``, ``"numba"``,
+    ``"cuda"`` and ``"cuda_screen"`` give bitwise the same nodes (lowest index
+    on ties) and float64 squared distances as
+    :func:`aweSOM.inference.best_match_nodes`.
+
+    Example:
+        >>> search = BMUSearcher(weights, "cuda_screen", device=gpu_device(comm))
+        >>> nodes, d2 = search(local_rows)
+    """
+
+    def __init__(self, weights: np.ndarray, backend: str = "patch",
+                 lattice_shape: Optional[tuple[int, int]] = None, device: Optional[int] = None):
+        if backend not in _SEARCH_BACKENDS:
+            raise ValueError(f"backend must be one of {', '.join(_SEARCH_BACKENDS)}")
+        w = np.ascontiguousarray(weights, np.float64)
+        if w.ndim != 2 or not w.shape[0] or not w.shape[1]:
+            raise ValueError("weights must be a non-empty (nodes, F) array")
+        if backend == "patch":
+            if lattice_shape is None:
+                raise ValueError('backend="patch" needs lattice_shape=(xdim, ydim)')
+            xdim, ydim = lattice_shape
+        else:
+            xdim, ydim = len(w), 1
+        self.backend, self.device, self.n_feat = backend, device, w.shape[1]
+        self._bmu = _BMU(w, backend, int(xdim), int(ydim), device=device)
+
+    def __call__(self, data: np.ndarray, idx: Optional[np.ndarray] = None,
+                 d2: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+        """``(idx, d2)``: int32 node and float64 squared distance per row (written into the
+        given arrays if any)."""
+        x = _as_float(data)
+        if x.ndim != 2 or x.shape[1] != self.n_feat:
+            raise ValueError(f"data must be (rows, {self.n_feat})")
+        m = x.shape[0]
+        idx = np.empty(m, np.int32) if idx is None else idx
+        d2 = np.empty(m, np.float64) if d2 is None else d2
+        if idx.shape != (m,) or idx.dtype != np.int32 or d2.shape != (m,) or d2.dtype != np.float64:
+            raise ValueError("idx must be int32 and d2 float64, one per row")
+        if m:
+            self._bmu(x, idx, d2)
+        return idx, d2
 
 
 def peak_rss_bytes() -> int:
@@ -938,6 +1078,35 @@ def _version() -> str:
 # --------------------------------------------------------------------- inference
 
 
+_GPU_BACKENDS = ("cuda", "cuda_screen", "cuda_prune")
+_SEARCH_BACKENDS = ("numba", "screen", "patch", "cuda", "cuda_screen")
+
+
+def _range_chunks(source, chunk: int, start: int, stop: int) -> Iterator[np.ndarray]:
+    """Chunks covering rows ``[start, stop)`` of ``source``, in order.
+
+    Array sources are read in ``chunk``-row slices from ``start``. A callable
+    source is read through one call: chunks outside the range are skipped
+    without reading them, and chunks that straddle an end are cut.
+    """
+    if not isinstance(source, _CallableSource):
+        for a in range(start, stop, chunk):
+            yield source.read(a, min(a + chunk, stop))
+        return
+    if start == 0 and stop == source.n:
+        yield from _epoch_chunks(source, chunk, 1.0, 1, None)
+        return
+    offset = 0
+    for m, read in source.lazy():
+        a, b = max(offset, start), min(offset + m, stop)
+        if a < b:
+            c = read()
+            yield c if (a, b) == (offset, offset + m) else np.ascontiguousarray(c[a - offset : b - offset])
+        offset += m
+        if offset >= stop:
+            break
+
+
 def predict_stream(
     weights: np.ndarray,
     node_cluster: np.ndarray,
@@ -950,8 +1119,38 @@ def predict_stream(
     prefetch: bool = True,
     n_samples: Optional[int] = None,
     hint: Optional[np.ndarray] = None,
-) -> tuple[Any, dict[str, float]]:
-    """Label every row of a streamed source with :func:`aweSOM.inference.predict`.
+    out_node: Any = None,
+    comm: Any = None,
+    device: Optional[int] = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Label every row of a streamed source with its best-matching node's cluster.
+
+    Labels, BMU nodes and distances are those of :func:`aweSOM.inference.predict`
+    with the same backend. Every exact backend (all but ``"kdtree"`` and
+    ``"jax"``) gives the same nodes, including the lowest-index tie rule, and
+    the same float64 distances bit for bit.
+
+    Two ways to run with several MPI ranks:
+
+    - Shared source, ``comm`` given: every rank of ``comm`` calls with the
+      same arguments. Rank r labels the contiguous rows
+      :func:`aweSOM.distributed.row_range` ``(N, r, size)`` and writes only
+      those rows of ``out``, ``out_node`` and ``out_distance``, which are then
+      full-length ``(N,)`` arrays every rank can write. For one file on a
+      shared file system, let one rank create it, then give every rank a
+      :class:`NpyWriter` of it: it writes exactly this rank's bytes, while a
+      writable ``numpy.memmap`` writes back whole pages and two nodes can
+      overwrite each other's rows. The call returns once this rank's rows
+      are written; close the writers and ``comm.Barrier()`` before reading
+      other ranks' rows. With
+      ``out=None`` a rank gets a new array of its own rows only
+      (``stats["start"]`` is its first row). For GPU backends the call is
+      collective (the device choice uses the node communicator).
+    - Local blocks, no ``comm``: each rank holds its own rows (for example the
+      cells of one AsterX rank) and calls this function, or
+      :func:`aweSOM.inference.predict`, on that block. Pass
+      ``device=aweSOM.distributed.gpu_device(comm)`` for a GPU backend when a
+      node has several GPUs.
 
     Args:
         weights: ``(nodes, F)`` lattice.
@@ -968,52 +1167,86 @@ def predict_stream(
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
         hint: Previous int32 BMU per source row for ``"cuda_prune"``.
+        out_node: Optional writable ``(N,)`` int32 array for the BMU node index.
+        comm: mpi4py communicator: label this rank's row range only (see above).
+        device: CUDA device index for GPU backends. Default: with ``comm``,
+            :func:`aweSOM.distributed.gpu_device` (the node-local rank modulo
+            the visible device count); without, the current device.
 
     Returns:
-        ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute.
+        ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute,
+        write, start and stop (this rank's rows), rank, ranks and device
+        (CUDA index, or None).
     """
+    if backend not in _SEARCH_BACKENDS + ("cuda_prune", "kdtree", "jax"):
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda", "cuda_screen", '
+                         '"cuda_prune" or "jax"')
+    if backend == "patch" and lattice_shape is None:
+        raise ValueError('backend="patch" needs lattice_shape=(xdim, ydim)')
+    clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
+    if len(clusters) != np.shape(weights)[0]:
+        raise ValueError("node_cluster must have one entry per node")
     source = _make_source(data_source, n_samples)
+    rank, size = (0, 1) if comm is None else (int(comm.Get_rank()), int(comm.Get_size()))
+    if comm is None:
+        lo, hi = 0, source.n
+    else:
+        from .distributed import row_range
+
+        lo, hi = row_range(source.n, rank, size)
+        for name, a in (("out", out), ("out_distance", out_distance), ("out_node", out_node)):
+            if a is not None and len(a) != source.n:
+                raise ValueError(f"with comm, {name} must hold all {source.n} rows (one shared array)")
     if out is None:
-        out = np.empty(source.n, np.int32)
-    stats = {"io_wait": 0.0, "compute": 0.0, "write": 0.0}
-    it = _epoch_chunks(source, chunk, 1.0, 1, None)
+        out = np.empty(hi - lo, np.int32)
+    base = lo if comm is not None and len(out) != source.n else 0  # this rank's own array
+    if backend in _GPU_BACKENDS and device is None and comm is not None:
+        from .distributed import gpu_device
+
+        device = gpu_device(comm)
+    stats: dict[str, Any] = {"io_wait": 0.0, "compute": 0.0, "write": 0.0}
+    it = _range_chunks(source, chunk, lo, hi)
     if prefetch:
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
-    pos = 0
-    gpu = _BMU(weights, backend, len(weights), 1) if backend in ("cuda", "cuda_screen") else None
-    if backend == "cuda_prune":
+    pos = lo
+    searcher = None
+    if backend in _SEARCH_BACKENDS:
+        xdim, ydim = lattice_shape if backend == "patch" else (len(clusters), 1)
+        searcher = _BMU(weights, backend, xdim, ydim, device=device)
+    elif backend == "cuda_prune":
         from ._gpu_prune import PruneGpuSearcher, _hints
-        gpu = PruneGpuSearcher(weights, lattice_shape, chunk=chunk)
-        hint = _hints(hint, source.n, len(weights)) if hint is not None else None
-    clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
-    if gpu is not None and len(clusters) != len(weights):
-        raise ValueError("node_cluster must have one entry per node")
+        on = {} if device is None else {"device": int(device)}
+        searcher = PruneGpuSearcher(weights, lattice_shape, chunk=chunk, **on)
+        hint = _hints(hint, source.n, len(clusters)) if hint is not None else None
+    else:
+        from .inference import best_match_nodes_jax, best_match_nodes_kdtree
+
+        search = best_match_nodes_kdtree if backend == "kdtree" else best_match_nodes_jax
     for c in it:
         t0 = time.perf_counter()
-        if gpu is not None:
-            idx, d2 = np.empty(len(c), np.int32), np.empty(len(c), np.float64)
-            if backend == "cuda_prune":
-                gpu(c, idx, d2, None if hint is None else hint[pos:pos + len(c)])
-            else:
-                gpu(c, idx, d2)
-            labels = clusters[idx]
-            res = (labels, np.sqrt(d2)) if out_distance is not None else labels
-        else:
-            res = predict(weights, node_cluster, c, chunk=c.shape[0],
-                          return_distance=out_distance is not None, backend=backend,
-                          lattice_shape=lattice_shape)
-        t1 = time.perf_counter()
         m = c.shape[0]
-        if out_distance is not None:
-            out[pos : pos + m], out_distance[pos : pos + m] = res
+        if searcher is None:
+            idx, d2 = search(weights, c, chunk=m)
         else:
-            out[pos : pos + m] = res
+            idx, d2 = np.empty(m, np.int32), np.empty(m, np.float64)
+            if backend == "cuda_prune":
+                searcher(c, idx, d2, None if hint is None else hint[pos : pos + m])
+            else:
+                searcher(c, idx, d2)
+        labels = clusters[idx]
+        t1 = time.perf_counter()
+        out[pos - base : pos - base + m] = labels
+        if out_distance is not None:
+            out_distance[pos : pos + m] = np.sqrt(d2)
+        if out_node is not None:
+            out_node[pos : pos + m] = idx
         pos += m
         stats["compute"] += t1 - t0
         stats["write"] += time.perf_counter() - t1
     stats["seconds"] = time.perf_counter() - t_start
-    stats["rows"] = pos
+    stats.update(rows=pos - lo, start=lo, stop=hi, rank=rank, ranks=size,
+                 device=None if device is None else int(device))
     return out, stats
 
 
