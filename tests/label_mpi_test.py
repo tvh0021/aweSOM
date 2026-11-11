@@ -372,7 +372,8 @@ class SharedNodeComm(FakeComm):
 
 def driver_rank(conn, rank, size, barrier, slots, argv, mode):
     """One fake rank of production_pool.main. mode: 'cpu', 'gpu' (fake CuPy with two
-    devices and the CPU stand-in searcher) or 'no-shared-out' (rank 1 cannot open OUT files)."""
+    devices and the CPU stand-in searcher) 'no-shared-out' (rank 1 cannot open OUT files), 'bad-header' (rank 1 hits a
+    malformed .npy header) or 'bad-crc' (rank 0's readback check fails)."""
     try:
         from aweSOM import distributed as dist, _gpu_screen as screen, stream
         dist.get_comm = lambda: SharedNodeComm(rank, size, barrier, slots)
@@ -386,6 +387,12 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
             def missing(path):
                 raise FileNotFoundError(2, "No such file or directory", str(path))
             stream.NpyWriter = missing
+        if mode == "bad-header" and rank == 1:
+            def malformed(path):
+                raise ValueError(f"{path}: malformed .npy header")
+            stream.NpyWriter = malformed
+        if mode == "bad-crc":  # only rank 0 reads back, so every rank's failure comes from rank 0
+            stream.npy_crc32 = lambda *a, **k: -1
         pool.main(argv)
         conn.send(("ok", StandIn.devices))
     except BaseException:
@@ -459,3 +466,25 @@ def test_driver_refuses_out_other_ranks_cannot_open(prepared, monkeypatch):  # n
         assert "multi-rank labelling needs OUT on a file system every rank can open" in message
         assert "rank 1: cannot open" in message
     assert not (out / "results").exists()
+
+
+def test_driver_header_error_stops_every_rank(prepared, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(prepared.tmp / "cache"))
+    out = prepared.tmp / "label-bad-header"
+    argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42", "--mpi"]
+    results = run_driver(2, argv, "bad-header")
+    assert [status for status, _ in results] == ["error", "error"]
+    for _, message in results:
+        assert "rank 1: cannot open the label files: ValueError" in message
+
+
+def test_driver_readback_failure_stops_every_rank(prepared, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(prepared.tmp / "cache"))
+    out = prepared.tmp / "label-bad-crc"
+    argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
+            "--mpi", "--statistics", "later"]
+    results = run_driver(2, argv, "bad-crc")
+    assert [status for status, _ in results] == ["error", "error"]
+    for _, message in results:
+        assert "labelling readback check on rank 0 failed" in message
+        assert "differ on disk from what it wrote" in message

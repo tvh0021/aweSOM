@@ -896,6 +896,8 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
         for key, _ in LABEL_FILES: writers[key] = NpyWriter(out / f'{tag}-{key}.npy')
     except OSError as e:
         problem = f'{node_name()} rank {rank}: cannot open {e.filename}: {e.strerror}'
+    except Exception as e:  # a malformed or stale .npy header: every rank must still reach gather
+        problem = f'{node_name()} rank {rank}: cannot open the label files: {type(e).__name__}: {e}'
     problems = [x for x in gather(problem) if x]
     if problems:
         for wr in writers.values(): wr.close(sync=False)
@@ -924,15 +926,23 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     if failed:
         raise RuntimeError('labelling failed on rank(s) ' + ', '.join(str(r['rank']) for r in failed)
                            + '\n' + '\n'.join(r['error'] for r in failed))
+    t1 = time.perf_counter(); checked, check_error = [], None
+    if not rank:
+        try:
+            for r in every[1:]:  # rank 0 reads back every other rank's rows: lost or torn writes fail here
+                for key, (first, end, crc) in r['crc32'].items():
+                    if r['rows'] and (first, end) != (r['start'], r['stop']) or crc is None:
+                        raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
+                    if r['rows'] and npy_crc32(out / f'{tag}-{key}.npy', first, end) != crc:
+                        raise RuntimeError(f"rank {r['rank']} {key} rows [{first}, {end}) differ on disk from what it wrote")
+                checked.append(r['rank'])
+        except Exception as e:
+            check_error = f'{type(e).__name__}: {e}'
+    # Every rank learns the outcome of rank 0's readback, so a failed check stops all of them.
+    if comm is not None: check_error = comm.bcast(check_error, root=0)
+    if check_error:
+        raise RuntimeError('labelling readback check on rank 0 failed: ' + check_error)
     if rank: return None
-    t1 = time.perf_counter(); checked = []
-    for r in every[1:]:  # rank 0 reads back every other rank's rows: lost or torn writes fail here
-        for key, (first, end, crc) in r['crc32'].items():
-            if r['rows'] and (first, end) != (r['start'], r['stop']) or crc is None:
-                raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
-            if r['rows'] and npy_crc32(out / f'{tag}-{key}.npy', first, end) != crc:
-                raise RuntimeError(f"rank {r['rank']} {key} rows [{first}, {end}) differ on disk from what it wrote")
-        checked.append(r['rank'])
     return dict(ranks=every, crc_checked_ranks=checked, crc_check_seconds=time.perf_counter()-t1)
 
 
