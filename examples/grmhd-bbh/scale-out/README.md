@@ -6,14 +6,14 @@ The prepared pool and `pool-state.json` are in `pool-output/results`.
 The default pool contains float32 `raw`; add `--write-scaled` to retain the old
 float64 dataset for comparison, then use `--check-scaling N` during a fit.
 
-Export the shared configuration before submitting the four GP jobs:
+Export the shared configuration before submitting the GP jobs (one per lattice and seed):
 
 ```bash
 export REPO=/absolute/aweSOM VENV=/absolute/venv
 export POOL=/absolute/pool-output/results
 export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5
 export ROWS_PER_SNAPSHOT=500000000 ROWS_PER_EPOCH=1000000000
-for LATTICE in 91x64 48x34; do
+for LATTICE in 100x100; do
   for SEED in 42 43; do
     export LATTICE SEED OUT=/absolute/fits/${LATTICE}-s${SEED}
     sbatch "$REPO/examples/grmhd-bbh/scale-out/production-fit-gp.sbatch"
@@ -45,8 +45,7 @@ After all jobs finish, collect their results with the same training options:
   --inputs "$INPUT_1" "$INPUT_2" --anchor 94208 --held-out 405504 \
   --rows-per-snapshot "$ROWS_PER_SNAPSHOT" --rows-per-epoch "$ROWS_PER_EPOCH" \
   --r-min 8 --reuse-pool "$POOL" --out /absolute/fresh/collection \
-  --collect /absolute/fits/91x64-s42/results /absolute/fits/91x64-s43/results \
-            /absolute/fits/48x34-s42/results /absolute/fits/48x34-s43/results
+  --collect /absolute/fits/100x100-s42/results /absolute/fits/100x100-s43/results
 ```
 
 Collection copies fit artifacts before updating selection metadata. It retains
@@ -72,7 +71,7 @@ under that root too. Submit both seeds, then collect them:
 ```bash
 export REPO=/absolute/aweSOM VENV=/absolute/venv POOL=/absolute/pool-output/results
 export MPI_SITE=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site
-export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5 LATTICE=91x64
+export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5 LATTICE=100x100
 FITS=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/fits-mpi; mkdir -p "$FITS"
 for SEED in 42 43; do
   SEED=$SEED OUT=$FITS/$LATTICE-s$SEED sbatch "$REPO/examples/grmhd-bbh/scale-out/production-fit-mpi-gp.sbatch"
@@ -154,7 +153,7 @@ that a 1e10-row training run fits the requested wall time or memory.
 Use the trainer's supported checkpoint/resume workflow when required.
 
 ```bash
-for LATTICE in 91x64 48x34; do
+for LATTICE in 100x100; do
   for SEED in 42 43; do
     export LATTICE SEED OUT="$FIT_ROOT/${LATTICE}-s${SEED}"
     sbatch "$REPO/examples/grmhd-bbh/scale-out/production-fit-gp.sbatch" \
@@ -192,7 +191,7 @@ Confirm the chosen root's capacity before submission.
 ```bash
 export SCRATCH=/absolute/lagoon/job-directory/scratch
 # Leave THREADS unset to use the feature count, or export THREADS explicitly.
-for LATTICE in 91x64 48x34; do
+for LATTICE in 100x100; do
   for SEED in 42 43; do
     export FIT_OUT="$FIT_ROOT/${LATTICE}-s${SEED}"
     export OUT="$COMPLETE_ROOT/${LATTICE}-s${SEED}"
@@ -205,8 +204,8 @@ The direct equivalent for one fit is:
 
 ```bash
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
-  --statistics-only "$FIT_ROOT/91x64-s42" \
-  --out "$COMPLETE_ROOT/91x64-s42" \
+  --statistics-only "$FIT_ROOT/100x100-s42" \
+  --out "$COMPLETE_ROOT/100x100-s42" \
   --threads-per-seed 7 --scratch "$SCRATCH"
 ```
 
@@ -249,10 +248,10 @@ retained source nodes/distances is an operator step after validating and
 preserving the completed artifacts. Once deleted, that source cannot be used
 to retry statistics. No launcher or completion command deletes them.
 
-After all four statistics jobs finish, collect their completed outputs. A
+After both statistics jobs finish, collect their completed outputs. A
 still-deferred fit is rejected with a clear `run --statistics-only first` error.
 Collection copies artifacts and creates the frozen models and manifest, so its
-OUT needs another 160 GB for the four label vectors at this pool size.
+OUT needs another 80 GB for the two label vectors (4 bytes per row each) at this pool size.
 
 ```bash
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
@@ -260,8 +259,7 @@ OUT needs another 160 GB for the four label vectors at this pool size.
   --rows-per-snapshot "$ROWS_PER_SNAPSHOT" --rows-per-epoch "$ROWS_PER_EPOCH" \
   --epochs "$EPOCHS" --r-min 8 --reuse-pool "$POOL" \
   --out /absolute/fresh/collection-1e10 \
-  --collect "$COMPLETE_ROOT/91x64-s42/results" "$COMPLETE_ROOT/91x64-s43/results" \
-            "$COMPLETE_ROOT/48x34-s42/results" "$COMPLETE_ROOT/48x34-s43/results"
+  --collect "$COMPLETE_ROOT/100x100-s42/results" "$COMPLETE_ROOT/100x100-s43/results"
 ```
 
 A full driver run can also use `--statistics later`. It emits a deferred

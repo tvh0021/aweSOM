@@ -44,8 +44,11 @@ for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'BLIS
 import h5py
 import numpy as np
 
-NAMES = ['log_beta_inv', 'log_theta', 'log_chi_B', 'log_grad_ln_b2',
-         'asinh_div_v', 'bz_frac', 'pol_frac']
+# The production training set (user decision 2026-11-11, feature-selection study).
+NAMES = ['log_beta_inv', 'log_theta', 'log_rho', 'log_chi_B', 'log_speed']
+# The previous production set: its extractions, pools and models still train, collect and load.
+SEVEN_FEATURE_NAMES = ['log_beta_inv', 'log_theta', 'log_chi_B', 'log_grad_ln_b2',
+                       'asinh_div_v', 'bz_frac', 'pol_frac']
 UNAVAILABLE = {'status': 'not available', 'reason': 'not recorded by the extraction'}
 
 
@@ -175,10 +178,12 @@ def inspect(args):
         with h5py.File(path, 'r') as h:
             attrs = plain(dict(h.attrs))
             names = plain(h['names'][:])
-            expected = NAMES[:6] if args.allow_six_features else NAMES
-            if names != expected: raise ValueError(f'feature names differ: {path}: {names}')
+            expected = [SEVEN_FEATURE_NAMES[:6]] if args.allow_six_features else [NAMES, SEVEN_FEATURE_NAMES]
+            if names not in expected or (records and names != records[0]['names']):
+                raise ValueError(f'feature names differ: {path}: {names}')
             if attrs.get('pipeline') != 'v2': raise ValueError(f'pipeline differs: {path}')
-            for key in ['b2_min', 's_v']:
+            # s_v scales asinh_div_v; extractions without that column do not record it.
+            for key in ['b2_min'] + ['s_v']*('asinh_div_v' in names):
                 if not np.isfinite(attrs.get(key, np.nan)) or attrs[key] <= 0:
                     raise ValueError(f'missing or invalid {key}: {path}')
             n = len(h['features'])
@@ -1170,7 +1175,7 @@ def parser():
     p.add_argument('--anchor'); p.add_argument('--held-out',nargs='+')
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--rows-per-snapshot',type=int); p.add_argument('--rows-per-epoch',type=int,default=100_000_000)
-    p.add_argument('--lattices',nargs='+',default=['91x64','48x34']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43],help='two or more seeds per lattice; the sheet-candidate selection needs at least two')
+    p.add_argument('--lattices',nargs='+',default=['100x100']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43],help='two or more seeds per lattice; the sheet-candidate selection needs at least two')
     p.add_argument('--seed-workers',type=int,default=1,help='concurrent spawned seeds within each lattice')
     p.add_argument('--threads-per-seed',type=int,help='Numba threads for the entire worker, including export and verification')
     p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
@@ -1188,9 +1193,10 @@ def parser():
 # The approved production training settings (production_pool.sbatch defaults). A run that departs
 # from any of them is a rehearsal: its manifest is marked diagnostic_only with the reasons.
 # r_min=8 on every lattice and target_clusters=10 approved by the user on 2026-10-29.
+# One 100x100 lattice and the five NAMES features chosen by the user on 2026-11-11.
 # Two seeds per lattice (2026-10-29): the consensus sheet-candidate selection needs at least two,
 # and three are too slow. The post-clustering sheet thresholds were rejected and removed.
-APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['91x64','48x34'],
+APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['100x100'],
                 seeds=[42,43], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
                 r_max=None, r_min=8., bz_weight=2., pol_weight=2.,
                 tube_bz=.7, tube_beta=0.)
@@ -1200,7 +1206,8 @@ APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=
 # SHA256 of each approved training file. The iteration alone does not identify the data: another
 # extraction or simulation can reuse it.
 APPROVED_INPUT_SHA256 = {
-    # HHR_flux region7 extractions, seven features, pipeline v2; 98304 uses the 94208 thresholds
+    # HHR_flux region7 extractions, seven features, pipeline v2; 98304 uses the 94208 thresholds.
+    # Five-feature (NAMES) extractions of the approved snapshots do not exist yet.
     '94208': '24ed3e72e428fc6874d334e6227c2a4dee0a3423f7e3dc34d364be31567b5fc5',  # job 8004
     '98304': '8570765e401d3a1796c182d670d88d15cf9b6e63d2c6a18704c992df044ee680',  # job 8010
 }
@@ -1215,7 +1222,21 @@ def diagnostic_reasons(args, records=()):
               for r in records if APPROVED_INPUT_SHA256.get(r['snapshot'])!=r['sha256']]
     if args.allow_independent_thresholds: reasons.append('allow_independent_thresholds')
     if args.allow_six_features: reasons.append('allow_six_features')
+    names=records[0].get('names') if records else None
+    if names is not None and list(names)!=NAMES: reasons.append(f'feature_names={list(names)!r}, approved {NAMES!r}')
     return reasons
+
+
+def untrainable(names):
+    """Why fit() cannot yet train, select and freeze a model on these pool columns, or None.
+    Checked before any pool or fit work, so a run does not train for hours and then fail."""
+    from aweSOM.features_grmhd import FEATURE_NAMES, SIX_FEATURE_NAMES, SEVEN_FEATURE_NAMES as PORT_SEVEN
+    problems=[]
+    missing=[f for f,_ in SIGNATURE if f not in names]
+    if missing: problems.append(f'the sheet-candidate signature needs {missing}')
+    if tuple(names) not in (FEATURE_NAMES,SIX_FEATURE_NAMES,PORT_SEVEN):
+        problems.append('aweSOM.features_grmhd.FeatureThresholds has no frozen-feature thresholds for these columns')
+    return '; '.join(problems) or None
 
 
 def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True, output_per_row=16):
@@ -1398,6 +1419,9 @@ def main(argv=None):
         records,quota,disk,mismatches = inspect(args)
         if not args.pool_only:
             fit_disk_budget(args,quota*len(records),len(records[0]['names']),full_run=True)
+    if not args.pool_only:
+        problem = untrainable(records[0]['names'])
+        if problem: raise ValueError(f"cannot train on {records[0]['names']} yet: {problem}; --pool-only works")
     if comm is not None: comm.Barrier()  # every rank has checked that OUT is fresh
     if not rank: args.out.mkdir()
     os.environ.setdefault('NUMBA_CACHE_DIR',str(args.out/'numba-cache'))

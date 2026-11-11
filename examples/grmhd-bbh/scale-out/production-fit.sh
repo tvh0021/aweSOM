@@ -6,7 +6,7 @@ set -euo pipefail
 : "${POOL:?set the prepared results directory}"
 : "${INPUT_1:?set the first extraction}"
 : "${INPUT_2:?set the second extraction}"
-: "${LATTICE:?set 91x64 or 48x34}"
+: "${LATTICE:?set the lattice, e.g. 100x100}"
 : "${SEED:?set 42 or 43}"
 case "$OUT" in /*) ;; *) echo 'OUT must be absolute' >&2; exit 2;; esac
 [ ! -e "$OUT" ] && [ ! -L "$OUT" ] || { echo 'OUT exists' >&2; exit 2; }

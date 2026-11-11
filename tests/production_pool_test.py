@@ -20,7 +20,8 @@ spec2 = importlib.util.spec_from_file_location('build_model', ROOT/'examples/grm
 build = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(build)
 
 
-def inputs(tmp):
+def inputs(tmp,names=None):
+    names=pool.SEVEN_FEATURE_NAMES if names is None else names
     paths=[]
     for it in [1,2]:
         d=tmp/str(it); d.mkdir()
@@ -28,13 +29,14 @@ def inputs(tmp):
         (marker/'final.tsv').write_text('VALIDATED\t0\tnow\n')
         p=d/'features.h5'
         with h5py.File(p,'w') as h:
-            x=np.random.default_rng(it).normal(size=(120,7)).astype('f4')
-            h['features']=x; h['names']=np.array(pool.NAMES,dtype='S')
+            x=np.random.default_rng(it).normal(size=(120,len(names))).astype('f4')
+            h['features']=x; h['names']=np.array(names,dtype='S')
             h['level']=np.tile([5,6,6],40); h['weight']=np.ones(120)*2; h['weight_volume']=np.ones(120)*.2
             g=h.create_group('level_counts'); g['owned']=[80,160]; g['level']=[5,6]; g['kept']=[40,80]
-            h.attrs.update(iteration=it,pipeline='v2',b2_min=1.,s_v=1.,source='one-run',seed=0,
+            h.attrs.update(iteration=it,pipeline='v2',b2_min=1.,source='one-run',seed=0,
                            exponent=2.,accuracy=4,epsilon=.001,gamma_K=5/3,C_B_box=5,
                            direction_norm='Eulerian B dot B',horizon_mask=True,time=float(it))
+            if 'asinh_div_v' in names: h.attrs['s_v']=1.
         paths.append(p)
     return paths
 
@@ -171,6 +173,38 @@ def test_diagnostic_reasons(tmp_path,monkeypatch):
     assert len([r for r in reasons(records=other) if r.startswith('input')])==2
 
 
+def test_defaults_are_the_2026_11_11_decision(tmp_path):
+    a=pool.parser().parse_args(['--out',str(tmp_path/'o')])
+    assert a.lattices==pool.APPROVED['lattices']==['100x100']
+    assert pool.NAMES==['log_beta_inv','log_theta','log_rho','log_chi_B','log_speed']
+    a=pool.parser().parse_args(['--inputs','x.h5','--anchor','94208','--held-out','405504','--out',str(tmp_path/'o')])
+    names=lambda n: [r for r in pool.diagnostic_reasons(a,[dict(snapshot='94208',sha256='a',names=n)]) if r.startswith('feature_names')]
+    assert names(pool.NAMES)==[] and names(pool.SEVEN_FEATURE_NAMES)
+
+
+def test_five_feature_inputs_pool_but_do_not_train(tmp_path):
+    paths=inputs(tmp_path,pool.NAMES); a=args(tmp_path,paths)
+    records,_,_,mismatches=pool.inspect(a)  # no s_v: the five carry no asinh_div_v
+    assert records[0]['names']==pool.NAMES and not mismatches
+    assert 'log_grad_ln_b2' in pool.untrainable(pool.NAMES) and pool.untrainable(pool.SEVEN_FEATURE_NAMES) is None
+    # one feature set per pool
+    (tmp_path/'seven').mkdir(); seven=inputs(tmp_path/'seven')
+    a.inputs=[paths[0],seven[1]]
+    with pytest.raises(ValueError,match='feature names differ'): pool.inspect(a)
+    env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',NUMBA_CACHE_DIR=str(tmp_path/'cache'),PYTHONPATH=str(ROOT/'src'))
+    base=[sys.executable,str(ROOT/'examples/grmhd-bbh/production_pool.py'),'--inputs',*map(str,paths),
+          '--anchor','1','--held-out','3','--rows-per-snapshot','60','--rows-per-epoch','60',
+          '--min-free-gb','0','--threads-per-seed','1']
+    result=subprocess.run(base+['--out',str(tmp_path/'fit')],env=env,capture_output=True,text=True)
+    assert result.returncode and 'cannot train on' in result.stderr and not (tmp_path/'fit').exists()
+    result=subprocess.run(base+['--out',str(tmp_path/'pool'),'--pool-only'],env=env,capture_output=True,text=True)
+    assert result.returncode==0,result.stdout+result.stderr
+    with h5py.File(tmp_path/'pool/results/pool.h5') as h:
+        assert [n.decode() for n in h['names'][:]]==pool.NAMES and h['raw'].shape==(120,5)
+    weights=json.loads((tmp_path/'pool/results/pool-state.json').read_text())['scaling']['feature_weights']
+    assert weights==[1.]*5
+
+
 def test_rare_levels():
     data=np.arange(200)
     strata=[dict(snapshot=str(i//2), start=a, rows=n) for i,(a,n) in enumerate([(0,99),(99,1),(100,99),(199,1)])]
@@ -210,7 +244,7 @@ def test_export_statistics_exact(tmp_path):
     raw[::7,5]=0  # ties
     strata=[dict(snapshot='1',start=0,rows=400),dict(snapshot='2',start=400,rows=300),dict(snapshot='1',start=700,rows=303)]
     q,r,medians,d=pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'test',29,
-                                         names=pool.NAMES,strata=strata,n_clusters=4)
+                                         names=pool.SEVEN_FEATURE_NAMES,strata=strata,n_clusters=4)
     expected,reject=distance_quantiles_fast(nodes,distances,10)
     assert np.array_equal(q,expected,equal_nan=True)
     assert r==reject
@@ -226,7 +260,7 @@ def test_export_statistics_exact(tmp_path):
     one=np.r_[np.arange(400),np.arange(700,1003)]
     assert d['cluster_rows']['1'].tolist()==np.bincount(labels[one],minlength=4).tolist()
     assert d['cluster_share']['2'].sum()==pytest.approx(1)
-    med=np.median(raw.astype('f8'),axis=0); i=pool.NAMES.index
+    med=np.median(raw.astype('f8'),axis=0); i=pool.SEVEN_FEATURE_NAMES.index
     fav=(raw[:,i('log_chi_B')]>med[i('log_chi_B')])&(raw[:,i('log_grad_ln_b2')]>med[i('log_grad_ln_b2')])&(raw[:,i('log_beta_inv')]<med[i('log_beta_inv')])
     np.testing.assert_allclose(d['cluster_joint_favorable_fraction'][:3],[fav[labels==c].mean() for c in range(3)])
     assert np.array_equal(d['pooled_medians'],med)
@@ -492,8 +526,8 @@ def test_rank_effect_matches_brute_force():
 
 
 def effects_table(rows):
-    """K x 7 effects with (E_chi, E_grad, E_beta) per cluster in NAMES' columns."""
-    E = np.zeros((len(rows), 7)); i = pool.NAMES.index
+    """K x 7 effects with (E_chi, E_grad, E_beta) per cluster in SEVEN_FEATURE_NAMES' columns."""
+    E = np.zeros((len(rows), 7)); i = pool.SEVEN_FEATURE_NAMES.index
     for c, (chi, grad, beta) in enumerate(rows):
         E[c, [i('log_chi_B'), i('log_grad_ln_b2'), i('log_beta_inv')]] = chi, grad, beta
     return E
@@ -502,14 +536,14 @@ def effects_table(rows):
 def test_candidates_strict_signs_and_order():
     E = effects_table([(.2, .1, -.1), (0., .5, -.5), (.6, .1, -.1), (.4, 0., -.1),
                        (.5, .2, 0.), (.3, .3, -.3), (np.nan,)*3, (.3, .1, -.2)])
-    c = pool.sheet_candidates(E, pool.NAMES)
+    c = pool.sheet_candidates(E, pool.SEVEN_FEATURE_NAMES)
     # zeros never count; NaN (empty) fails; ordered by E_chi, ties by ID and recorded
     assert c['order'] == [2, 5, 7, 0]
     assert c['ties'] == [[5, 7]]
     assert [x['candidate'] for x in c['clusters']] == [True, False, True, False, False, True, False, True]
     assert c['clusters'][1]['E_log_chi_B_positive'] is False and c['clusters'][1]['E_log_grad_ln_b2_positive'] is True
     assert c['clusters'][4]['E_log_beta_inv_negative'] is False
-    assert pool.sheet_candidates(effects_table([(.1, .1, .1)]), pool.NAMES)['order'] == []
+    assert pool.sheet_candidates(effects_table([(.1, .1, .1)]), pool.SEVEN_FEATURE_NAMES)['order'] == []
 
 
 def labelling(*blocks):
@@ -608,7 +642,7 @@ def test_selection_exports_serialize():
     overlap = pool.seed_overlap(J)
     assert overlap['42-43']['jaccard'].shape == (4, 4) and overlap['42-43']['mutual_best'].dtype == bool
     E = effects_table([(.2, .1, -.1), (np.nan,)*3])
-    for x in (audit, overlap, pool.sheet_candidates(E, pool.NAMES), E):
+    for x in (audit, overlap, pool.sheet_candidates(E, pool.SEVEN_FEATURE_NAMES), E):
         line = pool.one_line(x)
         assert '\n' not in line and json.loads(line) is not None
     assert json.loads(pool.one_line(E))[1][0] is None
