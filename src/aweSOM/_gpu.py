@@ -68,10 +68,14 @@ def _pinned(cp, shape, dtype):
 class GpuSearcher:
     """Search fixed weights with bounded device memory and host staging.
 
-    Calls are synchronous and not thread-safe. Within a call, alternating
-    subchunks on two streams overlap H2D with the previous subchunk's search.
+    ``__call__`` is synchronous and not thread-safe: no work remains pending
+    when it returns, including on an error. ``submit`` queues a block and
+    returns while the last subchunks still run, so a caller such as
+    :func:`aweSOM.stream.predict_stream` keeps the device busy between its
+    chunks; ``wait`` completes the queued work. Subchunks alternate between
+    two streams, overlapping one subchunk's staging and copies with the
+    previous one's search, also across ``submit`` calls.
     ``overlap=False`` uses one slot for the probe's serial comparison.
-    No work remains pending when a call returns, including on an error.
     """
 
     def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=32,
@@ -105,11 +109,14 @@ class GpuSearcher:
         self.slots = []
         self.capacity = 0
         self.dtype = None
+        self.turn = 0  # next slot; persists across submits so the oldest slot is reused
+        self.token = 0
 
     def _allocate(self, rows, dtype):
         capacity = min(rows, self.chunk)
         if dtype == self.dtype and capacity <= self.capacity:
             return
+        self.wait()  # queued results live in the slots about to be replaced
         self.slots = []
         for stream in self.streams:
             owners, arrays = zip(*(_pinned(self.cp, shape, dt) for shape, dt in
@@ -117,8 +124,110 @@ class GpuSearcher:
                                    ((capacity,), np.int32), ((capacity,), np.float64)]))
             with stream:
                 device = [self.cp.empty(a.shape, a.dtype) for a in arrays]
-            self.slots.append(dict(owners=owners, host=arrays, device=device, pending=None))
-        self.capacity, self.dtype = capacity, dtype
+            self.slots.append(dict(owners=owners, host=arrays, device=device,
+                                   labels=None, pending=None))
+        self.capacity, self.dtype, self.turn = capacity, dtype, 0
+
+    def cluster_map(self, node_cluster, dtype=np.int32):
+        """Upload a node -> label table for :meth:`submit`.
+
+        ``dtype`` is the label dtype, at most 4 bytes; the caller chooses one
+        that holds every entry, so the gather equals ``node_cluster[idx]``.
+        """
+        table = np.asarray(node_cluster).astype(dtype).ravel()
+        if len(table) != self.nodes or table.dtype.itemsize > 4:
+            raise ValueError('need one label per node in a dtype of at most 4 bytes')
+        table = self.cp.asarray(table)
+        # The upload runs on the current stream; the searches run on
+        # non-blocking streams that do not order against it.
+        self.cp.cuda.get_current_stream().synchronize()
+        return table
+
+    def _finish(self, slot, stream):
+        stream.synchronize()
+        pending, slot['pending'] = slot['pending'], None
+        if pending is not None:
+            _, out, host, d2, host_d2 = pending
+            out[...] = host
+            if d2 is not None:
+                d2[...] = host_d2
+
+    def cancel(self):
+        """Wait for all device work and drop results that were not written yet."""
+        try:
+            for stream in self.streams:
+                stream.synchronize()
+        finally:
+            for slot in self.slots:
+                slot['pending'] = None
+
+    def wait(self, token=None):
+        """Write the results of every ``submit`` up to ``token`` (all when None)."""
+        try:
+            for slot, stream in zip(self.slots, self.streams):
+                pending = slot['pending']
+                if pending is not None and (token is None or pending[0] <= token):
+                    self._finish(slot, stream)
+        except BaseException:
+            self.cancel()
+            raise
+
+    def submit(self, block, out, d2=None, clusters=None):
+        """Queue the search of ``block`` and return a token for :meth:`wait`.
+
+        ``out`` receives int32 BMU indices or, with a ``clusters`` table from
+        :meth:`cluster_map`, ``clusters[idx]`` gathered on the device in the
+        table's dtype. ``d2`` (optional, float64) receives squared distances;
+        without it they are not copied off the device. Results are written on
+        the host by a later ``submit`` that reuses their slot, or by ``wait``;
+        ``block`` may be reused as soon as this returns. On an error all
+        queued work is dropped.
+        """
+        x = np.asarray(block)
+        if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
+            raise ValueError('block must be float32 or float64 with matching features')
+        if len(out) != len(x) or (d2 is not None and len(d2) != len(x)):
+            raise ValueError('outputs need one entry per row')
+        if not len(x):
+            return self.token
+        self.token += 1
+        cp = self.cp
+        kernel = self.kernels[int(x.dtype == np.float64)]
+        try:
+            self._allocate(len(x), x.dtype)
+            for start in range(0, len(x), self.capacity):
+                k = self.turn
+                self.turn = (k + 1) % len(self.slots)
+                slot, stream = self.slots[k], self.streams[k]
+                self._finish(slot, stream)
+                stop = min(start + self.capacity, len(x))
+                n = stop - start
+                host, dev = slot['host'], slot['device']
+                host[0][:n] = x[start:stop]
+                with stream:
+                    if clusters is not None and (slot['labels'] is None
+                                                 or slot['labels'].dtype != clusters.dtype):
+                        slot['labels'] = cp.empty(self.capacity, clusters.dtype)
+                    dev[0][:n].set(host[0][:n], stream=stream)
+                    kernel(((n + self.block - 1) // self.block,), (self.block,),
+                           (self.w, dev[0], dev[1], dev[2], np.int32(n),
+                            np.int32(self.nodes), np.int32(self.tile)),
+                           shared_mem=self.shared, stream=stream)
+                    if clusters is None:
+                        result, host_out = dev[1][:n], host[1][:n]
+                    else:
+                        result = slot['labels'][:n]
+                        cp.take(clusters, dev[1][:n], out=result)
+                        host_out = host[1].view(clusters.dtype)[:n]
+                    result.get(out=host_out, stream=stream, blocking=False)
+                    if d2 is not None:
+                        dev[2][:n].get(out=host[2][:n], stream=stream, blocking=False)
+                slot['pending'] = (self.token, out[start:stop], host_out,
+                                   None if d2 is None else d2[start:stop], host[2][:n])
+        except BaseException:
+            self.cancel()
+            raise
+        return self.token
 
     def __call__(self, block, idx, d2):
         x = np.asarray(block)
@@ -126,45 +235,9 @@ class GpuSearcher:
             raise ValueError('block must be float32 or float64 with matching features')
         if idx.shape != (len(x),) or idx.dtype != np.int32 or d2.shape != (len(x),) or d2.dtype != np.float64:
             raise ValueError('outputs must be int32 idx and float64 d2, one per row')
-        if not len(x):
-            return 0
-        self._allocate(len(x), x.dtype)
-
-        def finish(slot, stream):
-            stream.synchronize()
-            if slot['pending'] is not None:
-                start, stop = slot['pending']
-                n = stop - start
-                idx[start:stop] = slot['host'][1][:n]
-                d2[start:stop] = slot['host'][2][:n]
-                slot['pending'] = None
-
-        try:
-            for k, start in enumerate(range(0, len(x), self.capacity)):
-                slot = self.slots[k % len(self.slots)]
-                stream = self.streams[k % len(self.slots)]
-                finish(slot, stream)
-                stop = min(start + self.capacity, len(x))
-                n = stop - start
-                host, dev = slot['host'], slot['device']
-                host[0][:n] = x[start:stop]
-                with stream:
-                    dev[0][:n].set(host[0][:n], stream=stream)
-                    kernel = self.kernels[int(x.dtype == np.float64)]
-                    kernel(((n + self.block - 1) // self.block,), (self.block,),
-                           (self.w, dev[0], dev[1], dev[2], np.int32(n),
-                            np.int32(self.nodes), np.int32(self.tile)),
-                           shared_mem=self.shared, stream=stream)
-                    dev[1][:n].get(out=host[1][:n], stream=stream, blocking=False)
-                    dev[2][:n].get(out=host[2][:n], stream=stream, blocking=False)
-                slot['pending'] = start, stop
-            for slot, stream in zip(self.slots, self.streams):
-                finish(slot, stream)
-        finally:
-            for stream in self.streams:
-                stream.synchronize()
-            for slot in self.slots:
-                slot['pending'] = None
+        if len(x):
+            self.submit(x, idx, d2)
+            self.wait()
         return 0
 
 

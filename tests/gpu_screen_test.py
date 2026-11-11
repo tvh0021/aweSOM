@@ -170,3 +170,54 @@ def test_device_staging_and_training(cuda):
     cpu, _ = train_batch_stream(x, bmu='numba', **options)
     gpu, _ = train_batch_stream(x, bmu='cuda_screen', **options)
     np.testing.assert_array_equal(cpu.view(np.uint64), gpu.view(np.uint64))
+
+
+def _stream_case(n, nodes, seed=11):
+    rng = np.random.default_rng(seed)
+    w = rng.normal(size=(nodes, 7))
+    w[1] = w[0]  # duplicate nodes: tie rule
+    x = (w[rng.integers(nodes, size=n)] + rng.normal(size=(n, 7)) * 0.05).astype(np.float32)
+    x[:20] = w[0]  # certified and fallback rows in one block
+    x[20] = np.nan
+    return w, x
+
+
+def _stream_parity(backend, w, x, clusters, chunk, distance, out_dtype):
+    """Labels (and distances) of the queued CUDA path equal the float64 CPU reference bitwise."""
+    def run(kind):
+        out = None if out_dtype is None else np.zeros(len(x), out_dtype)
+        d = np.empty(len(x)) if distance else None
+        labels, stats = predict_stream(w, clusters, x, out=out, out_distance=d, chunk=chunk,
+                                       backend=kind, prefetch=True)
+        assert stats['rows'] == len(x)
+        return labels, d
+    expected, actual = run('numba'), run(backend)
+    assert actual[0].dtype == expected[0].dtype
+    np.testing.assert_array_equal(actual[0], expected[0])
+    if distance:
+        np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
+
+
+@pytest.mark.parametrize('backend', ['cuda', 'cuda_screen'])
+@pytest.mark.parametrize('distance', [False, True])
+@pytest.mark.parametrize('out_dtype', [None, np.uint8, np.int64])
+def test_device_predict_stream_subchunks(cuda, monkeypatch, backend, distance, out_dtype):
+    """Queued labelling with several subchunks per chunk and chunks not aligned to them."""
+    from aweSOM import _gpu
+
+    for module, name in [(_gpu, 'GpuSearcher'), (_gpu_screen, 'GpuScreenSearcher')]:
+        base = getattr(module, name)
+        small = type('Small' + name, (base,), {'__init__': lambda self, *a, base=base, **k:
+                     base.__init__(self, *a, chunk=1000, **k)})
+        monkeypatch.setattr(module, name, small)
+    w, x = _stream_case(10_007, 73)
+    _stream_parity(backend, w, x, np.arange(len(w)) % 7, 2500, distance, out_dtype)
+
+
+@pytest.mark.parametrize('backend', ['cuda', 'cuda_screen'])
+@pytest.mark.parametrize('distance', [False, True])
+def test_device_predict_stream_large(cuda, backend, distance):
+    """Default 2**20-row subchunks; chunks not aligned to them; N a multiple of neither."""
+    w, x = _stream_case(3 * 2**20 + 12_345, 1600)
+    _stream_parity(backend, w, x, np.arange(len(w)), 2**20 + 777, distance, None)
+    _stream_parity(backend, w, x, np.arange(len(w)) % 200, 2**20, distance, np.uint8)

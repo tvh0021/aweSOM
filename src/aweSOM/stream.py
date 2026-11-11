@@ -981,7 +981,7 @@ def predict_stream(
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
     pos = 0
-    gpu = _BMU(weights, backend, len(weights), 1) if backend in ("cuda", "cuda_screen") else None
+    gpu = _BMU(weights, backend, len(weights), 1).gpu if backend in ("cuda", "cuda_screen") else None
     if backend == "cuda_prune":
         from ._gpu_prune import PruneGpuSearcher, _hints
         gpu = PruneGpuSearcher(weights, lattice_shape, chunk=chunk)
@@ -989,32 +989,101 @@ def predict_stream(
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if gpu is not None and len(clusters) != len(weights):
         raise ValueError("node_cluster must have one entry per node")
-    for c in it:
-        t0 = time.perf_counter()
-        if gpu is not None:
-            idx, d2 = np.empty(len(c), np.int32), np.empty(len(c), np.float64)
-            if backend == "cuda_prune":
-                gpu(c, idx, d2, None if hint is None else hint[pos:pos + len(c)])
+    if hasattr(gpu, "submit"):
+        pos = _label_queued(gpu, clusters, it, out, out_distance, stats)
+    else:
+        buffers = None
+        for c in it:
+            t0 = time.perf_counter()
+            m = c.shape[0]
+            if gpu is not None:
+                # Synchronous searchers (cuda_prune and test stand-ins); buffers are reused.
+                if buffers is None or len(buffers[0]) < m:
+                    buffers = np.empty(m, np.int32), np.empty(m, np.float64), np.empty(m, np.int32)
+                idx, d2, labels = buffers[0][:m], buffers[1][:m], buffers[2][:m]
+                if backend == "cuda_prune":
+                    gpu(c, idx, d2, None if hint is None else hint[pos:pos + len(c)])
+                else:
+                    gpu(c, idx, d2)
+                np.take(clusters, idx, out=labels)
+                res = (labels, np.sqrt(d2, out=d2)) if out_distance is not None else labels
             else:
-                gpu(c, idx, d2)
-            labels = clusters[idx]
-            res = (labels, np.sqrt(d2)) if out_distance is not None else labels
-        else:
-            res = predict(weights, node_cluster, c, chunk=c.shape[0],
-                          return_distance=out_distance is not None, backend=backend,
-                          lattice_shape=lattice_shape)
-        t1 = time.perf_counter()
-        m = c.shape[0]
-        if out_distance is not None:
-            out[pos : pos + m], out_distance[pos : pos + m] = res
-        else:
-            out[pos : pos + m] = res
-        pos += m
-        stats["compute"] += t1 - t0
-        stats["write"] += time.perf_counter() - t1
+                res = predict(weights, node_cluster, c, chunk=c.shape[0],
+                              return_distance=out_distance is not None, backend=backend,
+                              lattice_shape=lattice_shape)
+            t1 = time.perf_counter()
+            if out_distance is not None:
+                out[pos : pos + m], out_distance[pos : pos + m] = res
+            else:
+                out[pos : pos + m] = res
+            pos += m
+            stats["compute"] += t1 - t0
+            stats["write"] += time.perf_counter() - t1
     stats["seconds"] = time.perf_counter() - t_start
     stats["rows"] = pos
     return out, stats
+
+
+def _label_dtype(out: Any, clusters: np.ndarray) -> np.dtype:
+    """Device label dtype: ``out``'s integer dtype if it holds every cluster id, else int32.
+
+    Writing ``clusters.astype(dt)[idx]`` then equals writing ``clusters[idx]``.
+    """
+    dt = np.dtype(getattr(out, "dtype", np.int32))
+    if dt.kind in "iu" and dt.itemsize <= 4 and np.array_equal(clusters.astype(dt), clusters):
+        return dt
+    return np.dtype(np.int32)
+
+
+def _label_queued(gpu, clusters, chunks, out, out_distance, stats) -> int:
+    """Label ``chunks`` on a CUDA searcher with ``submit``; return the row count.
+
+    Cluster ids are gathered on the device. Chunk ``k`` is written to ``out``
+    while chunk ``k + 1`` runs, so the device does not idle between chunks.
+    An in-memory ``out`` of the label dtype receives labels straight from the
+    pinned staging buffers; other outputs go through two reused host buffers.
+    Distances leave the device only when ``out_distance`` is given.
+    """
+    dt = _label_dtype(out, clusters)
+    table = gpu.cluster_map(clusters, dt)
+    direct = isinstance(out, np.ndarray) and out.dtype == dt
+    buffers = [None, None]
+    queued = None
+    pos = 0
+
+    def emit(token, start, m, labels, d2):
+        t0 = time.perf_counter()
+        gpu.wait(token)
+        t1 = time.perf_counter()
+        if labels is not None:
+            out[start : start + m] = labels
+        if d2 is not None:
+            out_distance[start : start + m] = np.sqrt(d2, out=d2)
+        stats["compute"] += t1 - t0
+        stats["write"] += time.perf_counter() - t1
+
+    try:
+        for k, c in enumerate(chunks):
+            t0 = time.perf_counter()
+            m = c.shape[0]
+            b = buffers[k % 2]
+            if b is None or b[0] < m:
+                b = buffers[k % 2] = (m, None if direct else np.empty(m, dt),
+                                      None if out_distance is None else np.empty(m, np.float64))
+            labels = None if direct else b[1][:m]
+            d2 = None if out_distance is None else b[2][:m]
+            token = gpu.submit(c, out[pos : pos + m] if direct else labels, d2, table)
+            stats["compute"] += time.perf_counter() - t0
+            if queued is not None:
+                emit(*queued)
+            queued = token, pos, m, labels, d2
+            pos += m
+        if queued is not None:
+            emit(*queued)
+    except BaseException:
+        gpu.cancel()
+        raise
+    return pos
 
 
 def stratified_sample(
