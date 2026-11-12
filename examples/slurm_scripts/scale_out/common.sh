@@ -5,11 +5,11 @@
 # LAUNCH (auto | srun-pmix | srun-pmi2 | srun-pmix_v4 | mpirun), MPIRUN (path, mpirun mode),
 # MPI_BUILD (probe only: wheel = binary mpi4py wheel, default; source = compile, needs a C compiler).
 
-# True on Tigris (cluster name, or the /shared/rc/ paths): GP-only surveys skip or refuse there
-# (no host-state reads on Tigris, user rule 2026-11-06).
+# True on RIT RC (Tigris or SPORC cluster name, or /shared/rc/ or /home/thccrg/ paths):
+# GP-only surveys skip or refuse there (user rule 2026-11-06, extended to SPORC 2026-11-12).
 on_tigris() {
-  case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD|${SLURM_SUBMIT_DIR:-}|${KIT:-}|${OUT:-}" in
-    tigris\|*|*/shared/rc/*) return 0;;
+  case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD/|${SLURM_SUBMIT_DIR:-}/|${KIT:-}/|${OUT:-}/" in
+    tigris\|*|sporc\|*|*/shared/rc/*|*/home/thccrg/*) return 0;;
   esac
   return 1
 }
@@ -97,17 +97,17 @@ kit_finish() {
 # Light environment probe on every node of the job (brief item e, without the I/O test).
 env_probe() {
   local d="$OUT/probe"
-  if on_tigris; then echo "env probe skipped: GP-only survey, not run on Tigris"; return 0; fi
-  { sinfo -Nel -n "$SLURM_JOB_NODELIST"; echo; sinfo -p "$SLURM_JOB_PARTITION" -o '%P %D %c %m %l %N'; } > "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
+  if on_tigris; then echo "env probe skipped: GP-only survey, not run on RIT RC"; return 0; fi
+  { sinfo -Nel -n "$SLURM_JOB_NODELIST"; echo; sinfo -p "$SLURM_JOB_PARTITION" -o '%P %D %c %m %l %N'; } > "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on RIT RC
   # Cluster-wide: every partition (availability, nodes, cpus, mem, limit, gres) and every node
   # (gres and features), to see whether any partition has GPUs and how big gp-default is.
-  { echo; echo '== all partitions'; sinfo -a -o '%P %a %D %c %m %l %G %N';  # sysinfo-ok: GP-only survey, skipped on Tigris
-    echo; echo '== all nodes'; sinfo -a -N -o '%N %P %c %m %G %f'; } >> "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
-  { module -t avail 2>&1 | grep -iE 'mpi|cuda|pmix|ucx' ; } > "$d/modules.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
-  srun --mpi=list > "$d/srun-mpi-list.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on Tigris
+  { echo; echo '== all partitions'; sinfo -a -o '%P %a %D %c %m %l %G %N';  # sysinfo-ok: GP-only survey, skipped on RIT RC
+    echo; echo '== all nodes'; sinfo -a -N -o '%N %P %c %m %G %f'; } >> "$d/sinfo.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on RIT RC
+  { module -t avail 2>&1 | grep -iE 'mpi|cuda|pmix|ucx' ; } > "$d/modules.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on RIT RC
+  srun --mpi=list > "$d/srun-mpi-list.txt" 2>&1 || true  # sysinfo-ok: GP-only survey, skipped on RIT RC
   srun --nodes="${#NODES[@]}" --ntasks="${#NODES[@]}" --ntasks-per-node=1 --cpus-per-task=1 --mem=4G \
-    bash -c 'h=${SLURMD_NODENAME:-local}; h=${h%%.*}; { echo "== $h"; lscpu; echo; free -g; echo; df -h "$0" /tmp "$1"; echo;  # sysinfo-ok: GP-only survey, skipped on Tigris
-             numactl -H 2>&1 | head -20; echo; ulimit -a; } > "$2/node-$h.txt" 2>&1;  # sysinfo-ok: GP-only survey, skipped on Tigris
+    bash -c 'h=${SLURMD_NODENAME:-local}; h=${h%%.*}; { echo "== $h"; lscpu; echo; free -g; echo; df -h "$0" /tmp "$1"; echo;  # sysinfo-ok: GP-only survey, skipped on RIT RC
+             numactl -H 2>&1 | head -20; echo; ulimit -a; } > "$2/node-$h.txt" 2>&1;  # sysinfo-ok: GP-only survey, skipped on RIT RC
              "$3" "$4/probe.py" env --json "$2/env-$h.json" > /dev/null 2>&1 || echo "env probe failed on $h"' \
     "$LOCAL_SCRATCH" "$OUT" "$d" "$PY" "$KIT"
   $PY -c "import mpi4py, sys; print('mpi4py', mpi4py.__version__, mpi4py.__file__)" > "$d/mpi4py-import.txt" 2>&1 \
@@ -320,8 +320,8 @@ mpi_install() {
   local log="$OUT/probe/mpi-install.txt" vfile="$OUT/probe/mpi4py-version.txt" mod ver
   local wheels="$KIT/wheels" build=${MPI_BUILD:-wheel} rc=0
   case $build in wheel|source) ;; *) echo "MPI_BUILD must be wheel or source, not $build" | tee "$log"; return 2;; esac
-  if on_tigris; then echo "mpi_install is GP-only (module survey); refusing on Tigris" | tee "$log"; return 2; fi
-  mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)  # sysinfo-ok: GP-only, refuses on Tigris
+  if on_tigris; then echo "mpi_install is GP-only (module survey); refusing on RIT RC" | tee "$log"; return 2; fi
+  mod=$(module -t avail 2>&1 | sed 's/(.*)//; s/ *$//' | grep -iE '^(openmpi|mpi/openmpi)[^ ]*$' | sort -V | tail -1)  # sysinfo-ok: GP-only, refuses on RIT RC
   ver=${mod##*/}
   # Skip only if MPI itself loads and names the module's Open MPI version (kit_init has
   # already loaded MPI_SITE/MODULE and exported MPI4PY_LIBMPI); a bare `import mpi4py`
