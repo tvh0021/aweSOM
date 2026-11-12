@@ -292,3 +292,50 @@ def test_device_row_blocked(cuda, case, features):
             idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
             search(points, idx, d2)
             _same((idx, d2), expected)
+
+
+OVERFLOW = [  # an overflowed float32 runner-up must not certify (reviewer inputs)
+    (np.array([[18373320559154.32, -19118858046266.434], [14490963125571.676, -14263481110883.94]]),
+     np.array([[1.3043817436596711e19, 1.3043817436596711e19]])),
+    (np.array([[1e10, 0, -1e9], [-1e10, 0, 1e9]]),
+     np.array([[np.float32(2**64 - 2**41), np.float32(np.sqrt(3) * 2**52),
+                np.float32(np.sqrt(0.5) * 2**52)]], np.float64)),
+]
+
+
+@pytest.mark.parametrize('k', range(len(OVERFLOW)))
+@pytest.mark.parametrize('dtype', [np.float32, np.float64])
+def test_overflowed_runner_up(k, dtype):
+    w, x = OVERFLOW[k]
+    x = x.astype(dtype)
+    expected = best_match_nodes(w, x)
+    for actual in (best_match_nodes_screen(w, x, return_fallbacks=True),
+                   _gpu_screen._cuda_screen_reference(w, x, return_fallbacks=True)):
+        _same(actual, expected)
+        assert actual[2] == 1
+
+
+@pytest.mark.parametrize('k', range(len(OVERFLOW)))
+def test_device_overflowed_runner_up(cuda, k):
+    w, x = OVERFLOW[k]
+    for dtype in (np.float32, np.float64):
+        _same(_gpu_screen.best_match_nodes_cuda_screen(w, x.astype(dtype)),
+              best_match_nodes(w, x.astype(dtype)))
+
+
+def test_fma32_overflow_midpoint():
+    """Exact a*b + c just inside or outside +-(2**128 - 2**103), the float32 overflow midpoint."""
+    f32 = np.float32
+    a, b = f32(18631), f32(1801 * 2.0**103)  # a * b = 2**128 - 2**103 exactly
+    tiny = f32(2**-149)
+    big = np.finfo(np.float32).max
+    assert _gpu_screen._fma32(a, b, -tiny) == big
+    assert _gpu_screen._fma32(-a, b, tiny) == -big
+    assert _gpu_screen._fma32(a, b, tiny) == np.inf
+    assert _gpu_screen._fma32(-a, b, -tiny) == -np.inf
+
+
+def test_reference_unsafe_without_overflow():
+    w, x = _case('unsafe', 7, np.float64)
+    with np.errstate(over='raise'):
+        _same(_gpu_screen._cuda_screen_reference(w, x), best_match_nodes(w, x))

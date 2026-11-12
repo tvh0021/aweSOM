@@ -3,14 +3,14 @@
 The kernel text from :func:`aweSOM._gpu_screen._source` is compiled as C++
 with a small prelude: CUDA intrinsics map to IEEE float and double
 operations (``__fmaf_rn`` to ``std::fmaf``, correctly rounded), barriers to
-``std::barrier``, and shared memory to one buffer per block, filled with NaN
-bytes before each block. Contraction is off, as with ``--fmad=false``. This
+``std::barrier``, and shared memory to one 16-byte aligned buffer of exactly
+the launch's ``shared_mem`` bytes per block, filled with NaN bytes before
+each block and followed by a guard that must stay untouched. Contraction is off, as with ``--fmad=false``. This
 checks the row blocking, tiling, float4 staging, barriers and fallback on
 real kernel code without a GPU: labels and distances must equal the float64
 reference bitwise, and the number of certified rows must equal the CPU
 emulation's. Skipped without ``clang++`` or ``g++``.
 """
-import re
 import shutil
 import subprocess
 
@@ -33,7 +33,7 @@ PRELUDE = r'''
 #include <cstring>
 #include <thread>
 #include <vector>
-struct float4 { float x, y, z, w; };
+struct alignas(16) float4 { float x, y, z, w; };
 struct Dim { unsigned x; };
 static thread_local Dim threadIdx;
 static Dim blockIdx, blockDim;
@@ -41,8 +41,6 @@ static std::barrier<>* g_bar;
 static std::atomic<int> g_or{0};
 static std::atomic<long> g_certified{0};
 static float4* g_smem;
-static int g_safe;
-static double g_wmax;
 #define __device__
 #define __global__
 static inline void __syncthreads() { g_bar->arrive_and_wait(); }
@@ -65,6 +63,8 @@ static inline double __dsqrt_rn(double a) { return std::sqrt(a); }
 static inline float __double2float_rn(double a) { return (float)a; }
 static inline double __longlong_as_double(long long v) { double d; std::memcpy(&d, &v, 8); return d; }
 using std::min;
+using std::fminf;
+using std::fmaxf;
 '''
 
 DRIVER = r'''
@@ -82,18 +82,21 @@ int main(int argc, char** argv) {
     int n = std::atoi(argv[1]), nodes = std::atoi(argv[2]), is64 = std::atoi(argv[3]);
     int block = std::atoi(argv[4]), tile = std::atoi(argv[5]), rows_per_thread = std::atoi(argv[6]);
     long shared = std::atol(argv[7]);
-    g_safe = std::atoi(argv[8]);
-    g_wmax = std::strtod(argv[9], nullptr);
+    int safe = std::atoi(argv[8]);
+    double wmax = std::strtod(argv[9], nullptr);
     std::vector<char> w = load(argv[10]), x = load(argv[11]);
     std::vector<int> idx(n, -1);
     std::vector<double> d2(n, -1.0);
-    std::vector<float4> smem(shared / 16 + 1);
+    if (shared % 16) std::abort();
+    const int guard = 64;  // float4s after the launch's shared memory
+    std::vector<float4> smem(shared / 16 + guard);
     g_smem = smem.data();
     blockDim.x = block;
     int per = block * rows_per_thread;
     for (int b = 0; b < (n + per - 1) / per; ++b) {
         blockIdx.x = b;
-        std::memset(smem.data(), 0xff, smem.size() * sizeof(float4));  // NaN
+        std::memset(smem.data(), 0xff, shared);  // NaN
+        std::memset(smem.data() + shared / 16, 0x5a, guard * sizeof(float4));
         std::barrier<> bar(block);
         g_bar = &bar;
         std::vector<std::thread> threads;
@@ -102,12 +105,15 @@ int main(int argc, char** argv) {
                 threadIdx.x = t;
                 if (is64)
                     bmu_screen_f64((const double*)w.data(), (const double*)x.data(), idx.data(),
-                                   d2.data(), n, nodes, tile);
+                                   d2.data(), n, nodes, tile, wmax, safe);
                 else
                     bmu_screen_f32((const double*)w.data(), (const float*)x.data(), idx.data(),
-                                   d2.data(), n, nodes, tile);
+                                   d2.data(), n, nodes, tile, wmax, safe);
             });
         for (auto& t : threads) t.join();
+        const unsigned char* g = (const unsigned char*)(smem.data() + shared / 16);
+        for (size_t k = 0; k < guard * sizeof(float4); ++k)
+            if (g[k] != 0x5a) { std::fprintf(stderr, "shared memory overrun\n"); return 3; }
     }
     FILE* f = std::fopen(argv[12], "wb");
     std::fwrite(idx.data(), sizeof(int), n, f);
@@ -120,11 +126,9 @@ int main(int argc, char** argv) {
 
 
 def host_source(features):
-    source = _gpu_screen._source(features, True, 1.0)
-    source = re.sub(r'#define AWESOM_SAFE .*', '#define AWESOM_SAFE g_safe', source)
-    source = re.sub(r'#define AWESOM_WMAX .*', '#define AWESOM_WMAX g_wmax', source)
+    source = _gpu_screen._source(features)
     for old, new in [('extern __shared__ float4 smem[];', 'float4* smem = g_smem;'),
-                     ('certified = lo2 > hi1;', 'certified = lo2 > hi1; if (certified) ++g_certified;')]:
+                     ('// finite s2: see the docstring', 'if (certified) ++g_certified;')]:
         assert source.count(old) >= 1, old
         source = source.replace(old, new)
     return PRELUDE + source + DRIVER
@@ -154,7 +158,7 @@ def run(binaries, w, x, block, tile):
     safe, wmax = _gpu_screen._screen_parameters(w)
     np.ascontiguousarray(w, np.float64).tofile(root / 'w.bin')
     np.ascontiguousarray(x).tofile(root / 'x.bin')
-    shared = tile * max(8 * features, 4 * pad)
+    shared = tile * max(8 * features, 4 * pad)  # as GpuScreenSearcher; checked there too
     out = subprocess.run([str(build(features)), str(len(x)), str(len(w)), str(int(x.dtype == np.float64)),
                           str(block), str(tile), str(rows_per_thread), str(shared), str(int(safe)),
                           repr(wmax), str(root / 'w.bin'), str(root / 'x.bin'), str(root / 'out.bin')],
@@ -167,7 +171,7 @@ def run(binaries, w, x, block, tile):
 
 def case(name, features, n, dtype, seed=5):
     rng = np.random.default_rng(seed)
-    w = rng.normal(size=(73, features))
+    w = rng.normal(size=(301 if name == 'random' else 73, features))  # random spans three tiles
     x = rng.normal(size=(n, features))
     if name == 'smooth':  # trained-like lattice, rows near nodes: mostly certified
         a, b = np.meshgrid(np.linspace(-1, 1, 9), np.linspace(-1, 1, 8))
@@ -191,7 +195,7 @@ def case(name, features, n, dtype, seed=5):
     return w, x.astype(dtype)
 
 
-@pytest.mark.parametrize('features', [1, 3, 7, 8, 10, 13, 32])
+@pytest.mark.parametrize('features', [1, 3, 7, 8, 10, 13, 20, 21, 32])
 @pytest.mark.parametrize('name', ['random', 'smooth', 'mixed', 'large', 'unsafe'])
 def test_kernel_source_on_host(binaries, features, name):
     for dtype, n, block, tile in [(np.float32, 301, 32, 128), (np.float64, 157, 8, 16)]:
@@ -210,15 +214,36 @@ def test_kernel_source_on_host(binaries, features, name):
 
 def test_source_contract():
     for features in [1, 7, 10, 32]:
-        source = _gpu_screen._source(features, True, 2.5)
+        source = _gpu_screen._source(features)
         rows, pad = _gpu_screen._layout(features)
         assert '#include' not in source
         assert '__fmaf_rn(d, d, acc)' in source
         assert f'#define AWESOM_R {rows}\n' in source and f'#define AWESOM_P {pad}\n' in source
         assert pad % 4 == 0 and features <= pad < features + 4
-        assert '#define AWESOM_WMAX 2.50000000000000000e+00' in source
+        assert 'AWESOM_WMAX' not in source and 'AWESOM_SAFE' not in source  # runtime arguments
+        assert 'lo2 > hi1 && s2[r] < (float)inf' in source
         # every row of a block is visited exactly once
         block = 8
         covered = sorted(b * block * rows + t + r * block
                          for b in range(3) for t in range(block) for r in range(rows))
         assert covered == list(range(3 * block * rows))
+
+
+OVERFLOW = {  # the runner-up's float32 value overflows and the winner's does not (reviewer inputs)
+    'fma': (np.array([[18373320559154.32, -19118858046266.434], [14490963125571.676, -14263481110883.94]]),
+            np.array([[1.3043817436596711e19, 1.3043817436596711e19]])),
+    'both': (np.array([[1e10, 0, -1e9], [-1e10, 0, 1e9]]),
+             np.array([[np.float32(2**64 - 2**41), np.float32(np.sqrt(3) * 2**52),
+                        np.float32(np.sqrt(0.5) * 2**52)]], np.float64)),
+}
+
+
+@pytest.mark.parametrize('name', sorted(OVERFLOW))
+def test_overflowed_runner_up_falls_back(binaries, name):
+    w, x = OVERFLOW[name]
+    for dtype in (np.float32, np.float64):
+        idx, d2, certified = run(binaries, w, x.astype(dtype), 32, 128)
+        ri, rd = best_match_nodes(w, x.astype(dtype))
+        np.testing.assert_array_equal(idx, ri)
+        np.testing.assert_array_equal(d2.view(np.uint64), rd.view(np.uint64))
+        assert certified == 0

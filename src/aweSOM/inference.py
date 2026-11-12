@@ -231,7 +231,9 @@ def _screen_kernel(
             e = 2.0 * _U32 * (wmax + np.sqrt(xn2)) * 1.01 + 1e-18
             lo2 = np.sqrt(np.float64(s2[p]) / (1.0 + g)) - e
             hi1 = (np.sqrt(np.float64(s1[p]) / (1.0 - g)) + e) * (1.0 + 1e-12)
-            if lo2 > hi1:  # False for NaN/inf/overflow and near-ties
+            # False for NaN/inf and near-ties. An overflowed runner-up s2 bounds
+            # nothing (lo2 = inf), so it must be finite.
+            if lo2 > hi1 and s2[p] < np.inf:
                 j = j1[p]
                 acc64 = 0.0
                 for f in range(F):

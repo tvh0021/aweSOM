@@ -1,4 +1,5 @@
 """CPU-only CUDA plumbing tests, including the real staging code."""
+import re
 import subprocess
 import sys
 import types
@@ -83,22 +84,21 @@ class Stream:
         self.syncs += 1
 
 
-@pytest.mark.parametrize('screen', [False, True])
-@pytest.mark.parametrize('overlap', [True, False])
-def test_staging(monkeypatch, overlap, screen):
-    allocations, sources = [], []
-
+def _install(monkeypatch, allocations, launches):
+    """Fake CuPy: kernels run the float64 reference; launches record their geometry."""
     def pinned(n):
         allocations.append(n)
         return bytearray(n)
 
     def raw(source, name, options):
-        sources.append(source)
         assert '--fmad=false' in options
         assert '#include' not in source
         assert '__longlong_as_double(0x7ff0000000000000LL)' in source
-        def launch(grid, block, args, **kwargs):
-            w, x, idx, d2, n, nodes, tile = args
+        macros = dict(re.findall(r'#define (AWESOM_\w+) (\d+)\n', source))
+        def launch(grid, block, args, shared_mem, stream):
+            w, x, idx, d2, n, nodes, tile = args[:7]
+            launches.append(dict(grid=grid, block=block, shared=shared_mem, n=int(n),
+                                 tile=int(tile), extra=args[7:], macros=macros))
             _bmu_kernel(w.a, x.a[:n], idx.a[:n], d2.a[:n])
         return launch
 
@@ -113,6 +113,51 @@ def test_staging(monkeypatch, overlap, screen):
     monkeypatch.setitem(sys.modules, 'cupy', cp)
     _gpu._kernels.cache_clear()
     _gpu_screen._kernels.cache_clear()
+
+
+@pytest.mark.parametrize('screen', [False, True])
+@pytest.mark.parametrize('features', [1, 7, 12, 13, 20, 21, 32])
+def test_launch_geometry(monkeypatch, screen, features):
+    """Grid, block, shared memory and extra arguments match the kernel source's macros."""
+    allocations, launches = [], []
+    _install(monkeypatch, allocations, launches)
+    rng = np.random.default_rng(1)
+    w = rng.normal(size=(300, features))
+    cls = _gpu_screen.GpuScreenSearcher if screen else _gpu.GpuSearcher
+    for block in (32, 128):
+        search = cls(w, 300, 1, chunk=1000, block=block)
+        x = rng.normal(size=(2777, features))
+        idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+        launches.clear()
+        search(x, idx, d2)
+        assert sorted(launch['n'] for launch in launches) == [777, 1000, 1000]
+        for launch in launches:
+            macros = launch['macros']
+            rows = int(macros.get('AWESOM_R', 1))
+            per = launch['block'][0] * rows
+            assert launch['block'] == (block,)
+            assert (launch['grid'][0] - 1) * per < launch['n'] <= launch['grid'][0] * per
+            assert int(macros['AWESOM_F']) == features
+            tile = launch['tile']
+            if screen:
+                pad = int(macros['AWESOM_P'])
+                assert pad % 4 == 0 and pad >= features
+                assert launch['shared'] == tile * max(8 * features, 4 * pad)
+                safe, wmax = _gpu_screen._screen_parameters(w)
+                assert launch['extra'] == (np.float64(wmax), np.int32(safe))
+                assert launch['extra'][0].dtype == np.float64 and launch['extra'][1].dtype == np.int32
+            else:
+                assert launch['shared'] == tile * features * 8
+                assert launch['extra'] == ()
+    _gpu._kernels.cache_clear()
+    _gpu_screen._kernels.cache_clear()
+
+
+@pytest.mark.parametrize('screen', [False, True])
+@pytest.mark.parametrize('overlap', [True, False])
+def test_staging(monkeypatch, overlap, screen):
+    allocations, launches = [], []
+    _install(monkeypatch, allocations, launches)
     w = np.arange(28.).reshape(7, 4)
     cls = _gpu_screen.GpuScreenSearcher if screen else _gpu.GpuSearcher
     search = cls(w, 7, 1, chunk=3, overlap=overlap)

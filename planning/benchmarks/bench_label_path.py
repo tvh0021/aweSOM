@@ -76,11 +76,11 @@ def main():
             per = search.block * search.rows_per_thread
             kernel(((n + per - 1) // per,), (search.block,),
                    (search.w, x_dev[start:start + n], i_dev, d_dev, np.int32(n),
-                    np.int32(search.nodes), np.int32(search.tile)),
+                    np.int32(search.nodes), np.int32(search.tile)) + search.args,
                    shared_mem=search.shared, stream=stream)
 
         cp.cuda.get_current_stream().synchronize()
-        launch(0, sub)
+        launch(0, min(sub, pool_rows))  # warm-up within the pool
         stream.synchronize()
         begin, end = cp.cuda.Event(), cp.cuda.Event()
         begin.record(stream)

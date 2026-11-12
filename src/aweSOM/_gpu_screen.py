@@ -26,6 +26,12 @@ u = 2**-24 and S = sum_f (w32_jf - x32_f)**2 computed exactly:
   ``1e-18`` term of ``e``.
 * ``e = 2.02u(wmax + |x|)`` bounds the move from (w, x) to (w32, x32), as
   before: the input rounding is unchanged.
+* The bound needs a finite runner-up ``s2``. A float32 value that overflows
+  to inf has an exact value of at least 2**128 - 2**103 > FLT_MAX at that
+  step, and the steps only add non-negative terms, so a node whose value
+  overflowed lies above any finite ``s2`` and the bound covers it. An
+  overflowed ``s2`` bounds nothing (``lo2`` would be inf and certify any
+  ``s1``), so every screen certifies only when ``s2`` is finite.
 
 Hence the certification test, ``g = 1.01 (F+2) u`` and ``e``, are unchanged,
 and a certified row's node is the float64 reference's node. Certified rows
@@ -74,7 +80,7 @@ def _fma32(a, b, c):
         return r
     v = s - p
     t = (p - (s - v)) + (cc - v)
-    rr = np.float64(r) if np.isfinite(r) else 2.0**128
+    rr = np.float64(r) if np.isfinite(r) else np.copysign(2.0**128, s)
     if t == 0.0 or rr == s:
         return r
     o = np.nextafter(r, np.float32(np.inf) if s > rr else np.float32(-np.inf))
@@ -117,7 +123,7 @@ def _fma_screen_kernel(w, w32, wmax, safe, data, out_idx, out_dist2):
             e = 2.0 * _U32 * (wmax + np.sqrt(xn2)) * 1.01 + 1e-18
             lo2 = np.sqrt(np.float64(s2) / (1.0 + g)) - e
             hi1 = (np.sqrt(np.float64(s1) / (1.0 - g)) + e) * (1.0 + 1e-12)
-            certified = lo2 > hi1
+            certified = lo2 > hi1 and s2 < inf32
         if certified:
             acc64 = 0.0
             for f in range(F):
@@ -157,7 +163,7 @@ def _cuda_screen_reference(weights, data, chunk=2**20, return_fallbacks=False):
         raise ValueError('chunk must be positive')
     safe, wmax = _screen_parameters(w)
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x), np.float64)
-    w32 = w.astype(np.float32)
+    w32 = w.astype(np.float32) if safe else np.zeros(w.shape, np.float32)  # unused when unsafe
     fallbacks = 0
     for start in range(0, len(x), chunk):
         stop = min(start + chunk, len(x))
@@ -166,11 +172,10 @@ def _cuda_screen_reference(weights, data, chunk=2**20, return_fallbacks=False):
     return (idx, d2, fallbacks) if return_fallbacks else (idx, d2)
 
 
-def _source(features, safe, wmax):
+def _source(features):
     rows, pad = _layout(features)
-    return ('#define AWESOM_F %d\n#define AWESOM_SAFE %d\n#define AWESOM_WMAX %.17e\n'
-            '#define AWESOM_R %d\n#define AWESOM_P %d\n'
-            % (features, safe, wmax, rows, pad)) + r'''
+    return ('#define AWESOM_F %d\n#define AWESOM_R %d\n#define AWESOM_P %d\n'
+            % (features, rows, pad)) + r'''
     // Thread t of block b handles rows b * blockDim.x * AWESOM_R + t + r * blockDim.x,
     // r < AWESOM_R, so one shared-memory read of a node serves AWESOM_R rows.
     __device__ double exact(const double* w, const double* row) {
@@ -184,7 +189,8 @@ def _source(features, safe, wmax):
     }
     template <typename T>
     __device__ void search(const double* w, const T* x, int* idx, double* d2,
-                          int rows, int nodes, int tile, float4* smem) {
+                          int rows, int nodes, int tile, double wmax, int safe,
+                          float4* smem) {
         double* sw = (double*)smem;
         float* sf = (float*)smem;
         const int first = blockIdx.x * blockDim.x * AWESOM_R + threadIdx.x;
@@ -202,7 +208,7 @@ def _source(features, safe, wmax):
             s2[r] = (float)inf;
             j1[r] = 0;
         }
-        if (AWESOM_SAFE) {
+        if (safe) {
             for (int base = 0; base < nodes; base += tile) {
                 const int count = min(tile, nodes - base);
                 // float32 node weights, stride AWESOM_P, zero padding.
@@ -252,7 +258,7 @@ def _source(features, safe, wmax):
                 for (int f = 0; f < AWESOM_F; ++f) row[f] = (double)x[p * AWESOM_F + f];
             }
             bool certified = false;
-            if (p < rows && AWESOM_SAFE) {
+            if (p < rows && safe) {
                 double xn2 = 0.0;
                 #pragma unroll
                 for (int f = 0; f < AWESOM_F; ++f)
@@ -260,10 +266,10 @@ def _source(features, safe, wmax):
                 // Bound: see the module docstring of aweSOM._gpu_screen.
                 const double u = 5.9604644775390625e-8;
                 double g = (AWESOM_F + 2) * u * 1.01;
-                double e = 2.0 * u * (AWESOM_WMAX + __dsqrt_rn(xn2)) * 1.01 + 1e-18;
+                double e = 2.0 * u * (wmax + __dsqrt_rn(xn2)) * 1.01 + 1e-18;
                 double lo2 = __dsqrt_rn(__ddiv_rn((double)s2[r], 1.0 + g)) - e;
                 double hi1 = (__dsqrt_rn(__ddiv_rn((double)s1[r], 1.0 - g)) + e) * (1.0 + 1e-12);
-                certified = lo2 > hi1;
+                certified = lo2 > hi1 && s2[r] < (float)inf;  // finite s2: see the docstring
             }
             double best = inf;
             int best_i = 0;
@@ -292,24 +298,24 @@ def _source(features, safe, wmax):
         }
     }
     extern "C" __global__ void bmu_screen_f32(const double* w, const float* x,
-        int* idx, double* d2, int rows, int nodes, int tile) {
+        int* idx, double* d2, int rows, int nodes, int tile, double wmax, int safe) {
         extern __shared__ float4 smem[];
-        search(w, x, idx, d2, rows, nodes, tile, smem);
+        search(w, x, idx, d2, rows, nodes, tile, wmax, safe, smem);
     }
     extern "C" __global__ void bmu_screen_f64(const double* w, const double* x,
-        int* idx, double* d2, int rows, int nodes, int tile) {
+        int* idx, double* d2, int rows, int nodes, int tile, double wmax, int safe) {
         extern __shared__ float4 smem[];
-        search(w, x, idx, d2, rows, nodes, tile, smem);
+        search(w, x, idx, d2, rows, nodes, tile, wmax, safe, smem);
     }
     '''
 
 
 @lru_cache(maxsize=32)
-def _kernels(features, safe, wmax):
+def _kernels(features):
     import cupy as cp
 
     # --fmad=false keeps the float64 code unfused; the screen fuses explicitly.
-    source = _source(features, safe, wmax)
+    source = _source(features)
     return tuple(cp.RawKernel(source, name, options=('--fmad=false', '--ftz=false', '--std=c++11'))
                  for name in ('bmu_screen_f32', 'bmu_screen_f64'))
 
@@ -332,7 +338,9 @@ class GpuScreenSearcher(GpuSearcher):
         props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
         if self.shared > props['sharedMemPerBlock']:
             raise ValueError('tile exceeds the device shared memory')
-        self.kernels = _kernels(self.features, *_screen_parameters(w))
+        safe, wmax = _screen_parameters(w)
+        self.args = (np.float64(wmax), np.int32(safe))  # runtime: a new lattice reuses the kernel
+        self.kernels = _kernels(self.features)
 
 
 def best_match_nodes_cuda_screen(weights, data, chunk=2**20):
