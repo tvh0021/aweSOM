@@ -54,15 +54,16 @@ UNAVAILABLE = {'status': 'not available', 'reason': 'not recorded by the extract
 
 def node_name():
     """This node's name from Slurm (SLURMD_NODENAME is set in every task, per node), or 'local'
-    outside Slurm. No system call: no host-state reads on Tigris (user rule 2026-11-06)."""
+    outside Slurm. No system call: no host-state reads on RIT RC (user rule 2026-11-06, extended 2026-11-12)."""
     return os.environ.get('SLURMD_NODENAME') or 'local'
 
 
 def on_tigris(*paths):
-    """True on Tigris: SLURM_CLUSTER_NAME is tigris (any case) or a path lies under /shared/rc/.
-    Free-space checks are skipped there (no filesystem reads, user rule 2026-11-06)."""
-    if os.environ.get('SLURM_CLUSTER_NAME', '').lower() == 'tigris': return True
-    return any(os.path.abspath(p).startswith('/shared/rc/') for p in paths)
+    """True on RIT RC (Tigris or SPORC): SLURM_CLUSTER_NAME is tigris or sporc (any case)
+    or a path lies under /shared/rc/ or /home/thccrg/. Free-space checks are skipped there
+    (no filesystem reads, user rule 2026-11-06, extended to SPORC 2026-11-12)."""
+    if os.environ.get('SLURM_CLUSTER_NAME', '').lower() in {'tigris', 'sporc'}: return True
+    return any(m in (os.path.abspath(p) + '/') for p in paths for m in ('/shared/rc/', '/home/thccrg/'))
 
 
 def plain(x):
@@ -251,9 +252,9 @@ def inspect(args):
         threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
         bytes_per_row += 8 if deferred else max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
     need = max(args.min_free_gb*1e9, rows*bytes_per_row + 1e9)
-    if on_tigris(args.out):  # no free-space read on Tigris; nothing recorded
+    if on_tigris(args.out):  # no free-space read on RIT RC; nothing recorded
         return records, quota, dict(required_bytes=need), mismatches
-    free = shutil.disk_usage(args.out.parent).free  # sysinfo-ok: GP-only branch, skipped on Tigris
+    free = shutil.disk_usage(args.out.parent).free  # sysinfo-ok: GP-only branch, skipped on RIT RC
     if free < need: raise ValueError(f'Low disk: {free} bytes free; need {need}')
     return records, quota, dict(free_bytes=free, required_bytes=need), mismatches
 
@@ -1255,10 +1256,10 @@ def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_ne
         pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
         fits = len(args.lattices)*len(args.seeds)
         output_bytes = rows*(pool_bytes+4*fits+12*(fits if deferred else concurrent))
-    if on_tigris(args.out, scratch):  # no free-space reads on Tigris; nothing recorded
+    if on_tigris(args.out, scratch):  # no free-space reads on RIT RC; nothing recorded
         return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=None)
-    scratch_free = shutil.disk_usage(scratch).free  # sysinfo-ok: GP-only branch, skipped on Tigris
-    output_free = shutil.disk_usage(output).free  # sysinfo-ok: GP-only branch, skipped on Tigris
+    scratch_free = shutil.disk_usage(scratch).free  # sysinfo-ok: GP-only branch, skipped on RIT RC
+    output_free = shutil.disk_usage(output).free  # sysinfo-ok: GP-only branch, skipped on RIT RC
     shared = scratch.stat().st_dev == output.stat().st_dev
     floor = args.min_free_gb*1e9
     scratch_need = max(floor,scratch_bytes+output_bytes if shared else scratch_bytes)

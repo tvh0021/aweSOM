@@ -159,19 +159,23 @@ def test_fit_disk_budget_figures(tmp_path,monkeypatch,full_run,pool_new,statisti
     assert budget['output_bytes'] == output_bpr*10**9
 
 
-@pytest.mark.parametrize('cluster,under_rc',[('Tigris',False),('tigris',False),('',True)])
-def test_fit_disk_budget_skips_free_space_on_tigris(tmp_path,monkeypatch,cluster,under_rc):
-    # No filesystem free-space reads on Tigris (user rule 2026-11-06): disk_usage is never called.
+@pytest.mark.parametrize('cluster,rc_path',[
+    ('Tigris',None),('tigris',None),('SPORC',None),('sporc',None),
+    ('','/shared/rc/awesom-test/fresh'),('','/home/thccrg/awesom-test/fresh'),('','/home/thccrg'),('','/.autofs/shared/rc/awesom-test/fresh'),
+])
+def test_fit_disk_budget_skips_free_space_on_tigris(tmp_path,monkeypatch,cluster,rc_path):
+    # No filesystem free-space reads on RIT RC (Tigris or SPORC; user rule 2026-11-06, extended 2026-11-12).
     monkeypatch.setenv('SLURM_CLUSTER_NAME',cluster)
-    def disk_usage(path): raise AssertionError(f'disk_usage({path}) called on Tigris')
+    def disk_usage(path): raise AssertionError(f'disk_usage({path}) called on RIT RC')
     monkeypatch.setattr(pool.shutil,'disk_usage',disk_usage)
     scratch = tmp_path/'scratch'; scratch.mkdir()
-    out = Path('/shared/rc/awesom-test/fresh') if under_rc else tmp_path/'fresh'
+    out = Path(rc_path) if rc_path else tmp_path/'fresh'
     a = SimpleNamespace(scratch=scratch,out=out,threads_per_seed=7,min_free_gb=10**6)
     assert pool.on_tigris(a.out,scratch)
     assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=160,shared_filesystem=None)
     monkeypatch.setenv('SLURM_CLUSTER_NAME','gp')
     assert not pool.on_tigris(tmp_path/'fresh',scratch)
+    assert not pool.on_tigris(Path('/home/thccrg2/fresh'),scratch)
 
 def test_collect_requires_reused_pool(tmp_path,capsys):
     with pytest.raises(SystemExit) as error:
