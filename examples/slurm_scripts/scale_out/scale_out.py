@@ -187,7 +187,7 @@ class OwnedRows:
 
 def node_name() -> str:
     """This node's name from Slurm (SLURMD_NODENAME, set in every task on its own node), or
-    "local" outside Slurm. No system call: no host-state reads on Tigris (user rule 2026-11-06)."""
+    "local" outside Slurm. No system call: no host-state reads on RIT RC (user rule 2026-11-06, extended 2026-11-12)."""
     return os.environ.get("SLURMD_NODENAME") or "local"
 
 
