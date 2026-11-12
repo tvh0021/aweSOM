@@ -25,9 +25,9 @@
 # H A + the restore of scale_out.py; I env and mask of the task without MPI;
 # J A + HFI/PSM3/IPATH_NO_CPUAFFINITY=1; K A with pml ob1 + btl self,vader,tcp (no fabric
 # library); L A with pml ucx + btl self,vader; M A under strace (sched_setaffinity callers).
-# GP-only survey: refuse to run on Tigris (no host-state reads there, user rule 2026-11-06).
-case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD|${SLURM_SUBMIT_DIR:-}|${KIT:-}|${OUT:-}" in
-  tigris\|*|*/shared/rc/*) echo "GP-only probe: refusing to run on Tigris" >&2; exit 2;;
+# GP-only survey: refuse to run on RIT RC (Tigris or SPORC; user rule 2026-11-06, extended 2026-11-12).
+case "$(printf '%s' "${SLURM_CLUSTER_NAME:-}" | tr '[:upper:]' '[:lower:]')|$PWD/|${SLURM_SUBMIT_DIR:-}/|${KIT:-}/|${OUT:-}/" in
+  tigris\|*|sporc\|*|*/shared/rc/*|*/home/thccrg/*) echo "GP-only probe: refusing to run on RIT RC" >&2; exit 2;;
 esac
 set -o pipefail  # not -e: a failing case must not stop the others
 . "${KIT:-$SLURM_SUBMIT_DIR}/common.sh"
@@ -35,7 +35,7 @@ kit_init bindprobe
 C=$SLURM_CPUS_PER_TASK
 P="$OUT/probe"
 BP="$KIT/bind_probe.py"
-ONLINE=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc --all)  # sysinfo-ok: GP-only probe, refuses on Tigris
+ONLINE=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc --all)  # sysinfo-ok: GP-only probe, refuses on RIT RC
 if [ "$C" -lt "$ONLINE" ]; then
   echo "WARNING: ${SLURMD_NODENAME:-this node} has $ONLINE CPUs and each 1-rank case gets $C, so the task mask is not the whole node" \
        "(the 8413/8444 condition); resubmit with --partition=gp-default to reproduce it"
@@ -44,15 +44,15 @@ fi
 # Fabric and MPI inventory: which transports MPI_Init can load on this node.
 { echo "== host ${SLURMD_NODENAME:-?} online=$ONLINE cpus/task=$C"; srun --version
   echo "== batch shell"; grep Cpus_allowed_list /proc/self/status
-  echo "== /sys/class/infiniband"; ls -l /sys/class/infiniband/ 2>&1  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== /dev/hfi1*"; ls -l /dev/hfi1* 2>&1  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== ompi_info components (pml mtl btl ess pmix hwloc osc)"  # sysinfo-ok: GP-only probe, refuses on Tigris
-  ompi_info 2>&1 | grep -E 'MCA (pml|mtl|btl|ess|pmix|hwloc|osc):'  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== ompi_info build"; ompi_info 2>&1 | grep -iE 'Configure command|psm|ofi|ucx' | head -20  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== fi_info -l"; command -v fi_info >/dev/null && fi_info -l 2>&1 | head -40 || echo "no fi_info"  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== ucx_info -v"; command -v ucx_info >/dev/null && ucx_info -v 2>&1 || echo "no ucx_info"  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== fabric env"; env | grep -E '^(OMPI_|PMIX_|UCX_|HFI_|PSM2?_|PSM3_|IPATH_|FI_)' | sort  # sysinfo-ok: GP-only probe, refuses on Tigris
-  echo "== modules"; module list 2>&1  # sysinfo-ok: GP-only probe, refuses on Tigris
+  echo "== /sys/class/infiniband"; ls -l /sys/class/infiniband/ 2>&1  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== /dev/hfi1*"; ls -l /dev/hfi1* 2>&1  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== ompi_info components (pml mtl btl ess pmix hwloc osc)"  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  ompi_info 2>&1 | grep -E 'MCA (pml|mtl|btl|ess|pmix|hwloc|osc):'  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== ompi_info build"; ompi_info 2>&1 | grep -iE 'Configure command|psm|ofi|ucx' | head -20  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== fi_info -l"; command -v fi_info >/dev/null && fi_info -l 2>&1 | head -40 || echo "no fi_info"  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== ucx_info -v"; command -v ucx_info >/dev/null && ucx_info -v 2>&1 || echo "no ucx_info"  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== fabric env"; env | grep -E '^(OMPI_|PMIX_|UCX_|HFI_|PSM2?_|PSM3_|IPATH_|FI_)' | sort  # sysinfo-ok: GP-only probe, refuses on RIT RC
+  echo "== modules"; module list 2>&1  # sysinfo-ok: GP-only probe, refuses on RIT RC
 } > "$P/fabric.txt" 2>&1
 
 # run_case NAME DESCRIPTION -- COMMAND...: one srun step, never fails the job.
@@ -116,8 +116,8 @@ run_case G "2 ranks x $((C / 2)) CPUs, one node (8409 shape)" -- "${CMD[@]}" $PY
 base; run_case H "A + restore of the saved CPU set (the workaround)" -- "${CMD[@]}" $PY "$BP" --case H --restore
 
 base; run_case I "A's srun, no MPI: env, mask, python" -- "${CMD[@]}" bash -c \
-  'echo "policy_env_count=$(env | grep -c "^OMPI_MCA_hwloc_base_binding_policy=")"  # sysinfo-ok: GP-only probe, refuses on Tigris
-   env | grep "^OMPI_MCA_hwloc_base_binding_policy="; grep Cpus_allowed_list /proc/self/status; taskset -p $$  # sysinfo-ok: GP-only probe, refuses on Tigris
+  'echo "policy_env_count=$(env | grep -c "^OMPI_MCA_hwloc_base_binding_policy=")"  # sysinfo-ok: GP-only probe, refuses on RIT RC
+   env | grep "^OMPI_MCA_hwloc_base_binding_policy="; grep Cpus_allowed_list /proc/self/status; taskset -p $$  # sysinfo-ok: GP-only probe, refuses on RIT RC
    "$0" "$1" --case I --no-mpi' "$PY" "$BP"
 
 base; cmd_env "${NO_AFFINITY[@]}"
