@@ -1,5 +1,6 @@
 """CUDA screen certification on CPUs, with optional real-device checks."""
 import sys
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -221,3 +222,73 @@ def test_device_predict_stream_large(cuda, backend, distance):
     w, x = _stream_case(3 * 2**20 + 12_345, 1600)
     _stream_parity(backend, w, x, np.arange(len(w)), 2**20 + 777, distance, None)
     _stream_parity(backend, w, x, np.arange(len(w)) % 200, 2**20, distance, np.uint8)
+
+
+def _round32(value):
+    """Correctly round an exact Fraction to float32, ties to even."""
+    near = np.float32(float(value))
+    options = [near, np.nextafter(near, np.float32(-np.inf)), np.nextafter(near, np.float32(np.inf))]
+    options = [o for o in options if np.isfinite(o)]
+    key = lambda o: (abs(Fraction(float(o)) - value), int(np.array(o).view(np.uint32)) & 1)
+    return min(options, key=key)
+
+
+def test_fma32_single_rounding():
+    f32 = np.float32
+    a, b, c = f32(-(1 + 2**-15) * 2**-12), f32((1 - 2**-15) * 2**-12), f32(1 + 2**-23)
+    assert np.float32(np.float64(a) * np.float64(b) + np.float64(c)) == f32(1.0)  # double rounding
+    assert _gpu_screen._fma32(a, b, c) == f32(1 + 2**-23)
+    rng = np.random.default_rng(3)
+    triples = rng.normal(size=(4000, 3)).astype(f32)
+    triples[:2000, 2] *= f32(2.0**-20)  # products dominate; many sums near float32 midpoints
+    near = rng.integers(-2**12, 2**12, size=(2000, 3)).astype(f32) * f32(2**-12)
+    near[:, 2] += f32(2**-23)
+    for a, b, c in np.concatenate([triples, near]):
+        exact = Fraction(float(a)) * Fraction(float(b)) + Fraction(float(c))
+        assert _gpu_screen._fma32(a, b, c) == _round32(exact), (a, b, c)
+    # d * d + acc as in the kernel, at the overflow edge
+    big = f32(2e19)  # 4e38 > FLT_MAX
+    assert _gpu_screen._fma32(big, big, f32(0)) == np.inf
+    assert _gpu_screen._fma32(big, big, f32(-np.inf)) == -np.inf
+
+
+def _blocked_case(case, features, n, seed=9):
+    rng = np.random.default_rng(seed)
+    w = rng.normal(size=(301, features))  # more than two node tiles of 128
+    x = rng.normal(size=(n, features))
+    if case == 'smooth':
+        x = w[rng.integers(len(w), size=n)] + rng.normal(size=x.shape) * 0.05
+    elif case == 'mixed':
+        w[1] = w[0]
+        w[200] = w[0]  # duplicate in a later tile
+        w[5] = w[4]
+        w[5, 0] = np.nextafter(w[4, 0], np.inf)
+        x[:7] = w[0]
+        x[7:11] = w[4]
+        x[11], x[12], x[13] = np.nan, np.inf, 1e30
+        x[14:17] = (w[2] + w[3]) / 2
+        x[300:310] = w[0] + 1e-9
+    elif case == 'large':
+        w *= 1e12
+        x *= 1e12
+    return w, x
+
+
+@pytest.mark.parametrize('features', [1, 3, 7, 8, 10])
+@pytest.mark.parametrize('case', ['random', 'smooth', 'mixed', 'large'])
+def test_device_row_blocked(cuda, case, features):
+    """Rows not a multiple of R or of the block, several tiles, both input dtypes."""
+    from aweSOM._gpu import best_match_nodes_cuda
+
+    w, x = _blocked_case(case, features, 4 * 128 * 3 + 37)
+    for dtype in (np.float32, np.float64):
+        points = x.astype(dtype)
+        expected = best_match_nodes(w, points)
+        _same(_gpu_screen._cuda_screen_reference(w, points), expected)
+        _same(best_match_nodes_cuda(w, points), expected)
+        _same(_gpu_screen.best_match_nodes_cuda_screen(w, points, chunk=1001), expected)
+        for block, tile in ((128, 128), (64, 16), (32, 128)):
+            search = _gpu_screen.GpuScreenSearcher(w, len(w), 1, chunk=999, block=block, tile=tile)
+            idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+            search(points, idx, d2)
+            _same((idx, d2), expected)

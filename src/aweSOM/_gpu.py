@@ -105,6 +105,7 @@ class GpuSearcher:
         if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
             raise ValueError('tile or block exceeds the device limit')
         self.kernels = _kernels(self.features)
+        self.rows_per_thread = 1  # rows one kernel thread searches; the grid covers n rows
         self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
         self.slots = []
         self.capacity = 0
@@ -214,7 +215,8 @@ class GpuSearcher:
                                                  or slot['labels'].dtype != clusters.dtype):
                         slot['labels'] = cp.empty(self.capacity, clusters.dtype)
                     dev[0][:n].set(host[0][:n], stream=stream)
-                    kernel(((n + self.block - 1) // self.block,), (self.block,),
+                    per = self.block * self.rows_per_thread
+                    kernel(((n + per - 1) // per,), (self.block,),
                            (self.w, dev[0], dev[1], dev[2], np.int32(n),
                             np.int32(self.nodes), np.int32(self.tile)),
                            shared_mem=self.shared, stream=stream)

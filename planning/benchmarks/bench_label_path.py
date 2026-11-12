@@ -73,7 +73,8 @@ def main():
         kernel = search.kernels[0]
 
         def launch(start, n):
-            kernel(((n + search.block - 1) // search.block,), (search.block,),
+            per = search.block * search.rows_per_thread
+            kernel(((n + per - 1) // per,), (search.block,),
                    (search.w, x_dev[start:start + n], i_dev, d_dev, np.int32(n),
                     np.int32(search.nodes), np.int32(search.tile)),
                    shared_mem=search.shared, stream=stream)
