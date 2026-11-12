@@ -275,3 +275,58 @@ def test_preflight_verdict_accepts_restored_ranks_and_flags_short_ones(tmp_path)
     # Old lines without restored= (kit 0f41635) still parse.
     old = "AFFINITY rank=0 size=1 host=h before_init=32 after_init=1\n"
     assert _verdict(tmp_path, old, 1, 32) == (["rank 0 on h: 1 CPUs after MPI_Init (32 before), needs 32"], 0)
+
+
+def test_gp_only_surveys_skip_or_refuse_on_rit_rc(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    spec_p = importlib.util.spec_from_file_location("scale_out_probe", KIT / "probe.py")
+    probe = importlib.util.module_from_spec(spec_p)
+    spec_p.loader.exec_module(probe)
+
+    rc_envs = [
+        {"SLURM_CLUSTER_NAME": "tigris"},
+        {"SLURM_CLUSTER_NAME": "SPORC"},
+        {"SLURM_CLUSTER_NAME": "sporc"},
+        {"SLURM_CLUSTER_NAME": "", "OUT": "/shared/rc/awesom-grmhd/out"},
+        {"SLURM_CLUSTER_NAME": "", "KIT": "/home/thccrg/kit"},
+        {"SLURM_CLUSTER_NAME": "", "SLURM_SUBMIT_DIR": "/home/thccrg"},
+        {"SLURM_CLUSTER_NAME": "", "OUT": "/.autofs/shared/rc/awesom-grmhd/out"},
+    ]
+    base_env = {k: v for k, v in scale_out.os.environ.items()
+                if k not in {"SLURM_CLUSTER_NAME", "SLURM_SUBMIT_DIR", "KIT", "OUT"}}
+
+    for overrides in rc_envs:
+        env = {**base_env, **overrides}
+        assert subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; on_tigris'],
+                              cwd=tmp_path, env=env).returncode == 0
+        for sbatch in ("probe.sbatch", "gpu_probe.sbatch", "bind_probe.sbatch"):
+            res = subprocess.run(["bash", str(KIT / sbatch)], cwd=tmp_path, env=env,
+                                 capture_output=True, text=True)
+            assert res.returncode == 2 and "refusing to run on RIT RC" in res.stderr
+        bp = subprocess.run([sys.executable, str(KIT / "bind_probe.py"), "--no-mpi"],
+                            cwd=tmp_path, env=env, capture_output=True, text=True)
+        assert bp.returncode != 0 and "refusing to run on RIT RC" in bp.stderr
+        for k in ("SLURM_CLUSTER_NAME", "SLURM_SUBMIT_DIR", "KIT", "OUT"):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in overrides.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit, match="refusing to run on RIT RC"):
+            probe.refuse_on_tigris()
+
+    for k in ("SLURM_CLUSTER_NAME", "SLURM_SUBMIT_DIR", "KIT", "OUT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SLURM_CLUSTER_NAME", "gp")
+    with pytest.raises(SystemExit, match="refusing to run on RIT RC"):
+        probe.main(["env", "--json", "/home/thccrg/probe-env.json"])
+
+    gp_env = {**base_env, "SLURM_CLUSTER_NAME": "gp", "OUT": "/home/thccrg2/out"}
+    assert subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; on_tigris'],
+                          cwd=tmp_path, env=gp_env).returncode == 1
+    monkeypatch.setenv("OUT", "/home/thccrg2/out")
+    probe.refuse_on_tigris()
+    monkeypatch.setenv("PWD", "/home/thccrg/work")
+    with pytest.raises(SystemExit, match="refusing to run on RIT RC"):
+        probe.refuse_on_tigris()
