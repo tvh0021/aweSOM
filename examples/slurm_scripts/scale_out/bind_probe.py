@@ -17,10 +17,13 @@ import sys
 
 
 def refuse_on_tigris():
-    """GP-only survey: stop on Tigris (no host-state reads there, user rule 2026-11-06)."""
-    paths = (os.getcwd(), os.environ.get("SLURM_SUBMIT_DIR", ""), os.environ.get("KIT", ""), os.environ.get("OUT", ""))
-    if os.environ.get("SLURM_CLUSTER_NAME", "").lower() == "tigris" or any("/shared/rc/" in p for p in paths):
-        raise SystemExit("GP-only probe: refusing to run on Tigris")
+    """GP-only survey: stop on RIT RC (Tigris or SPORC; user rule 2026-11-06, extended 2026-11-12)."""
+    raw = (os.getcwd(), *(os.environ.get(k, "") for k in ("PWD", "SLURM_SUBMIT_DIR", "KIT", "OUT")))
+    checked = [os.path.normpath(str(p)) + "/" for p in raw if p] + [os.path.abspath(p) + "/" for p in raw if p]
+    if os.environ.get("SLURM_CLUSTER_NAME", "").lower() in {"tigris", "sporc"} or any(
+        m in c for c in checked for m in ("/shared/rc/", "/home/thccrg/")
+    ):
+        raise SystemExit("GP-only probe: refusing to run on RIT RC")
 
 
 refuse_on_tigris()
@@ -48,16 +51,16 @@ def ranges(cpus):
 def cgroup_cpus():
     """CPU count the step's cgroup allows (cgroup v2 or v1 cpuset), or '?'."""
     try:
-        lines = open("/proc/self/cgroup").read().splitlines()  # sysinfo-ok: GP-only probe, refuses on Tigris
+        lines = open("/proc/self/cgroup").read().splitlines()  # sysinfo-ok: GP-only probe, refuses on RIT RC
     except OSError:
         return "?"
     paths = []
     for line in lines:
         _, ctrl, path = line.split(":", 2)
         if ctrl == "":
-            paths.append(f"/sys/fs/cgroup{path}/cpuset.cpus.effective")  # sysinfo-ok: GP-only probe, refuses on Tigris
+            paths.append(f"/sys/fs/cgroup{path}/cpuset.cpus.effective")  # sysinfo-ok: GP-only probe, refuses on RIT RC
         elif "cpuset" in ctrl.split(","):
-            paths += [f"/sys/fs/cgroup/cpuset{path}/cpuset.effective_cpus", f"/sys/fs/cgroup/cpuset{path}/cpuset.cpus"]  # sysinfo-ok: GP-only probe, refuses on Tigris
+            paths += [f"/sys/fs/cgroup/cpuset{path}/cpuset.effective_cpus", f"/sys/fs/cgroup/cpuset{path}/cpuset.cpus"]  # sysinfo-ok: GP-only probe, refuses on RIT RC
     for p in paths:
         try:
             text = open(p).read().strip()
