@@ -45,5 +45,6 @@ transfers cannot overlap its own compute. The default trainer chunk is larger
 than the internal CUDA chunk. For throughput probes, keep multiple internal
 subchunks per call. No asynchronous work survives a call or epoch boundary.
 
-Kernel B and a JAX adapter are not included. Float64 CUDA arithmetic still needs
-hardware verification before production use. Run the kit on each target GPU.
+`cuda_screen` was verified on GH200 (Tigris jobs 961938 and 995672: labels and
+training bitwise equal to the CPU float64 reference). Run the kit on each new
+target GPU before production use.

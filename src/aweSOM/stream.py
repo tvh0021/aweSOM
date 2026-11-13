@@ -707,7 +707,8 @@ def train_batch_stream(
         every rank). ``info`` has the keys of :func:`aweSOM.batch.train_batch`
         (``radius``, ``qe``, ``qe_initial``, ``hits``, ``epoch_time``,
         ``chunk``, ``n_samples``) plus ``rows_per_epoch``, ``fallbacks`` (rows
-        that needed the float64 rescan), ``io_wait``, ``bmu_time``,
+        that needed the float64 rescan; always 0 for ``"cuda_screen"``, which
+        keeps no device counter), ``io_wait``, ``bmu_time``,
         ``acc_time``, ``update_time``, ``reduce_time``, ``checkpoint_time``
         (seconds per epoch; io/bmu/acc of this rank), ``final_time``,
         ``n_threads``, ``peak_rss`` (bytes, this rank), ``ranks``, ``rank``,
