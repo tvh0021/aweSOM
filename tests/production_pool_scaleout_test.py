@@ -114,7 +114,7 @@ def test_parallel_statistics_bitwise(tmp_path):
 @pytest.mark.parametrize('low',['scratch','output','floor',None])
 def test_reused_fit_disk_checks(tmp_path,monkeypatch,low):
     scratch = tmp_path/'scratch'; scratch.mkdir()
-    a = SimpleNamespace(scratch=scratch,out=tmp_path/'fresh',threads_per_seed=7,
+    a = SimpleNamespace(scratch=scratch,out=tmp_path/'fresh',threads_per_seed=7,lattices=['100x100'],
                         min_free_gb=1 if low == 'floor' else 0)
     calls = []
     def disk_usage(path):
@@ -125,28 +125,29 @@ def test_reused_fit_disk_checks(tmp_path,monkeypatch,low):
     if low:
         with pytest.raises(ValueError,match='Low .*disk'): pool.fit_disk_budget(a,10,7)
     else:
-        assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=160,shared_filesystem=True)
+        assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=120,shared_filesystem=True)
     assert calls == [scratch,tmp_path]
     assert not a.out.exists()
 
 
 
 @pytest.mark.parametrize('full_run,pool_new,statistics,seed_workers,workers,output_per_row,scratch_bpr,output_bpr',[
-    (False,False,'inline',1,7,16,56,16),
-    (False,False,'later',1,7,16,0,16),
-    (True,True,'inline',1,7,16,56,56),
-    (True,True,'inline',2,7,16,112,68),
-    (True,False,'inline',2,7,16,112,40),
-    (True,True,'later',2,7,16,8,92),
-    (False,False,'inline',1,1,4,16,4),
-    (False,False,'inline',1,3,4,24,4),
-    (False,False,'inline',1,7,4,56,4),
+    (False,False,'inline',1,7,None,56,12),
+    (False,False,'later',1,7,None,0,12),
+    (True,True,'inline',1,7,None,56,46),
+    (True,True,'inline',2,7,None,112,56),
+    (True,False,'inline',2,7,None,112,28),
+    (True,True,'later',2,7,None,8,76),
+    (False,False,'inline',1,1,1,16,1),
+    (False,False,'inline',1,3,1,24,1),
+    (False,False,'inline',1,7,1,56,1),
 ])
 def test_fit_disk_budget_figures(tmp_path,monkeypatch,full_run,pool_new,statistics,
                                  seed_workers,workers,output_per_row,scratch_bpr,output_bpr):
-    # Hand-counted B/row: pool 28, four labels 16, live nodes/distances 12/seed.
-    # Deferred full runs retain all four 16-byte fits and need an 8-byte scaler column.
-    # Statistics-only copies one 4-byte label array; one worker has a 16-byte floor.
+    # Hand-counted B/row: pool 28, four labels 8 (uint16: 91x64 has 5824 nodes, which bound the
+    # cluster IDs), live nodes/distances 2+8 per seed. Deferred full runs retain all four 12-byte
+    # fits and need an 8-byte scaler column. Statistics-only copies one uint8 label array; one
+    # worker has a 16-byte floor.
     scratch = tmp_path/'scratch'; scratch.mkdir()
     output = tmp_path/'output'; output.mkdir()
     a = SimpleNamespace(scratch=scratch,out=output/'fresh',threads_per_seed=workers,
@@ -157,6 +158,19 @@ def test_fit_disk_budget_figures(tmp_path,monkeypatch,full_run,pool_new,statisti
                                   pool_new=pool_new,output_per_row=output_per_row)
     assert budget['scratch_bytes'] == scratch_bpr*10**9
     assert budget['output_bytes'] == output_bpr*10**9
+
+
+@pytest.mark.parametrize('lattice,ranks,output_bpr',[
+    ('16x15',1,10),('16x16',1,10),('16x17',1,12),('100x100',1,12),('300x300',1,16),
+    ('100x100',2,18),('100x100',4,21),('100x100',8,22.5),('300x300',8,30),
+])
+def test_fit_disk_budget_label_files(tmp_path,monkeypatch,lattice,ranks,output_bpr):
+    # One --fit: labels + nodes + distances in label_files' dtypes, bounded by the node count
+    # (uint8 up to 256 nodes, uint16 up to 65536, else int32), plus 8-byte distances. Over MPI,
+    # rank 0's full files and the other ranks' part files coexist until assembly: x(2 - 1/ranks).
+    monkeypatch.setattr(pool.shutil,'disk_usage',lambda path: SimpleNamespace(free=10**15))
+    a = SimpleNamespace(scratch=tmp_path,out=tmp_path/'fresh',threads_per_seed=1,lattices=[lattice],min_free_gb=0)
+    assert pool.fit_disk_budget(a,8*10**8,2,ranks=ranks)['output_bytes'] == output_bpr*8*10**8
 
 
 @pytest.mark.parametrize('cluster,rc_path',[
@@ -170,9 +184,9 @@ def test_fit_disk_budget_skips_free_space_on_tigris(tmp_path,monkeypatch,cluster
     monkeypatch.setattr(pool.shutil,'disk_usage',disk_usage)
     scratch = tmp_path/'scratch'; scratch.mkdir()
     out = Path(rc_path) if rc_path else tmp_path/'fresh'
-    a = SimpleNamespace(scratch=scratch,out=out,threads_per_seed=7,min_free_gb=10**6)
+    a = SimpleNamespace(scratch=scratch,out=out,threads_per_seed=7,lattices=['100x100'],min_free_gb=10**6)
     assert pool.on_tigris(a.out,scratch)
-    assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=160,shared_filesystem=None)
+    assert pool.fit_disk_budget(a,10,7) == dict(scratch_bytes=560,output_bytes=120,shared_filesystem=None)
     monkeypatch.setenv('SLURM_CLUSTER_NAME','gp')
     assert not pool.on_tigris(tmp_path/'fresh',scratch)
     assert not pool.on_tigris(Path('/home/thccrg2/fresh'),scratch)

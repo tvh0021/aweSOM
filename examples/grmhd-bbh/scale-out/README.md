@@ -183,7 +183,7 @@ was about 1 GB/s writing and 1.5–3.5 GB/s reading.
 Before any 1e10 statistics submission, time a 1e9 `--statistics-only` run
 to check the wall-time request.
 
-Completion copies 40 GB of labels per model at 1e10 rows into the new OUT,
+Completion copies 10 GB of uint8 labels per model at 1e10 rows into the new OUT,
 in addition to small model and JSON files. When OUT and scratch share a
 filesystem, the space guard adds both demands. If SCRATCH is omitted, the
 launcher uses SLURM_TMPDIR, TMPDIR, then the output filesystem.
