@@ -38,7 +38,7 @@ def label_case(pool, out, tag, n, comm):
     nc = np.arange(len(w), dtype=np.int32) % 5
     rank = 0 if comm is None else comm.Get_rank()
     if not rank:
-        for key, dtype in pool.LABEL_FILES:
+        for key, dtype in pool.label_files(nc):
             made = np.lib.format.open_memmap(out / f"{tag}-{key}.npy", mode="w+", dtype=dtype, shape=(n,))
             del made
     if comm is not None:

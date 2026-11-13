@@ -880,7 +880,12 @@ class ScaledRows:
         return self.transform(self.raw[key])
 
 
-LABEL_FILES = (('labels', 'i4'), ('nodes', 'i4'), ('distances', 'f8'))
+def label_files(nc):
+    """(key, dtype) of the label files: the narrowest dtype that holds every cluster and node ID
+    (uint8 up to 255, uint16 up to 65535; aweSOM.inference.narrow_label_dtype)."""
+    from aweSOM.inference import narrow_label_dtype
+    return (('labels', narrow_label_dtype(nc)), ('nodes', narrow_label_dtype(np.arange(len(nc)))),
+            ('distances', np.dtype('f8')))
 
 
 def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None):
@@ -907,7 +912,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     t0 = time.perf_counter()
     writers, problem = {}, None
     try:
-        for key, dtype in LABEL_FILES:
+        for key, dtype in label_files(nc):
             if rank:
                 made = np.lib.format.open_memmap(part(key, rank), mode='w+', dtype=dtype, shape=(hi - lo,))
                 del made
@@ -937,7 +942,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                     write_seconds=st['write'], close_seconds=time.perf_counter()-tc,
                     pwrite_seconds=sum(wr.pwrite_seconds for wr in writers.values()),
                     fsync_seconds=sum(wr.fsync_seconds for wr in writers.values()),
-                    bytes_written=st['rows'] * sum(np.dtype(d).itemsize for _, d in LABEL_FILES),
+                    bytes_written=st['rows'] * sum(d.itemsize for _, d in label_files(nc)),
                     part_files=bool(rank), wall_seconds=time.perf_counter()-t0, crc32=crcs)
     except Exception:
         for wr in writers.values(): wr.close(sync=False)
@@ -952,7 +957,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     if not rank and size > 1:
         dest = None
         try:
-            for key, _ in LABEL_FILES:  # one final file at a time, parts in rank order
+            for key, _ in label_files(nc):  # one final file at a time, parts in rank order
                 dest = NpyWriter(final(key))
                 for r in every[1:]:
                     first, end, crc = r['crc32'][key]
@@ -964,7 +969,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                                            'differ on disk from what it wrote')
                 dest.close(); fsync += dest.fsync_seconds; dest = None
             checked = [r['rank'] for r in every[1:]]
-            for key, _ in LABEL_FILES:
+            for key, _ in label_files(nc):
                 for r in every[1:]: os.remove(part(key, r['rank']))
         except Exception as e:
             if dest is not None: dest.close(sync=False)
@@ -1043,7 +1048,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
                 np.save(out / f'{tag}-umat.npy', lat.umat)
                 clock.finish('clustering')
-                for key, dtype in LABEL_FILES:  # created here; only rank 0 opens them
+                for key, dtype in label_files(nc):  # created here; only rank 0 opens them
                     created = np.lib.format.open_memmap(out / f'{tag}-{key}.npy', mode='w+', dtype=dtype, shape=(len(raw),))
                     del created
                 prepared = ('ok', nc)

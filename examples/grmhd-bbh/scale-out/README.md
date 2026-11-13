@@ -51,7 +51,7 @@ After all jobs finish, collect their results with the same training options:
 Collection copies fit artifacts before updating selection metadata. It retains
 source fit files and refuses missing seeds, duplicate fits, and mismatched pool
 or training settings. Collection currently copies label vectors as well, so
-budget four bytes per row per model on the destination filesystem.
+budget one byte per row per model (uint8 labels, up to 255 clusters) on the destination filesystem.
 
 ## Run one fit over four nodes (MPI)
 
@@ -215,8 +215,8 @@ Completion restores the saved chunk size and tube thresholds. It reads saved
 weights, labels, nodes and distances and performs no training or BMU search.
 The original pool, deferred model, `fit-results.json`, `pool-state.json`, label
 and U-matrix files must remain available, together with the retained
-`{tag}-nodes.npy` and `{tag}-distances.npy`. Those two files use 120 GB per model
-at 1e10 rows; labels use another 40 GB.
+`{tag}-nodes.npy` and `{tag}-distances.npy`. Those two files use 100 GB per model
+at 1e10 rows (uint16 nodes, float64 distances); uint8 labels use another 10 GB.
 
 Deferred fit JSON has `statistics: "deferred"`. The following fields are null:
 
@@ -252,7 +252,7 @@ to retry statistics. No launcher or completion command deletes them.
 After both statistics jobs finish, collect their completed outputs. A
 still-deferred fit is rejected with a clear `run --statistics-only first` error.
 Collection copies artifacts and creates the frozen models and manifest, so its
-OUT needs another 80 GB for the two label vectors (4 bytes per row each) at this pool size.
+OUT needs another 20 GB for the two label vectors (1 byte per row each) at this pool size.
 
 ```bash
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \

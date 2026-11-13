@@ -25,6 +25,7 @@ from production_pool_mpi_test import FakeComm, prepared  # noqa: F401  (module f
 from production_pool_test import pool
 
 HERE = Path(__file__).parent
+ROW_BYTES = sum(d.itemsize for d in worker.DTYPES.values())  # bytes per row of the three label files
 
 
 def bitwise(a, b):
@@ -446,7 +447,7 @@ def single_files(tmp_path, tag, n):
     """np.save of the single-process labels, nodes and distances: today's one-rank bytes."""
     lab, _ = worker.label(worker.data(n), "patch", n_samples=n)
     nodes, d2 = best_match_nodes(worker.lattice(), worker.data(n))
-    ref = {"labels": lab.astype(np.int32), "nodes": nodes, "distances": np.sqrt(d2)}
+    ref = {"labels": lab, "nodes": nodes.astype(worker.DTYPES["nodes"]), "distances": np.sqrt(d2)}
     paths = {}
     for k, a in ref.items():
         paths[k] = tmp_path / f"np-save-{tag}-{k}.npy"
@@ -486,7 +487,7 @@ def test_mpirun_label_rows_one_writer_per_file(tmp_path, ranks):
         assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, ranks) for r in range(ranks)]
         assert rec["crc_checked_ranks"] == list(range(1, ranks))
         assert [r["part_files"] for r in rec["ranks"]] == [False] + [True] * (ranks - 1)
-        assert rec["assemble_bytes"] == 16 * sum(r["rows"] for r in rec["ranks"][1:])
+        assert rec["assemble_bytes"] == ROW_BYTES * sum(r["rows"] for r in rec["ranks"][1:])
     assert not list(tmp_path.glob("*.part*"))
     for r in report["ranks"]:
         finals = [p for p in r["opened"] if output_guard.is_final(p)]
@@ -623,19 +624,19 @@ def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # no
         if r:  # every other rank opens only its own part files
             assert {Path(p).name for p in opened} == {f"4x3-s42-{k}.part{r}.npy" for k in ("labels", "nodes", "distances")}
     lab, nodes, dist = relabel(res)
-    bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.int32))
-    bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes)
+    bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.uint8))  # narrow: 12 nodes, few clusters
+    bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes.astype(np.uint8))
     bitwise(np.load(res / "4x3-s42-distances.npy"), dist)
     rec = json.loads((res / "4x3-s42.json").read_text())["labelling"]
     n = len(lab)
     assert rec["requested"] == "auto" and rec["backend"] == ("cuda_screen" if mode == "gpu" else "patch")
     assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, size) for r in range(size)]
     assert rec["crc_checked_ranks"] == list(range(1, size))
-    assert rec["assemble_bytes"] == 16 * (n - rec["ranks"][0]["rows"])
+    assert rec["assemble_bytes"] == 10 * (n - rec["ranks"][0]["rows"])  # uint8 + uint8 + float64
     for key in ("assemble_seconds", "assemble_read_seconds", "assemble_write_seconds", "assemble_fsync_seconds"):
         assert rec[key] >= 0
     for r in rec["ranks"]:
-        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 16 * r["rows"]
+        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 10 * r["rows"]
         assert r["pwrite_seconds"] >= 0 and r["fsync_seconds"] >= 0
     devices = [payload for _, payload, _ in results]
     if mode == "gpu":
