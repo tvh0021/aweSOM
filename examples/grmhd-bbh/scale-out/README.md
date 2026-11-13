@@ -57,9 +57,11 @@ budget one byte per row per model (uint8 labels, up to 255 clusters) on the dest
 
 `production-fit-mpi-gp.sbatch` trains one fit on four gp-default nodes, one MPI
 rank per node with 32 threads. Every rank trains on the pool windows it owns.
-Rank 0 alone labels the pool, computes statistics and writes OUT; the other
-ranks write no persistent outputs (only their node-local Numba cache and stdout
-lines in the job log). Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
+Every rank labels its own row range of the pool. The other ranks write
+temporary part files to OUT, which rank 0 copies into the final label files and
+then deletes. Rank 0 alone computes statistics and writes the persistent
+outputs; the other ranks keep only their node-local Numba cache and stdout lines
+in the job log. Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
 (`/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site`
 on GP). The job runs the affinity pre-flight of
 `examples/slurm_scripts/scale_out/common.sh` first and writes it to `$OUT-launch`.
