@@ -30,8 +30,8 @@ def main(results):
     with h5py.File(results/'pool.h5', 'r') as f:
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in f['names'][()]]
         raw = f['raw'][()]
-    if names != list(pool.NAMES):
-        raise ValueError(f'pool feature names {names} differ from production_pool.NAMES')
+    if names != list(pool.SEVEN_FEATURE_NAMES):
+        raise ValueError(f'pool feature names {names} differ from production_pool.SEVEN_FEATURE_NAMES')
     rows = []
     for shape in ('91x64', '48x34'):
         labels = {s: np.load(results/f'{shape}-s{s}-labels.npy') for s in SEEDS}

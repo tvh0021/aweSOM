@@ -105,9 +105,9 @@ def test_parallel_statistics_bitwise(tmp_path):
     with h5py.File(tmp_path/'raw.h5','r') as h:
         raw = h['raw']
         serial = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'serial',29,
-                                        names=pool.NAMES,n_clusters=4,workers=1)
+                                        names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=1)
         parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
-                                          names=pool.NAMES,n_clusters=4,workers=2)
+                                          names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=2)
     assert pool.one_line(serial) == pool.one_line(parallel)
 
 

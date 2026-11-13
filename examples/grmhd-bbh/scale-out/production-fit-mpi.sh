@@ -12,8 +12,8 @@ set -eo pipefail  # not -u: common.sh's module setup sources the site's lmod scr
 : "${INPUT_1:?set the first extraction}"
 : "${INPUT_2:?set the second extraction}"
 : "${SEED:?set 42 or 43}"
-LATTICE=${LATTICE:-91x64}
-EPOCHS=${EPOCHS:-40}
+LATTICE=${LATTICE:-100x100}
+EPOCHS=${EPOCHS:-60}
 LAUNCH_DIR=$OUT-launch
 case "$OUT" in /*) ;; *) echo 'OUT must be absolute' >&2; exit 2;; esac
 for d in "$OUT" "$LAUNCH_DIR"; do
