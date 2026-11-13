@@ -86,7 +86,8 @@ done
 
 Wall time: training takes about `EPOCHS * ROWS_PER_EPOCH / (2.0e6 * 0.93 * 4)`
 seconds (one node measured about 2.0e6 rows/s on real data at 40 epochs; four
-nodes at about 0.93 efficiency): 1.5 h for 40 epochs of 1e9 rows. Rank 0 then
+nodes at about 0.93 efficiency): 2.2 h for the default 60 epochs of 1e9 rows
+(phases 20 at r_max, 10 tapering, 30 at r_min; `--phases P,T,M` sets others). Rank 0 then
 labels the whole pool on one node, about `POOL_ROWS / 2.0e6` seconds, and inline
 statistics add about an hour at 1e9 rows. The six-hour limit covers 1e9 rows.
 The fit record carries `ranks`, `rank_hostnames`, `rank_numba_threads` and
@@ -129,7 +130,7 @@ export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5
 export POOL_OUT=/absolute/pool-1e10
 export POOL="$POOL_OUT/results"
 export FIT_ROOT=/absolute/fits-1e10 COMPLETE_ROOT=/absolute/statistics-1e10
-export ROWS_PER_SNAPSHOT=5000000000 ROWS_PER_EPOCH=10000000000 EPOCHS=40
+export ROWS_PER_SNAPSHOT=5000000000 ROWS_PER_EPOCH=10000000000 EPOCHS=60
 mkdir -p "$FIT_ROOT" "$COMPLETE_ROOT"
 ```
 

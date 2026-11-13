@@ -126,6 +126,7 @@ def test_end_to_end(tmp_path):
         assert r['execution']['numba_threads'] == r['training_info']['n_threads'] == 1
         assert set(r['phase_timings']) == {'training','clustering','labelling','statistics','export','verification'}
         assert len(r['training_info']['epoch_time']) == 2
+        assert r['radius_phases'] == [1,1,0] and len(r['radius_schedule']) == 2
         assert r['target_clusters'] == 1
         assert r['merge_cost_used'] >= .05
         assert r['n_clusters'] == len(np.unique(saved.node_cluster)) == 1
@@ -171,6 +172,54 @@ def test_diagnostic_reasons(tmp_path,monkeypatch):
     # nothing is production before the inputs are pinned
     monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{})
     assert len([r for r in reasons(records=other) if r.startswith('input')])==2
+    # the old 40-epoch default and a different split of 60 epochs are departures
+    monkeypatch.setattr(pool,'APPROVED_INPUT_SHA256',{'94208':'a'*64,'98304':'b'*64})
+    assert {r.split('=')[0] for r in reasons(['--epochs','40'])}=={'epochs','phases'}
+    assert [r.split('=')[0] for r in reasons(['--phases','30,15,15'])]==['phases']
+    assert reasons(['--epochs','60','--phases','20,10,30'])==[]
+
+
+def test_radius_phases():
+    from aweSOM._batch_core import radius_schedule
+    parse=lambda *extra: pool.parser().parse_args(['--out','o',*extra])
+    r_max,r_min=92.,8.
+    # default: 60 epochs = 20 at r_max, 10 strictly between in equal decreasing steps, 30 at r_min
+    a=parse(); assert a.epochs==60 and pool.resolve_phases(a)==[20,10,30]
+    s=pool.phase_schedule(a.phases,a.epochs,r_max,r_min)
+    assert len(s)==60 and (s[:20]==r_max).all() and (s[30:]==r_min).all()
+    taper=s[20:30]
+    assert ((taper<r_max)&(taper>r_min)).all()
+    assert np.allclose(np.diff(s[19:31]),(r_min-r_max)/11,rtol=1e-12,atol=0)
+    # the first 60 radii of the epoch study's (20,10,31) schedule
+    study=np.concatenate([np.full(20,r_max),np.linspace(r_max,r_min,12)[1:-1],np.full(31,r_min)])
+    assert np.array_equal(s,study[:60])
+    # another count without --phases keeps radius_schedule's split: 40 -> (20,10,10)
+    a=parse('--epochs','40'); assert pool.resolve_phases(a)==[20,10,10]
+    for e in [1,2,3,5,7,40,59,61,80]:
+        a=parse('--epochs',str(e))
+        assert np.array_equal(pool.phase_schedule(pool.resolve_phases(a),e,r_max,r_min),radius_schedule(e,r_max,r_min)),e
+    a=parse('--epochs','61','--phases','20,10,31'); assert pool.resolve_phases(a)==[20,10,31]
+    for extra in (['--epochs','40','--phases','20,10,30'],['--phases','20,10,31'],['--phases','20,40']):
+        with pytest.raises(ValueError): pool.resolve_phases(parse(*extra))
+
+
+def test_explicit_radii_reach_trainer(tmp_path):
+    import aweSOM.stream as stream
+    from aweSOM.stream import train_batch_stream
+    data=np.random.default_rng(0).normal(size=(300,3))
+    library=stream.radius_schedule
+    with pool.explicit_radii([1,2,2]):
+        _,info=train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
+                                  checkpoint=str(tmp_path/'c.npz'))
+    assert stream.radius_schedule is library
+    assert np.array_equal(info['radius'],[6,6-4/3,6-8/3,2,2])
+    # --resume checks the checkpoint against the same explicit radii
+    with pool.explicit_radii([1,2,2]):
+        train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
+                           checkpoint=str(tmp_path/'c.npz'),resume=True)
+    with pytest.raises(ValueError,match='radius'):
+        train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
+                           checkpoint=str(tmp_path/'c.npz'),resume=True)
 
 
 def test_defaults_are_the_2026_11_11_decision(tmp_path):

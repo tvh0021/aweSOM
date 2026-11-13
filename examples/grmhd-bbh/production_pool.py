@@ -18,6 +18,7 @@ spatial check, which this driver does not run.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import functools
 import argparse
@@ -884,11 +885,12 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 checkpoint_args['checkpoint'] = args.resume.resolve()
             if comm is not None: comm.Barrier()
             checkpoint_args['resume'] = True
-        w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
-                                    bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
-                                    r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
-                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
-                                    comm=comm, **checkpoint_args)
+        with explicit_radii(resolve_phases(args)):
+            w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
+                                        bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
+                                        r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
+                                        final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
+                                        comm=comm, **checkpoint_args)
         if comm is not None:
             import numba
             per_rank = comm.gather(dict(hostname=node_name(), numba_threads=numba.get_num_threads(),
@@ -973,7 +975,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         labels.flush()
         clock.finish('verification')
     rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, scratch=None if args.scratch is None else str(args.scratch), lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
-               epochs=args.epochs, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
+               epochs=args.epochs, radius_phases=args.phases, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
                chunk=args.chunk, groups=args.groups, bmu_backend=info['bmu_kind'], fallback_count=info['fallbacks'],
                execution=execution, phase_timings=clock.records, training_info=info, wall_seconds=time.perf_counter()-t, peak_rss_bytes=peak_rss_bytes(),
                weights_dtype=str(w.dtype), weights_sha256=hashlib.sha256(w.tobytes()).hexdigest(),
@@ -1179,7 +1181,11 @@ def parser():
     p.add_argument('--lattices',nargs='+',default=['100x100']); p.add_argument('--seeds',nargs='+',type=int,default=[42,43],help='two or more seeds per lattice; the sheet-candidate selection needs at least two')
     p.add_argument('--seed-workers',type=int,default=1,help='concurrent spawned seeds within each lattice')
     p.add_argument('--threads-per-seed',type=int,help='Numba threads for the entire worker, including export and verification')
-    p.add_argument('--epochs',type=int,default=40); p.add_argument('--chunk',type=int,default=2**21)
+    p.add_argument('--epochs',type=int,default=60,help='60 runs the phases 20,10,30; another count without --phases '
+                   'splits as radius_schedule (40 -> 20,10,10)')
+    p.add_argument('--phases',type=lambda s: [int(v) for v in s.split(',')],metavar='P,T,M',
+                   help='P epochs at r_max, T tapering, M at r_min; must sum to --epochs')
+    p.add_argument('--chunk',type=int,default=2**21)
     p.add_argument('--sample-seed',type=int,default=42); p.add_argument('--groups',type=int,default=64)
     p.add_argument('--target-clusters',type=int,default=10,help='merge to at most this count; ties may yield fewer')
     p.add_argument('--merge-cost',type=float,default=.05,help='merge cost floor; keep the selected cost for subsequent training'); p.add_argument('--r-max',type=float); p.add_argument('--r-min',type=float)
@@ -1198,9 +1204,50 @@ def parser():
 # Two seeds per lattice (2026-10-29): the consensus sheet-candidate selection needs at least two,
 # and three are too slow. The post-clustering sheet thresholds were rejected and removed.
 APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattices=['100x100'],
-                seeds=[42,43], epochs=40, chunk=2**21, sample_seed=42, groups=64, merge_cost=.05, target_clusters=10,
-                r_max=None, r_min=8., bz_weight=2., pol_weight=2.,
+                seeds=[42,43], epochs=60, phases=[20,10,30], chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
+                target_clusters=10, r_max=None, r_min=8., bz_weight=2., pol_weight=2.,
                 tube_bz=.7, tube_beta=0.)
+# Radius phases (P, T, M) for 60 epochs, chosen by the user on 2026-11-10 after the epoch study
+# (tested (20,10,31)). Before that the default was 40 epochs split by radius_schedule: (20,10,10).
+DEFAULT_PHASES = [20, 10, 30]
+
+
+def resolve_phases(args):
+    """Set and return ``args.phases``: DEFAULT_PHASES at 60 epochs, else radius_schedule's split."""
+    if args.phases is None:
+        e = args.epochs
+        half = -(-e // 2)
+        taper = min(-(-e // 4), e - half)
+        args.phases = list(DEFAULT_PHASES) if e == sum(DEFAULT_PHASES) else [half, taper, e - half - taper]
+    if len(args.phases) != 3 or min(args.phases) < 0 or sum(args.phases) != args.epochs:
+        raise ValueError(f'--phases {args.phases} must be three counts summing to --epochs {args.epochs}')
+    return args.phases
+
+
+def phase_schedule(phases, epochs, r_max, r_min):
+    """Radii: P at r_max, T on the interior of linspace(r_max, r_min, T + 2), M at r_min.
+
+    Same construction as aweSOM's radius_schedule, with explicit phase lengths; takes its
+    arguments after ``phases`` so the trainer can call it in radius_schedule's place."""
+    p, t, m = phases
+    if epochs != p + t + m: raise ValueError(f'phases {phases} do not sum to {epochs} epochs')
+    return np.concatenate([np.full(p, float(r_max)), np.linspace(r_max, r_min, t + 2)[1:-1], np.full(m, float(r_min))])
+
+
+@contextlib.contextmanager
+def explicit_radii(phases):
+    """Train with ``phases`` inside this block.
+
+    train_batch_stream takes no explicit radii: it calls aweSOM.stream.radius_schedule(epochs,
+    r_max, min(r_min, r_max)) for training and for the --resume check, so both see these radii;
+    info['radius'] records them."""
+    import aweSOM.stream as stream_module
+    library_schedule = stream_module.radius_schedule
+    stream_module.radius_schedule = functools.partial(phase_schedule, phases)
+    try:
+        yield
+    finally:
+        stream_module.radius_schedule = library_schedule
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.
 APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=['405504'])
@@ -1216,6 +1263,7 @@ APPROVED_INPUT_SHA256 = {
 
 def diagnostic_reasons(args, records=()):
     """Departures from the approved production run; ``records`` are inspect()'s, with snapshot and sha256."""
+    resolve_phases(args)
     reasons=[f'{k}={getattr(args,k)!r}, approved {v!r}' for k,v in APPROVED.items() if getattr(args,k)!=v]
     used=dict(snapshots=[r['snapshot'] for r in records], anchor=args.anchor, held_out=list(args.held_out))
     reasons+=[f'{k}={used[k]!r}, approved {v!r}' for k,v in APPROVED_SNAPSHOTS.items() if used[k]!=v]
@@ -1380,6 +1428,7 @@ def main(argv=None):
         cli.error('--collect requires completed statistics')
     if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
     if args.chunk < 1 or args.epochs < 1 or not args.seeds: raise ValueError('invalid training settings')
+    resolve_phases(args)
     if not all(np.isfinite(v) and v > 0 for v in [args.bz_weight,args.pol_weight]):
         raise ValueError('feature weights must be finite and positive')
     if args.fit:
