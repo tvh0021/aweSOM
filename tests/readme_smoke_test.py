@@ -60,7 +60,7 @@ def test_readme_iris_som_and_sce(tmp_path, monkeypatch):
     text = README.read_text(encoding="utf-8")
     som_blocks = _python_blocks(text, "## 3. Basic Usage - SOM", "## 4. Basic Usage - SCE")
     sce_blocks = _python_blocks(text, "## 4. Basic Usage - SCE", "## 5. Advanced Usage")
-    assert len(som_blocks) == 9 and len(sce_blocks) == 5
+    assert len(som_blocks) == 10 and len(sce_blocks) == 5
 
     som_code = "\n".join(som_blocks)
     som_code = _replace_once(som_code, "train=100000)", f"train={SECTION3_TRAIN})")
@@ -87,6 +87,11 @@ def test_readme_iris_som_and_sce(tmp_path, monkeypatch):
         assert lattice_map.umat.shape == (40, 15) and np.isfinite(lattice_map.umat).all()
         assert ns["final_clusters"].shape == (40, 15)
         assert ns["som_labels"].shape == (150,)
+        assert (tmp_path / "iris_model.h5").is_file()
+        assert (tmp_path / "iris_model.txt").is_file()
+        assert np.array_equal(ns["loaded"].predict(ns["iris"].data), ns["som_labels"])
+        assert np.array_equal(ns["loaded_text"].predict(ns["iris"].data), ns["som_labels"])
+        assert ns["new_labels"].shape == (5,) and ns["bmu_distances"].shape == (5,)
         for name in ("precision", "recall"):
             values = ns[name]
             assert values.shape == (3,) and np.isfinite(values).all()

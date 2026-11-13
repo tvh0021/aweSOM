@@ -13,7 +13,7 @@ import sphinx_rtd_theme
 project = "aweSOM"
 copyright = "2024, Trung Ha"
 author = "Trung Ha"
-release = "1.6.0"
+release = "1.7.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -55,3 +55,6 @@ autodoc_mock_imports = [
     "scipy",
     "numba",
 ]
+
+napoleon_use_ivar = True
+
