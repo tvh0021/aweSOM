@@ -23,6 +23,23 @@ class FakeSearcher:
         _bmu_kernel(self.w, block, idx, d2)
         return len(block)  # Exercise fallback propagation independently of A.
 
+    # The queued interface of predict_stream, run synchronously.
+    def cluster_map(self, clusters, dtype):
+        return np.asarray(clusters).astype(dtype)
+
+    def submit(self, block, out, d2=None, clusters=None):
+        idx, dist = np.empty(len(block), np.int32), np.empty(len(block))
+        _bmu_kernel(self.w, block, idx, dist)
+        out[...] = clusters[idx]
+        if d2 is not None:
+            d2[...] = dist
+
+    def wait(self, token=None):
+        pass
+
+    def cancel(self):
+        pass
+
 
 def test_dispatch(monkeypatch):
     monkeypatch.setattr(_gpu, 'GpuSearcher', FakeSearcher)

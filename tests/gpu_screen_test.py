@@ -102,6 +102,22 @@ class ReferenceSearcher:
         idx[:], d2[:], fb = _gpu_screen._cuda_screen_reference(self.w, x, return_fallbacks=True)
         return fb
 
+    # The queued interface of predict_stream, run synchronously.
+    def cluster_map(self, clusters, dtype):
+        return np.asarray(clusters).astype(dtype)
+
+    def submit(self, x, out, d2=None, clusters=None):
+        idx, dist = _gpu_screen._cuda_screen_reference(self.w, x)
+        out[...] = clusters[idx]
+        if d2 is not None:
+            d2[...] = dist
+
+    def wait(self, token=None):
+        pass
+
+    def cancel(self):
+        pass
+
 
 def test_dispatch(monkeypatch):
     monkeypatch.setattr(_gpu_screen, 'GpuScreenSearcher', ReferenceSearcher)

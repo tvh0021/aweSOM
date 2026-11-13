@@ -474,9 +474,6 @@ class _BMU:
                  first_epoch: bool = False):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
-        if kind == "cuda_prune":
-            from ._gpu_prune import PruneGpuSearcher
-            self.gpu = PruneGpuSearcher(self.w, (xdim, ydim))
         if kind == "cuda":
             from ._gpu import GpuSearcher
             self.gpu = GpuSearcher(self.w, xdim, ydim)
@@ -498,7 +495,7 @@ class _BMU:
                 self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
-        if kind in ("cuda", "cuda_screen", "cuda_prune"):
+        if kind in ("cuda", "cuda_screen"):
             return self.gpu(block, idx, d2)
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
@@ -949,7 +946,6 @@ def predict_stream(
     lattice_shape: Optional[tuple[int, int]] = None,
     prefetch: bool = True,
     n_samples: Optional[int] = None,
-    hint: Optional[np.ndarray] = None,
 ) -> tuple[Any, dict[str, float]]:
     """Label every row of a streamed source with :func:`aweSOM.inference.predict`.
 
@@ -962,12 +958,11 @@ def predict_stream(
             ``h5py.Dataset``); allocated in memory if None.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
-        backend: ``predict`` backend, including optional ``"cuda"``, ``"cuda_screen"`` and ``"cuda_prune"``.
+        backend: ``predict`` backend, including optional ``"cuda"`` and ``"cuda_screen"``.
             Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
-        hint: Previous int32 BMU per source row for ``"cuda_prune"``.
 
     Returns:
         ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute.
@@ -982,35 +977,18 @@ def predict_stream(
     t_start = time.perf_counter()
     pos = 0
     gpu = _BMU(weights, backend, len(weights), 1).gpu if backend in ("cuda", "cuda_screen") else None
-    if backend == "cuda_prune":
-        from ._gpu_prune import PruneGpuSearcher, _hints
-        gpu = PruneGpuSearcher(weights, lattice_shape, chunk=chunk)
-        hint = _hints(hint, source.n, len(weights)) if hint is not None else None
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
-    if gpu is not None and len(clusters) != len(weights):
-        raise ValueError("node_cluster must have one entry per node")
-    if hasattr(gpu, "submit"):
+    if gpu is not None:
+        if len(clusters) != len(weights):
+            raise ValueError("node_cluster must have one entry per node")
         pos = _label_queued(gpu, clusters, it, out, out_distance, stats)
     else:
-        buffers = None
         for c in it:
             t0 = time.perf_counter()
             m = c.shape[0]
-            if gpu is not None:
-                # Synchronous searchers (cuda_prune and test stand-ins); buffers are reused.
-                if buffers is None or len(buffers[0]) < m:
-                    buffers = np.empty(m, np.int32), np.empty(m, np.float64), np.empty(m, np.int32)
-                idx, d2, labels = buffers[0][:m], buffers[1][:m], buffers[2][:m]
-                if backend == "cuda_prune":
-                    gpu(c, idx, d2, None if hint is None else hint[pos:pos + len(c)])
-                else:
-                    gpu(c, idx, d2)
-                np.take(clusters, idx, out=labels)
-                res = (labels, np.sqrt(d2, out=d2)) if out_distance is not None else labels
-            else:
-                res = predict(weights, node_cluster, c, chunk=c.shape[0],
-                              return_distance=out_distance is not None, backend=backend,
-                              lattice_shape=lattice_shape)
+            res = predict(weights, node_cluster, c, chunk=c.shape[0],
+                          return_distance=out_distance is not None, backend=backend,
+                          lattice_shape=lattice_shape)
             t1 = time.perf_counter()
             if out_distance is not None:
                 out[pos : pos + m], out_distance[pos : pos + m] = res
