@@ -1,7 +1,7 @@
 # CUDA probe
 
-The GPU implementation is selected explicitly with `bmu="cuda"` or
-`backend="cuda"`. Install `aweSOM[cuda]` in a CUDA 12 environment.
+The GPU implementation is selected explicitly with `bmu="cuda_screen"` or
+`backend="cuda_screen"`. Install `aweSOM[cuda]` in a CUDA 12 environment.
 `auto` continues to choose between the existing CPU backends.
 
 The prepared kit is at

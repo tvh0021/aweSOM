@@ -160,17 +160,13 @@ def cuda():
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
 @pytest.mark.parametrize('case', CASES)
 def test_device(cuda, case, features, dtype):
-    from aweSOM._gpu import best_match_nodes_cuda
-
     w, x = _case(case, features, dtype)
     actual = _gpu_screen.best_match_nodes_cuda_screen(w, x, chunk=37)
-    _same(actual, best_match_nodes_cuda(w, x, chunk=37))
+    _same(actual, best_match_nodes(w, x))
     _same(actual, _gpu_screen._cuda_screen_reference(w, x))
 
 
 def test_device_staging_and_training(cuda):
-    from aweSOM._gpu import best_match_nodes_cuda
-
     rng = np.random.default_rng(7)
     w = rng.normal(size=(73, 7))
     w[1] = w[0]
@@ -181,7 +177,7 @@ def test_device_staging_and_training(cuda):
         points = x.astype(dtype)
         idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
         search(points, idx, d2)
-        _same((idx, d2), best_match_nodes_cuda(w, points))
+        _same((idx, d2), best_match_nodes(w, points))
     options = dict(xdim=4, ydim=3, epochs=2, chunk=257, groups=2, n_threads=1,
                    seed=42, final_pass='none', prefetch=False)
     cpu, _ = train_batch_stream(x, bmu='numba', **options)
@@ -215,29 +211,24 @@ def _stream_parity(backend, w, x, clusters, chunk, distance, out_dtype):
         np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
 
 
-@pytest.mark.parametrize('backend', ['cuda', 'cuda_screen'])
 @pytest.mark.parametrize('distance', [False, True])
 @pytest.mark.parametrize('out_dtype', [None, np.uint8, np.int64])
-def test_device_predict_stream_subchunks(cuda, monkeypatch, backend, distance, out_dtype):
+def test_device_predict_stream_subchunks(cuda, monkeypatch, distance, out_dtype):
     """Queued labelling with several subchunks per chunk and chunks not aligned to them."""
-    from aweSOM import _gpu
-
-    for module, name in [(_gpu, 'GpuSearcher'), (_gpu_screen, 'GpuScreenSearcher')]:
-        base = getattr(module, name)
-        small = type('Small' + name, (base,), {'__init__': lambda self, *a, base=base, **k:
-                     base.__init__(self, *a, chunk=1000, **k)})
-        monkeypatch.setattr(module, name, small)
+    base = _gpu_screen.GpuScreenSearcher
+    small = type('Small', (base,), {'__init__': lambda self, *a, **k:
+                 base.__init__(self, *a, chunk=1000, **k)})
+    monkeypatch.setattr(_gpu_screen, 'GpuScreenSearcher', small)
     w, x = _stream_case(10_007, 73)
-    _stream_parity(backend, w, x, np.arange(len(w)) % 7, 2500, distance, out_dtype)
+    _stream_parity('cuda_screen', w, x, np.arange(len(w)) % 7, 2500, distance, out_dtype)
 
 
-@pytest.mark.parametrize('backend', ['cuda', 'cuda_screen'])
 @pytest.mark.parametrize('distance', [False, True])
-def test_device_predict_stream_large(cuda, backend, distance):
+def test_device_predict_stream_large(cuda, distance):
     """Default 2**20-row subchunks; chunks not aligned to them; N a multiple of neither."""
     w, x = _stream_case(3 * 2**20 + 12_345, 1600)
-    _stream_parity(backend, w, x, np.arange(len(w)), 2**20 + 777, distance, None)
-    _stream_parity(backend, w, x, np.arange(len(w)) % 200, 2**20, distance, np.uint8)
+    _stream_parity('cuda_screen', w, x, np.arange(len(w)), 2**20 + 777, distance, None)
+    _stream_parity('cuda_screen', w, x, np.arange(len(w)) % 200, 2**20, distance, np.uint8)
 
 
 def _round32(value):
@@ -294,14 +285,11 @@ def _blocked_case(case, features, n, seed=9):
 @pytest.mark.parametrize('case', ['random', 'smooth', 'mixed', 'large'])
 def test_device_row_blocked(cuda, case, features):
     """Rows not a multiple of R or of the block, several tiles, both input dtypes."""
-    from aweSOM._gpu import best_match_nodes_cuda
-
     w, x = _blocked_case(case, features, 4 * 128 * 3 + 37)
     for dtype in (np.float32, np.float64):
         points = x.astype(dtype)
         expected = best_match_nodes(w, points)
         _same(_gpu_screen._cuda_screen_reference(w, points), expected)
-        _same(best_match_nodes_cuda(w, points), expected)
         _same(_gpu_screen.best_match_nodes_cuda_screen(w, points, chunk=1001), expected)
         for block, tile in ((128, 128), (64, 16), (32, 128)):
             search = _gpu_screen.GpuScreenSearcher(w, len(w), 1, chunk=999, block=block, tile=tile)

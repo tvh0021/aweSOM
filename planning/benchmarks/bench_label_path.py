@@ -2,7 +2,7 @@
 
 1. ``kernel``: the search kernel alone on a device-resident pool, 2**20-row
    launches on one stream, timed with ``cp.cuda.Event``.
-2. ``searcher``: synchronous ``GpuSearcher.__call__`` on host rows (staging,
+2. ``searcher``: synchronous ``GpuScreenSearcher.__call__`` on host rows (staging,
    copies of idx and d2, drain per call), as in a direct searcher call.
 3. ``predict_stream``: labels only (no distances), the queued path, from a
    callable source that serves views of the host pool.
@@ -34,13 +34,11 @@ def main():
     parser.add_argument('--rows', type=float, default=1e8)
     parser.add_argument('--pool', type=int, default=2**24, help='rows in the reused pool')
     parser.add_argument('--chunk', type=int, default=2**20, help='predict_stream chunk')
-    parser.add_argument('--backend', choices=['cuda', 'cuda_screen'], default='cuda_screen')
     parser.add_argument('--clusters', type=int, default=10, help='node_cluster = node %% clusters')
     parser.add_argument('--out-dtype', choices=['int32', 'uint8'], default='int32')
     parser.add_argument('--layers', default='kernel,searcher,predict_stream')
     args = parser.parse_args()
     import cupy as cp
-    from aweSOM._gpu import GpuSearcher
     from aweSOM._gpu_screen import GpuScreenSearcher
 
     rows = int(args.rows)
@@ -53,12 +51,11 @@ def main():
     pool = (w[rng.integers(len(w), size=pool_rows)] +
             rng.normal(size=(pool_rows, w.shape[1])) * 0.02).astype(np.float32)
     clusters = (np.arange(len(w)) % args.clusters).astype(np.int32)
-    cls = GpuScreenSearcher if args.backend == 'cuda_screen' else GpuSearcher
-    search = cls(w, 100, 100)
+    search = GpuScreenSearcher(w, 100, 100)
     idx, d2 = np.empty(pool_rows, np.int32), np.empty(pool_rows)
     search(pool, idx, d2)  # compile, allocate staging, reference for the label check
     layers = args.layers.split(',')
-    common = dict(backend=args.backend, rows=rows, pool=pool_rows, nodes=len(w),
+    common = dict(backend='cuda_screen', rows=rows, pool=pool_rows, nodes=len(w),
                   features=w.shape[1])
 
     def report(layer, seconds, **extra):
@@ -118,7 +115,7 @@ def main():
         out[:] = 0  # fault the pages outside the timer
         start_t = time.perf_counter()
         _, stats = predict_stream(w, clusters, source, out=out, chunk=chunk,
-                                  backend=args.backend, n_samples=rows)
+                                  backend='cuda_screen', n_samples=rows)
         seconds = time.perf_counter() - start_t
         m = min(rows, pool_rows)
         same = bool(np.array_equal(out[:m], clusters[idx[:m]].astype(args.out_dtype)))

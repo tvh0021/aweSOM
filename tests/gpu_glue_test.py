@@ -7,7 +7,7 @@ import types
 import numpy as np
 import pytest
 
-from aweSOM import _gpu, _gpu_screen
+from aweSOM import _gpu_screen
 from aweSOM.inference import _bmu_kernel, predict
 from aweSOM.stream import _BMU, predict_stream
 
@@ -42,19 +42,19 @@ class FakeSearcher:
 
 
 def test_dispatch(monkeypatch):
-    monkeypatch.setattr(_gpu, 'GpuSearcher', FakeSearcher)
+    monkeypatch.setattr(_gpu_screen, 'GpuScreenSearcher', FakeSearcher)
     w, x = np.arange(12.).reshape(3, 4), np.arange(44.).reshape(11, 4)
     idx, d2 = np.empty(11, np.int32), np.empty(11)
-    search = _BMU(w, 'cuda', 3, 1, first_epoch=True)
+    search = _BMU(w, 'cuda_screen', 3, 1, first_epoch=True)
     assert search(x, idx, d2) == 11
     expected = predict(w, np.arange(3), x, return_distance=True, backend='numba')
-    actual = predict(w, np.arange(3), x, chunk=3, return_distance=True, backend='cuda')
+    actual = predict(w, np.arange(3), x, chunk=3, return_distance=True, backend='cuda_screen')
     for a, b in zip(actual, expected):
         np.testing.assert_array_equal(a, b)
     before = len(FakeSearcher.calls)
     distance = np.empty(11)
     result, stats = predict_stream(w, np.arange(3), x, out_distance=distance,
-                                   chunk=3, backend='cuda', prefetch=False)
+                                   chunk=3, backend='cuda_screen', prefetch=False)
     assert len(FakeSearcher.calls) == before + 1
     assert stats['rows'] == 11
     np.testing.assert_array_equal(result, expected[0])
@@ -69,7 +69,7 @@ def test_lazy_import():
 def test_missing_cupy(monkeypatch):
     monkeypatch.setitem(sys.modules, 'cupy', None)
     with pytest.raises(ImportError, match=r'aweSOM\[cuda\]'):
-        _gpu.GpuSearcher(np.zeros((2, 4)), 2, 1)
+        _gpu_screen.GpuScreenSearcher(np.zeros((2, 4)), 2, 1)
 
 
 class Device:
@@ -128,21 +128,18 @@ def _install(monkeypatch, allocations, launches):
                                cuda=types.SimpleNamespace(runtime=runtime, Stream=Stream,
                                    alloc_pinned_memory=pinned, get_current_stream=Stream))
     monkeypatch.setitem(sys.modules, 'cupy', cp)
-    _gpu._kernels.cache_clear()
     _gpu_screen._kernels.cache_clear()
 
 
-@pytest.mark.parametrize('screen', [False, True])
 @pytest.mark.parametrize('features', [1, 7, 12, 13, 20, 21, 32])
-def test_launch_geometry(monkeypatch, screen, features):
+def test_launch_geometry(monkeypatch, features):
     """Grid, block, shared memory and extra arguments match the kernel source's macros."""
     allocations, launches = [], []
     _install(monkeypatch, allocations, launches)
     rng = np.random.default_rng(1)
     w = rng.normal(size=(300, features))
-    cls = _gpu_screen.GpuScreenSearcher if screen else _gpu.GpuSearcher
     for block in (32, 128):
-        search = cls(w, 300, 1, chunk=1000, block=block)
+        search = _gpu_screen.GpuScreenSearcher(w, 300, 1, chunk=1000, block=block)
         x = rng.normal(size=(2777, features))
         idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
         launches.clear()
@@ -150,34 +147,27 @@ def test_launch_geometry(monkeypatch, screen, features):
         assert sorted(launch['n'] for launch in launches) == [777, 1000, 1000]
         for launch in launches:
             macros = launch['macros']
-            rows = int(macros.get('AWESOM_R', 1))
+            rows = int(macros['AWESOM_R'])
             per = launch['block'][0] * rows
             assert launch['block'] == (block,)
             assert (launch['grid'][0] - 1) * per < launch['n'] <= launch['grid'][0] * per
             assert int(macros['AWESOM_F']) == features
             tile = launch['tile']
-            if screen:
-                pad = int(macros['AWESOM_P'])
-                assert pad % 4 == 0 and pad >= features
-                assert launch['shared'] == tile * max(8 * features, 4 * pad)
-                safe, wmax = _gpu_screen._screen_parameters(w)
-                assert launch['extra'] == (np.float64(wmax), np.int32(safe))
-                assert launch['extra'][0].dtype == np.float64 and launch['extra'][1].dtype == np.int32
-            else:
-                assert launch['shared'] == tile * features * 8
-                assert launch['extra'] == ()
-    _gpu._kernels.cache_clear()
+            pad = int(macros['AWESOM_P'])
+            assert pad % 4 == 0 and pad >= features
+            assert launch['shared'] == tile * max(8 * features, 4 * pad)
+            safe, wmax = _gpu_screen._screen_parameters(w)
+            assert launch['extra'] == (np.float64(wmax), np.int32(safe))
+            assert launch['extra'][0].dtype == np.float64 and launch['extra'][1].dtype == np.int32
     _gpu_screen._kernels.cache_clear()
 
 
-@pytest.mark.parametrize('screen', [False, True])
 @pytest.mark.parametrize('overlap', [True, False])
-def test_staging(monkeypatch, overlap, screen):
+def test_staging(monkeypatch, overlap):
     allocations, launches = [], []
     _install(monkeypatch, allocations, launches)
     w = np.arange(28.).reshape(7, 4)
-    cls = _gpu_screen.GpuScreenSearcher if screen else _gpu.GpuSearcher
-    search = cls(w, 7, 1, chunk=3, overlap=overlap)
+    search = _gpu_screen.GpuScreenSearcher(w, 7, 1, chunk=3, overlap=overlap)
     for dtype in [np.float32, np.float64]:
         x = np.arange(88., dtype=dtype).reshape(22, 4)[::2]  # noncontiguous
         idx, d2 = np.empty(11, np.int32), np.empty(11)
@@ -192,7 +182,6 @@ def test_staging(monkeypatch, overlap, screen):
         assert len(allocations) == count
         assert len(search.slots) == (2 if overlap else 1)
         assert all(len(s['owners']) == 3 for s in search.slots)
-    _gpu._kernels.cache_clear()
     _gpu_screen._kernels.cache_clear()
 
 
@@ -228,12 +217,12 @@ def test_cpu_reference_sampled_init():
 
 def test_training_dispatch(monkeypatch):
     from aweSOM.stream import train_batch_stream
-    monkeypatch.setattr(_gpu, 'GpuSearcher', FakeSearcher)
+    monkeypatch.setattr(_gpu_screen, 'GpuScreenSearcher', FakeSearcher)
     x = np.arange(88.).reshape(22, 4)
     options = dict(xdim=3, ydim=1, epochs=2, chunk=5, groups=2,
                    n_threads=1, final_pass='none', prefetch=False)
     cpu, _ = train_batch_stream(x, bmu='numba', **options)
-    gpu, stats = train_batch_stream(x, bmu='cuda', **options)
+    gpu, stats = train_batch_stream(x, bmu='cuda_screen', **options)
     np.testing.assert_array_equal(gpu.view(np.uint64), cpu.view(np.uint64))
     np.testing.assert_array_equal(stats['fallbacks'], [22, 22])
-    assert stats['bmu_kind'] == ['cuda', 'cuda']
+    assert stats['bmu_kind'] == ['cuda_screen', 'cuda_screen']

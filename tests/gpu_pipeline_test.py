@@ -2,8 +2,8 @@
 
 Device work runs only when its stream is synchronized, so reading a result
 or reusing a staging buffer before the matching synchronize gives wrong
-labels here. The fake kernel is the float64 reference search for both
-searchers (the screen kernel's own parity is checked on a real device).
+labels here. The fake kernel is the float64 reference search (the screen
+kernel's own parity is checked on a real device).
 """
 import sys
 import types
@@ -11,7 +11,7 @@ import types
 import numpy as np
 import pytest
 
-from aweSOM import _gpu, _gpu_screen
+from aweSOM import _gpu_screen
 from aweSOM.inference import _bmu_kernel
 from aweSOM.stream import predict_stream
 
@@ -141,17 +141,14 @@ def fake(monkeypatch):
         Stream.created.clear()
         NullStream.queue.clear()
         monkeypatch.setitem(sys.modules, 'cupy', cp)
-        _gpu._kernels.cache_clear()
         _gpu_screen._kernels.cache_clear()
-        for module, name in [(_gpu, 'GpuSearcher'), (_gpu_screen, 'GpuScreenSearcher')]:
-            base = getattr(module, name)
-            small = type('Small' + name, (base,), {'__init__': lambda self, *a, base=base, **k:
-                         base.__init__(self, *a, chunk=chunk, overlap=overlap, **k)})
-            monkeypatch.setattr(module, name, small)
+        base = _gpu_screen.GpuScreenSearcher
+        small = type('Small', (base,), {'__init__': lambda self, *a, **k:
+                     base.__init__(self, *a, chunk=chunk, overlap=overlap, **k)})
+        monkeypatch.setattr(_gpu_screen, 'GpuScreenSearcher', small)
         Device.gets.clear()
         return types.SimpleNamespace(launches=launches, busy=busy, pinned_fail=pinned_fail)
     yield install
-    _gpu._kernels.cache_clear()
     _gpu_screen._kernels.cache_clear()
 
 
@@ -174,13 +171,12 @@ def _data(n=47, nodes=13, features=4, dtype=np.float32):
     return w, x
 
 
-@pytest.mark.parametrize('backend', ['cuda', 'cuda_screen'])
 @pytest.mark.parametrize('overlap', [True, False])
 @pytest.mark.parametrize('chunk,sub', [(10, 3), (47, 4), (5, 8), (100, 2**20)])
 @pytest.mark.parametrize('distance', [False, True])
 @pytest.mark.parametrize('out_dtype,offset', [(None, 0), (np.uint8, 0), (np.int64, 0),
                                               (np.uint8, 300), ('h5', 0)])
-def test_predict_stream_queued(fake, backend, overlap, chunk, sub, distance, out_dtype, offset):
+def test_predict_stream_queued(fake, overlap, chunk, sub, distance, out_dtype, offset):
     f = fake(sub, overlap)
     launches = f.launches
     w, x = _data()
@@ -194,7 +190,7 @@ def test_predict_stream_queued(fake, backend, overlap, chunk, sub, distance, out
     expected, _ = predict_stream(w, clusters, x, out=expected_out, out_distance=ed,
                                  chunk=chunk, backend='numba', prefetch=False)
     actual, stats = predict_stream(w, clusters, x, out=actual_out, out_distance=ad,
-                                   chunk=chunk, backend=backend, prefetch=chunk == 10)
+                                   chunk=chunk, backend='cuda_screen', prefetch=chunk == 10)
     if out_dtype == 'h5':
         expected, actual = expected.a, actual.a
     assert actual.dtype == expected.dtype
@@ -215,25 +211,25 @@ def test_label_dtype_and_direct_write(fake, monkeypatch, tmp_path):
     fake(4)
     w, x = _data()
     shared = []
-    submit = _gpu.GpuSearcher.submit
+    submit = _gpu_screen.GpuScreenSearcher.submit
 
     def spy(self, block, out, *args):
         shared.append(np.shares_memory(out, target))
         return submit(self, block, out, *args)
-    monkeypatch.setattr(_gpu.GpuSearcher, 'submit', spy)
+    monkeypatch.setattr(_gpu_screen.GpuScreenSearcher, 'submit', spy)
     target = np.zeros(len(x), np.uint8)
-    predict_stream(w, np.arange(len(w)) % 3, x, out=target, chunk=9, backend='cuda', prefetch=False)
+    predict_stream(w, np.arange(len(w)) % 3, x, out=target, chunk=9, backend='cuda_screen', prefetch=False)
     assert set(Device.gets) == {np.dtype(np.uint8)}  # gathered, 1 B per row
     assert shared and all(shared)  # written from pinned memory straight into out
     Device.gets.clear()
     shared.clear()
-    predict_stream(w, np.arange(len(w)) - 1, x, out=target, chunk=9, backend='cuda', prefetch=False)
+    predict_stream(w, np.arange(len(w)) - 1, x, out=target, chunk=9, backend='cuda_screen', prefetch=False)
     assert set(Device.gets) == {np.dtype(np.int32)}  # -1 does not fit uint8
     assert not any(shared)  # int32 labels go through host buffers into the uint8 out
     for target in [np.zeros(len(x), '>i4'),  # non-native byte order (h5py, FITS)
                    np.lib.format.open_memmap(tmp_path / 'l.npy', 'w+', np.int16, (len(x),))]:
         expected = predict_stream(w, np.arange(len(w)) % 3, x, chunk=9, backend='numba')[0]
-        predict_stream(w, np.arange(len(w)) % 3, x, out=target, chunk=9, backend='cuda',
+        predict_stream(w, np.arange(len(w)) % 3, x, out=target, chunk=9, backend='cuda_screen',
                        prefetch=False)
         np.testing.assert_array_equal(target, expected)
 
@@ -242,7 +238,7 @@ def test_table_outlives_submit(fake):
     """A queued gather keeps its cluster table alive until the result is written."""
     fake(4)
     w, x = _data(n=30)
-    search = _gpu.GpuSearcher(w, len(w), 1)
+    search = _gpu_screen.GpuScreenSearcher(w, len(w), 1)
     ri, rd = np.empty(len(x), np.int32), np.empty(len(x))
     _bmu_kernel(w, x, ri, rd)
     out = np.zeros(len(x), np.int32)
@@ -257,7 +253,7 @@ def test_wait_oldest_first(fake):
     """Two queued results for the same rows: the newer one is written last."""
     fake(4)
     w, x = _data(n=12)
-    search = _gpu.GpuSearcher(w, len(w), 1)
+    search = _gpu_screen.GpuScreenSearcher(w, len(w), 1)
     idx, d2 = np.empty(4, np.int32), np.empty(4)
     search.submit(x[:4], idx, d2)  # slot 0
     search.submit(x[4:8], idx, d2)  # slot 1
@@ -272,7 +268,7 @@ def test_wait_oldest_first(fake):
 def test_allocation_failure_recovers(fake):
     f = fake(4)
     w, x = _data(n=12)
-    search = _gpu.GpuSearcher(w, len(w), 1)
+    search = _gpu_screen.GpuScreenSearcher(w, len(w), 1)
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
     search(x, idx, d2)
     f.pinned_fail.append(True)
@@ -288,7 +284,7 @@ def test_allocation_failure_recovers(fake):
 def test_searcher_queue_and_error(fake):
     fake(4, fail_after=5)
     w, x = _data(n=30)
-    search = _gpu.GpuSearcher(w, len(w), 1)
+    search = _gpu_screen.GpuScreenSearcher(w, len(w), 1)
     ri, rd = np.empty(len(x), np.int32), np.empty(len(x))
     _bmu_kernel(w, x, ri, rd)
     idx, d2 = np.full(len(x), -1, np.int32), np.full(len(x), -1.)

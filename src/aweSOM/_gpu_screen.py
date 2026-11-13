@@ -46,7 +46,6 @@ from functools import lru_cache
 import numpy as np
 from numba import njit, prange
 
-from ._gpu import GpuSearcher
 from .inference import _check_inputs, _U32
 
 TILE = 128  # nodes per shared-memory tile
@@ -320,27 +319,197 @@ def _kernels(features):
                  for name in ('bmu_screen_f32', 'bmu_screen_f64'))
 
 
-class GpuScreenSearcher(GpuSearcher):
-    """Reuse CUDA staging and streams with a certified float32 screening kernel.
+def _pinned(cp, shape, dtype):
+    owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
+    return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
 
-    Chunk, block and overlap options match :class:`GpuSearcher`; ``tile``
-    (nodes per shared-memory tile) defaults to 128 here. Each thread screens
-    up to four rows. As with that class, the return value is zero (no
-    fallback telemetry).
+
+class GpuScreenSearcher:
+    """Search fixed weights with the screen kernel, bounded device memory and host staging.
+
+    ``__call__`` is synchronous and not thread-safe: no work remains pending
+    when it returns, including on an error. ``submit`` queues a block and
+    returns while the last subchunks still run, so a caller such as
+    :func:`aweSOM.stream.predict_stream` keeps the device busy between its
+    chunks; ``wait`` completes the queued work. Subchunks alternate between
+    two streams, overlapping one subchunk's staging and copies with the
+    previous one's search, also across ``submit`` calls.
+    ``overlap=False`` uses one slot for the probe's serial comparison.
+    ``tile`` is the number of nodes per shared-memory tile; each thread
+    screens up to four rows.
     """
 
-    def __init__(self, weights, xdim, ydim, *, tile=TILE, **kwargs):
-        super().__init__(weights, xdim, ydim, tile=tile, **kwargs)
-        w, _ = _check_inputs(weights, np.empty((0, self.features)))
-        self.rows_per_thread, pad = _layout(self.features)
+    def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=TILE,
+                 block=128, overlap=True):
+        w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
+        if not 1 <= w.shape[1] <= 32:
+            raise ValueError('CUDA search supports 1 through 32 features')
+        if xdim * ydim != len(w):
+            raise ValueError('lattice dimensions do not match weights')
+        if not 1 <= chunk <= 2**20 or not 1 <= block <= 1024 or tile < 1:
+            raise ValueError('need 1 <= chunk <= 2**20, 1 <= block <= 1024 and tile > 0')
+        try:
+            import cupy as cp
+        except ImportError as exc:
+            raise ImportError('CUDA BMU search needs CuPy; install aweSOM[cuda] (cupy-cuda12x)') from exc
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            raise RuntimeError('CUDA BMU search needs a CUDA device')
+        self.cp = cp
+        self.w = cp.asarray(w)
+        cp.cuda.get_current_stream().synchronize()
+        self.nodes, self.features = w.shape
+        self.chunk, self.tile, self.block = int(chunk), int(tile), int(block)
+        self.rows_per_thread, pad = _layout(self.features)  # the grid covers n rows
         self.shared = self.tile * max(8 * self.features, 4 * pad)
-        cp = self.cp
         props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-        if self.shared > props['sharedMemPerBlock']:
-            raise ValueError('tile exceeds the device shared memory')
-        safe, wmax = _screen_parameters(w)
-        self.args = (np.float64(wmax), np.int32(safe))  # runtime: a new lattice reuses the kernel
+        if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
+            raise ValueError('tile or block exceeds the device limit')
         self.kernels = _kernels(self.features)
+        safe, wmax = _screen_parameters(w)
+        # Kernel arguments after (w, x, idx, d2, rows, nodes, tile); runtime
+        # values, so a new lattice reuses the compiled kernel.
+        self.args = (np.float64(wmax), np.int32(safe))
+        self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
+        self.slots = []
+        self.capacity = 0
+        self.dtype = None
+        self.turn = 0  # next slot; persists across submits so the oldest slot is reused
+        self.token = 0
+
+    def _allocate(self, rows, dtype):
+        capacity = min(rows, self.chunk)
+        if dtype == self.dtype and capacity <= self.capacity:
+            return
+        self.wait()  # queued results live in the slots about to be replaced
+        # Reset first, so a failed allocation leaves a state that reallocates.
+        self.slots, self.capacity, self.dtype, self.turn = [], 0, None, 0
+        for stream in self.streams:
+            owners, arrays = zip(*(_pinned(self.cp, shape, dt) for shape, dt in
+                                  [((capacity, self.features), dtype),
+                                   ((capacity,), np.int32), ((capacity,), np.float64)]))
+            with stream:
+                device = [self.cp.empty(a.shape, a.dtype) for a in arrays]
+            self.slots.append(dict(owners=owners, host=arrays, device=device,
+                                   labels=None, pending=None))
+        self.capacity, self.dtype = capacity, dtype
+
+    def cluster_map(self, node_cluster, dtype=np.int32):
+        """Upload a node -> label table for :meth:`submit`.
+
+        ``dtype`` is the label dtype, at most 4 bytes, used in native byte
+        order; the caller chooses one that holds every entry, so the gather
+        equals ``node_cluster[idx]``.
+        """
+        table = np.asarray(node_cluster).astype(np.dtype(dtype).newbyteorder('=')).ravel()
+        if len(table) != self.nodes or table.dtype.itemsize > 4:
+            raise ValueError('need one label per node in a dtype of at most 4 bytes')
+        table = self.cp.asarray(table)
+        # The upload runs on the current stream; the searches run on
+        # non-blocking streams that do not order against it.
+        self.cp.cuda.get_current_stream().synchronize()
+        return table
+
+    def _finish(self, slot, stream):
+        stream.synchronize()
+        pending, slot['pending'] = slot['pending'], None
+        if pending is not None:
+            _, out, host, d2, host_d2, _ = pending
+            out[...] = host
+            if d2 is not None:
+                d2[...] = host_d2
+
+    def cancel(self):
+        """Wait for all device work and drop results that were not written yet."""
+        try:
+            for stream in self.streams:
+                stream.synchronize()
+        finally:
+            for slot in self.slots:
+                slot['pending'] = None
+
+    def wait(self, token=None):
+        """Write the results of every ``submit`` up to ``token`` (all when None)."""
+        try:
+            for i in range(len(self.slots)):  # oldest first: the next slot to reuse
+                k = (self.turn + i) % len(self.slots)
+                slot, stream = self.slots[k], self.streams[k]
+                pending = slot['pending']
+                if pending is not None and (token is None or pending[0] <= token):
+                    self._finish(slot, stream)
+        except BaseException:
+            self.cancel()
+            raise
+
+    def submit(self, block, out, d2=None, clusters=None):
+        """Queue the search of ``block`` and return a token for :meth:`wait`.
+
+        ``out`` receives int32 BMU indices or, with a ``clusters`` table from
+        :meth:`cluster_map`, ``clusters[idx]`` gathered on the device in the
+        table's dtype. ``d2`` (optional, float64) receives squared distances;
+        without it they are not copied off the device. Results are written on
+        the host by a later ``submit`` that reuses their slot, or by ``wait``;
+        ``block`` may be reused as soon as this returns. An error after the
+        argument checks drops all queued work; a rejected argument leaves
+        earlier submits queued.
+        """
+        x = np.asarray(block)
+        if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
+            raise ValueError('block must be float32 or float64 with matching features')
+        if len(out) != len(x) or (d2 is not None and len(d2) != len(x)):
+            raise ValueError('outputs need one entry per row')
+        if not len(x):
+            return self.token
+        self.token += 1
+        cp = self.cp
+        kernel = self.kernels[int(x.dtype == np.float64)]
+        try:
+            self._allocate(len(x), x.dtype)
+            for start in range(0, len(x), self.capacity):
+                k = self.turn
+                self.turn = (k + 1) % len(self.slots)
+                slot, stream = self.slots[k], self.streams[k]
+                self._finish(slot, stream)
+                stop = min(start + self.capacity, len(x))
+                n = stop - start
+                host, dev = slot['host'], slot['device']
+                host[0][:n] = x[start:stop]
+                with stream:
+                    if clusters is not None and (slot['labels'] is None
+                                                 or slot['labels'].dtype != clusters.dtype):
+                        slot['labels'] = cp.empty(self.capacity, clusters.dtype)
+                    dev[0][:n].set(host[0][:n], stream=stream)
+                    per = self.block * self.rows_per_thread
+                    kernel(((n + per - 1) // per,), (self.block,),
+                           (self.w, dev[0], dev[1], dev[2], np.int32(n),
+                            np.int32(self.nodes), np.int32(self.tile)) + self.args,
+                           shared_mem=self.shared, stream=stream)
+                    if clusters is None:
+                        result, host_out = dev[1][:n], host[1][:n]
+                    else:
+                        result = slot['labels'][:n]
+                        cp.take(clusters, dev[1][:n], out=result)
+                        host_out = host[1].view(clusters.dtype)[:n]
+                    result.get(out=host_out, stream=stream, blocking=False)
+                    if d2 is not None:
+                        dev[2][:n].get(out=host[2][:n], stream=stream, blocking=False)
+                # The table stays referenced until the queued gather has run.
+                slot['pending'] = (self.token, out[start:stop], host_out,
+                                   None if d2 is None else d2[start:stop], host[2][:n], clusters)
+        except BaseException:
+            self.cancel()
+            raise
+        return self.token
+
+    def __call__(self, block, idx, d2):
+        x = np.asarray(block)
+        if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
+            raise ValueError('block must be float32 or float64 with matching features')
+        if idx.shape != (len(x),) or idx.dtype != np.int32 or d2.shape != (len(x),) or d2.dtype != np.float64:
+            raise ValueError('outputs must be int32 idx and float64 d2, one per row')
+        if len(x):
+            self.submit(x, idx, d2)
+            self.wait()
+        return 0
 
 
 def best_match_nodes_cuda_screen(weights, data, chunk=2**20):
