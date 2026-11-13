@@ -880,21 +880,32 @@ LABEL_FILES = (('labels', 'i4'), ('nodes', 'i4'), ('distances', 'f8'))
 def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None):
     """Label every pool row into OUT/<tag>-{labels,nodes,distances}.npy (rank 0 has created them).
 
-    With ``comm`` each rank writes its own contiguous rows (aweSOM.distributed.row_range) with
-    exact-range writes (aweSOM.stream.NpyWriter), so ranks on different nodes never write the
-    same file page. OUT must be one directory every rank can open (a shared file system):
-    a rank that cannot open the files stops every rank with an error. Rank 0 then checks a
-    CRC-32 of every other rank's rows. Returns the per-rank records (rank 0) or None.
+    Rank 0 is the only process that opens these files: it writes its own rows into them. With
+    ``comm`` every other rank r labels its contiguous rows (aweSOM.distributed.row_range) into
+    part files of its own, OUT/<tag>-<key>.part<r>.npy, so no file is ever open on two nodes
+    (a network file system stops buffering writes to a file open on several nodes). After every
+    rank has closed its files, rank 0 copies the parts into place in rank order, checks each
+    copy against the CRC-32 its rank computed while writing, and deletes the parts; a failed
+    check stops every rank and keeps the parts. OUT must be one directory every rank can open
+    (a shared file system): a rank that cannot create its files stops every rank. Returns the
+    per-rank records and the assembly timings (rank 0) or None.
     """
-    from aweSOM.stream import NpyWriter, predict_stream, npy_crc32
+    from aweSOM.stream import NpyWriter, predict_stream, copy_npy_rows
     from aweSOM import distributed
     rank = 0 if comm is None else comm.Get_rank()
     size = 1 if comm is None else comm.Get_size()
     gather = (lambda x: [x]) if comm is None else comm.allgather
+    lo, hi = distributed.row_range(len(raw), rank, size)
+    final = lambda key: out / f'{tag}-{key}.npy'
+    part = lambda key, r: out / f'{tag}-{key}.part{r}.npy'
     t0 = time.perf_counter()
     writers, problem = {}, None
     try:
-        for key, _ in LABEL_FILES: writers[key] = NpyWriter(out / f'{tag}-{key}.npy')
+        for key, dtype in LABEL_FILES:
+            if rank:
+                made = np.lib.format.open_memmap(part(key, rank), mode='w+', dtype=dtype, shape=(hi - lo,))
+                del made
+            writers[key] = NpyWriter(part(key, rank) if rank else final(key))
     except OSError as e:
         problem = f'{node_name()} rank {rank}: cannot open {e.filename}: {e.strerror}'
     except Exception as e:  # a malformed or stale .npy header: every rank must still reach gather
@@ -918,7 +929,10 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                     start=st['start'], stop=st['stop'], rows=st['rows'], seconds=st['seconds'],
                     compute_seconds=st['compute'], io_wait_seconds=st['io_wait'],
                     write_seconds=st['write'], close_seconds=time.perf_counter()-tc,
-                    wall_seconds=time.perf_counter()-t0, crc32=crcs)
+                    pwrite_seconds=sum(wr.pwrite_seconds for wr in writers.values()),
+                    fsync_seconds=sum(wr.fsync_seconds for wr in writers.values()),
+                    bytes_written=st['rows'] * sum(np.dtype(d).itemsize for _, d in LABEL_FILES),
+                    part_files=bool(rank), wall_seconds=time.perf_counter()-t0, crc32=crcs)
     except Exception:
         for wr in writers.values(): wr.close(sync=False)
         mine = dict(rank=rank, hostname=node_name(), error=traceback.format_exc())
@@ -928,23 +942,39 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
         raise RuntimeError('labelling failed on rank(s) ' + ', '.join(str(r['rank']) for r in failed)
                            + '\n' + '\n'.join(r['error'] for r in failed))
     t1 = time.perf_counter(); checked, check_error = [], None
-    if not rank:
+    copied = dict(read_seconds=0., write_seconds=0., bytes=0); fsync = 0.
+    if not rank and size > 1:
+        dest = None
         try:
-            for r in every[1:]:  # rank 0 reads back every other rank's rows: lost or torn writes fail here
-                for key, (first, end, crc) in r['crc32'].items():
-                    if r['rows'] and (first, end) != (r['start'], r['stop']) or crc is None:
+            for key, _ in LABEL_FILES:  # one final file at a time, parts in rank order
+                dest = NpyWriter(final(key))
+                for r in every[1:]:
+                    first, end, crc = r['crc32'][key]
+                    if r['rows'] and (first, end) != (0, r['rows']) or crc is None:
                         raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
-                    if r['rows'] and npy_crc32(out / f'{tag}-{key}.npy', first, end) != crc:
-                        raise RuntimeError(f"rank {r['rank']} {key} rows [{first}, {end}) differ on disk from what it wrote")
-                checked.append(r['rank'])
+                    # The copy reads every byte of the part: lost or torn writes fail here.
+                    if copy_npy_rows(part(key, r['rank']), dest, r['start'], stats=copied) != crc:
+                        raise RuntimeError(f"rank {r['rank']} {key} rows [{r['start']}, {r['stop']}) "
+                                           'differ on disk from what it wrote')
+                dest.close(); fsync += dest.fsync_seconds; dest = None
+            checked = [r['rank'] for r in every[1:]]
+            for key, _ in LABEL_FILES:
+                for r in every[1:]: os.remove(part(key, r['rank']))
         except Exception as e:
-            check_error = f'{type(e).__name__}: {e}'
-    # Every rank learns the outcome of rank 0's readback, so a failed check stops all of them.
+            if dest is not None: dest.close(sync=False)
+            hint = (' (OUT must be on a file system every rank can open)'
+                    if isinstance(e, FileNotFoundError) else '')
+            check_error = f'{type(e).__name__}: {e}{hint}'
+    # Every rank learns the outcome of rank 0's check, so a failed check stops all of them.
     if comm is not None: check_error = comm.bcast(check_error, root=0)
     if check_error:
         raise RuntimeError('labelling readback check on rank 0 failed: ' + check_error)
     if rank: return None
-    return dict(ranks=every, crc_checked_ranks=checked, crc_check_seconds=time.perf_counter()-t1)
+    seconds = time.perf_counter() - t1
+    return dict(ranks=every, crc_checked_ranks=checked, crc_check_seconds=seconds,
+                assemble_seconds=seconds, assemble_read_seconds=copied['read_seconds'],
+                assemble_write_seconds=copied['write_seconds'], assemble_fsync_seconds=fsync,
+                assemble_bytes=copied['bytes'])
 
 
 def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=None):
@@ -1006,7 +1036,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
                 np.save(out / f'{tag}-umat.npy', lat.umat)
                 clock.finish('clustering')
-                for key, dtype in LABEL_FILES:  # created here, filled by every rank
+                for key, dtype in LABEL_FILES:  # created here; only rank 0 opens them
                     created = np.lib.format.open_memmap(out / f'{tag}-{key}.npy', mode='w+', dtype=dtype, shape=(len(raw),))
                     del created
                 prepared = ('ok', nc)
