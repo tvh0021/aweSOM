@@ -234,6 +234,20 @@ def test_label_dtype_and_direct_write(fake, monkeypatch, tmp_path):
         np.testing.assert_array_equal(target, expected)
 
 
+@pytest.mark.parametrize('clusters,dtype', [(np.arange(13) % 10, np.uint8),
+                                            (np.arange(13) * 25, np.uint16),
+                                            (np.arange(13) - 1, np.int32)])
+def test_default_dtype_on_device(fake, clusters, dtype):
+    """Without ``out``, labels are gathered on the device in the narrowest dtype."""
+    fake(4)
+    w, x = _data()
+    actual, _ = predict_stream(w, clusters, x, chunk=9, backend='cuda_screen', prefetch=False)
+    expected, _ = predict_stream(w, clusters, x, chunk=9, backend='numba', prefetch=False)
+    assert actual.dtype == expected.dtype == dtype
+    assert set(Device.gets) == {np.dtype(dtype)}
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_table_outlives_submit(fake):
     """A queued gather keeps its cluster table alive until the result is written."""
     fake(4)

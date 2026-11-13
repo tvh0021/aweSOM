@@ -90,6 +90,7 @@ from .inference import (
     _patch_kernel,
     _screen_kernel,
     lattice_patches,
+    narrow_label_dtype,
     predict,
 )
 
@@ -951,8 +952,12 @@ def predict_stream(
         node_cluster: ``(nodes,)`` cluster id per node (use ``np.arange(nodes)``
             for BMU indices).
         data_source: As in :func:`train_batch_stream` (already scaled).
-        out: Writable ``(N,)`` int32 array-like (``ndarray``, ``memmap``,
-            ``h5py.Dataset``); allocated in memory if None.
+        out: Writable ``(N,)`` integer array-like (``ndarray``, ``memmap``,
+            ``h5py.Dataset``) that holds every cluster id. If None, it is
+            allocated in memory as the smallest of uint8, uint16 and int32
+            that holds every entry of ``node_cluster``
+            (:func:`aweSOM.inference.narrow_label_dtype`): uint8 for up to
+            256 clusters, uint16 for node IDs of up to 65536 nodes.
         out_distance: Optional writable ``(N,)`` array for the BMU distance.
         chunk: Rows per chunk.
         backend: ``predict`` backend, including the optional ``"cuda_screen"``.
@@ -965,8 +970,9 @@ def predict_stream(
         ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute.
     """
     source = _make_source(data_source, n_samples)
+    clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if out is None:
-        out = np.empty(source.n, np.int32)
+        out = np.empty(source.n, narrow_label_dtype(clusters))
     stats = {"io_wait": 0.0, "compute": 0.0, "write": 0.0}
     it = _epoch_chunks(source, chunk, 1.0, 1, None)
     if prefetch:
@@ -974,7 +980,6 @@ def predict_stream(
     t_start = time.perf_counter()
     pos = 0
     gpu = _BMU(weights, backend, len(weights), 1).gpu if backend == "cuda_screen" else None
-    clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if gpu is not None:
         if len(clusters) != len(weights):
             raise ValueError("node_cluster must have one entry per node")

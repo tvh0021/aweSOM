@@ -79,6 +79,7 @@ __all__ = [
     "best_match_nodes_kdtree",
     "best_match_nodes_patch",
     "best_match_nodes_screen",
+    "narrow_label_dtype",
     "predict",
     "benchmark",
 ]
@@ -979,6 +980,21 @@ def best_match_nodes_patch(
     if return_evaluations:
         return nodes_idx, dist2, evals
     return nodes_idx, dist2
+
+
+def narrow_label_dtype(ids) -> np.dtype:
+    """Smallest of uint8, uint16 and int32 that holds every value of ``ids``.
+
+    uint8 or uint16 needs every id non-negative and at most 255 or 65535;
+    otherwise (also for no ids) the result is int32.
+    """
+    ids = np.asarray(ids)
+    if ids.size and ids.min() >= 0:
+        top = ids.max()
+        for dtype in (np.uint8, np.uint16):
+            if top <= np.iinfo(dtype).max:
+                return np.dtype(dtype)
+    return np.dtype(np.int32)
 
 
 def predict(

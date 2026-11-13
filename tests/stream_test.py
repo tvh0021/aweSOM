@@ -191,6 +191,26 @@ def test_predict_stream_matches_predict(tmp_path):
     assert stats["rows"] == 5000
 
 
+@pytest.mark.parametrize("clusters,dtype", [
+    (np.arange(10_000) % 10, np.uint8),  # 10 clusters
+    (np.arange(10_000) % 300, np.uint16),  # 300 clusters
+    (np.arange(10_000), np.uint16),  # raw node IDs of a 100x100 lattice
+    (np.arange(10_000) % 10 - 1, np.int32),  # -1 = unassigned
+    (np.arange(10_000) * 7, np.int32),  # ids above 65535
+])
+def test_predict_stream_default_dtype(clusters, dtype):
+    """Without ``out`` the labels come in the narrowest dtype and equal the int32 labels."""
+    rng = np.random.default_rng(5)
+    w = rng.normal(size=(10_000, 3))
+    x = rng.normal(size=(2_000, 3)).astype(np.float32)
+    labels, _ = predict_stream(w, clusters, x, chunk=777, prefetch=False)
+    wide = np.empty(len(x), np.int32)
+    predict_stream(w, clusters, x, out=wide, chunk=777, prefetch=False)
+    assert labels.dtype == dtype
+    np.testing.assert_array_equal(labels.astype(np.int64), wide)
+    np.testing.assert_array_equal(wide, predict(w, clusters, x))
+
+
 def test_stratified_sample_size_and_dtype():
     x = np.arange(100_000 * 2, dtype=np.float32).reshape(-1, 2)
     s = stratified_sample(x, 10_000, block=100, seed=1)
