@@ -18,7 +18,9 @@ from aweSOM import _gpu, _gpu_screen, distributed
 from aweSOM.inference import best_match_nodes, best_match_nodes_patch
 from aweSOM.stream import BMUSearcher, NpyWriter, copy_npy_rows, npy_crc32, predict_stream
 
+import mpi_label_rows_worker as rows_worker
 import mpi_label_worker as worker
+import output_guard
 from production_pool_mpi_test import FakeComm, prepared  # noqa: F401  (module fixture)
 from production_pool_test import pool
 
@@ -424,6 +426,64 @@ def test_mpirun_files_equal_single_process(tmp_path, ranks):
     print(f"{ranks} mpirun ranks: labels, nodes and distances files byte-identical to one process")
 
 
+def single_files(tmp_path, tag, n):
+    """np.save of the single-process labels, nodes and distances: today's one-rank bytes."""
+    lab, _ = worker.label(worker.data(n), "patch", n_samples=n)
+    nodes, d2 = best_match_nodes(worker.lattice(), worker.data(n))
+    ref = {"labels": lab, "nodes": nodes, "distances": np.sqrt(d2)}
+    paths = {}
+    for k, a in ref.items():
+        paths[k] = tmp_path / f"np-save-{tag}-{k}.npy"
+        np.save(paths[k], a)
+    return paths
+
+
+def test_label_rows_one_rank_bytes(tmp_path):
+    """One rank (no comm): the final files are np.save's bytes and no part file is made."""
+    pool = rows_worker.load_driver()
+    for tag, n in rows_worker.CASES.items():
+        rec = rows_worker.label_case(pool, tmp_path, tag, n, None)
+        assert rec["crc_checked_ranks"] == [] and rec["assemble_bytes"] == 0
+        assert [r["part_files"] for r in rec["ranks"]] == [False]
+        for k, path in single_files(tmp_path, tag, n).items():
+            assert (tmp_path / f"{tag}-{k}.npy").read_bytes() == path.read_bytes(), (tag, k)
+    assert not list(tmp_path.glob("*.part*"))
+
+
+@pytest.mark.skipif(_mpirun() is None, reason="mpi4py or mpirun not available")
+@pytest.mark.parametrize("ranks", [2, 3])
+def test_mpirun_label_rows_one_writer_per_file(tmp_path, ranks):
+    """The driver's label_rows on real MPI: final files equal one rank's bit for bit (uneven
+    and empty ranges), no two ranks ever hold one output file open, only rank 0 opens a
+    final file, and the parts are gone afterwards."""
+    env = dict(__import__("os").environ, NUMBA_NUM_THREADS="2", OMP_NUM_THREADS="1",
+               PYTHONPATH=str(HERE.parent / "src"))
+    cmd = [_mpirun(), "-n", str(ranks), "--oversubscribe", sys.executable, "-m", "mpi4py",
+           str(HERE / "mpi_label_rows_worker.py"), str(tmp_path)]
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
+    assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-3000:]
+    report = json.loads((tmp_path / "report.json").read_text())
+    for tag, n in rows_worker.CASES.items():
+        for k, path in single_files(tmp_path, tag, n).items():
+            assert (tmp_path / f"{tag}-{k}.npy").read_bytes() == path.read_bytes(), (tag, k)
+        rec = report["records"][tag]
+        assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, ranks) for r in range(ranks)]
+        assert rec["crc_checked_ranks"] == list(range(1, ranks))
+        assert [r["part_files"] for r in rec["ranks"]] == [False] + [True] * (ranks - 1)
+        assert rec["assemble_bytes"] == 16 * sum(r["rows"] for r in rec["ranks"][1:])
+    assert not list(tmp_path.glob("*.part*"))
+    for r in report["ranks"]:
+        finals = [p for p in r["opened"] if output_guard.is_final(p)]
+        parts = [p for p in r["opened"] if not output_guard.is_final(p)]
+        if r["rank"]:
+            assert not finals and r["caught"] is True
+            assert {Path(p).name for p in parts} == {f"{tag}-{k}.part{r['rank']}.npy" for tag in rows_worker.CASES
+                                                     for k in ("labels", "nodes", "distances")}
+        else:
+            assert finals and all(".part0." not in p for p in parts)
+    print(f"{ranks} mpirun ranks: driver label_rows files byte-identical to one rank, one writer per file")
+
+
 # ------------------------------------------------------------- the driver
 
 
@@ -459,10 +519,13 @@ class SharedNodeComm(FakeComm):
 
 
 def driver_rank(conn, rank, size, barrier, slots, argv, mode):
-    """One fake rank of production_pool.main. mode: 'cpu', 'gpu' (fake CuPy with two
-    devices and the CPU stand-in searcher) 'no-shared-out' (rank 1 cannot open OUT files), 'bad-header' (rank 1 hits a
-    malformed .npy header) or 'bad-crc' (rank 0's readback check fails)."""
+    """One fake rank of production_pool.main, with every open of an output file during
+    label_rows guarded (output_guard). mode: 'cpu', 'gpu' (fake CuPy with two devices and the CPU stand-in
+    searcher), 'no-shared-out' (rank 1 cannot open OUT files), 'bad-header' (rank 1 hits a
+    malformed .npy header) or 'bad-crc' (rank 1 corrupts a byte of its labels part after
+    writing it). Sends (status, payload, guarded opens)."""
     try:
+        output_guard.install()
         from aweSOM import distributed as dist, _gpu_screen as screen, stream
         dist.get_comm = lambda: SharedNodeComm(rank, size, barrier, slots)
         dist._shared_split_type = lambda: "shared"
@@ -479,12 +542,23 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
             def malformed(path):
                 raise ValueError(f"{path}: malformed .npy header")
             stream.NpyWriter = malformed
-        if mode == "bad-crc":  # only rank 0 reads back, so every rank's failure comes from rank 0
-            stream.npy_crc32 = lambda *a, **k: -1
+        if mode == "bad-crc" and rank == 1:  # only rank 0 copies the parts: every rank's failure comes from rank 0
+            close = stream.NpyWriter.close
+
+            def corrupt(self, sync=True):
+                close(self, sync)
+                if self.path.endswith("-labels.part1.npy"):
+                    with open(self.path, "r+b") as fh:
+                        fh.seek(self.offset)
+                        byte = fh.read(1)
+                        fh.seek(self.offset)
+                        fh.write(bytes([byte[0] ^ 1]))
+            stream.NpyWriter.close = corrupt
+        pool.label_rows = output_guard.locking_during(pool.label_rows)
         pool.main(argv)
-        conn.send(("ok", StandIn.devices))
+        conn.send(("ok", StandIn.devices, output_guard.opened))
     except BaseException:
-        conn.send(("error", traceback.format_exc()))
+        conn.send(("error", traceback.format_exc(), output_guard.opened))
     finally:
         conn.close()
 
@@ -525,8 +599,13 @@ def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # no
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
             "--mpi", "--statistics", "later"]
     results = run_driver(size, argv, mode)
-    assert all(status == "ok" for status, _ in results), results
+    assert all(status == "ok" for status, _, _ in results), results
     res = out / "results"
+    assert not list(res.glob("*.part*"))  # rank 0 deleted the parts after copying them
+    for r, (_, _, opened) in enumerate(results):  # only rank 0 opens a final file
+        assert any(output_guard.is_final(p) for p in opened) == (r == 0)
+        if r:  # every other rank opens only its own part files
+            assert {Path(p).name for p in opened} == {f"4x3-s42-{k}.part{r}.npy" for k in ("labels", "nodes", "distances")}
     lab, nodes, dist = relabel(res)
     bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.int32))
     bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes)
@@ -536,7 +615,13 @@ def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # no
     assert rec["requested"] == "auto" and rec["backend"] == ("cuda_screen" if mode == "gpu" else "patch")
     assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, size) for r in range(size)]
     assert rec["crc_checked_ranks"] == list(range(1, size))
-    devices = [payload for _, payload in results]
+    assert rec["assemble_bytes"] == 16 * (n - rec["ranks"][0]["rows"])
+    for key in ("assemble_seconds", "assemble_read_seconds", "assemble_write_seconds", "assemble_fsync_seconds"):
+        assert rec[key] >= 0
+    for r in rec["ranks"]:
+        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 16 * r["rows"]
+        assert r["pwrite_seconds"] >= 0 and r["fsync_seconds"] >= 0
+    devices = [payload for _, payload, _ in results]
     if mode == "gpu":
         assert [r["device"] for r in rec["ranks"]] == [r % 2 for r in range(size)]
         assert devices == [[r % 2] for r in range(size)]  # one searcher per rank, on its device
@@ -549,8 +634,8 @@ def test_driver_refuses_out_other_ranks_cannot_open(prepared, monkeypatch):  # n
     out = prepared.tmp / "label-node-local"
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42", "--mpi"]
     results = run_driver(2, argv, "no-shared-out")
-    assert [status for status, _ in results] == ["error", "error"]
-    for _, message in results:
+    assert [status for status, _, _ in results] == ["error", "error"]
+    for _, message, _ in results:
         assert "multi-rank labelling needs OUT on a file system every rank can open" in message
         assert "rank 1: cannot open" in message
     assert not (out / "results").exists()
@@ -561,8 +646,8 @@ def test_driver_header_error_stops_every_rank(prepared, monkeypatch):  # noqa: F
     out = prepared.tmp / "label-bad-header"
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42", "--mpi"]
     results = run_driver(2, argv, "bad-header")
-    assert [status for status, _ in results] == ["error", "error"]
-    for _, message in results:
+    assert [status for status, _, _ in results] == ["error", "error"]
+    for _, message, _ in results:
         assert "rank 1: cannot open the label files: ValueError" in message
 
 
@@ -572,7 +657,8 @@ def test_driver_readback_failure_stops_every_rank(prepared, monkeypatch):  # noq
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
             "--mpi", "--statistics", "later"]
     results = run_driver(2, argv, "bad-crc")
-    assert [status for status, _ in results] == ["error", "error"]
-    for _, message in results:
+    assert [status for status, _, _ in results] == ["error", "error"]
+    for _, message, _ in results:
         assert "labelling readback check on rank 0 failed" in message
-        assert "differ on disk from what it wrote" in message
+        assert "rank 1 labels rows" in message and "differ on disk from what it wrote" in message
+    assert (out / "results.partial" / "4x3-s42-labels.part1.npy").exists()  # kept for a look

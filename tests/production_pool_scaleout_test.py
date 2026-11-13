@@ -263,11 +263,13 @@ def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
                     'reduce_time','checkpoint_time','rank_io_wait','rank_bmu','rank_acc',
                     'rank_pass_time'):
             info.pop(key)
-        # label_rows records these elapsed seconds per rank, and the CRC check time.
-        record['labelling'].pop('crc_check_seconds')
+        # label_rows records these elapsed seconds per rank, and the assembly and CRC check times.
+        for key in ('crc_check_seconds','assemble_seconds','assemble_read_seconds',
+                    'assemble_write_seconds','assemble_fsync_seconds'):
+            record['labelling'].pop(key)
         for rank in record['labelling']['ranks']:
             for key in ('seconds','compute_seconds','io_wait_seconds','write_seconds',
-                        'close_seconds','wall_seconds'):
+                        'close_seconds','pwrite_seconds','fsync_seconds','wall_seconds'):
                 rank.pop(key)
         return record
     assert without_timings(actual) == without_timings(expected)
