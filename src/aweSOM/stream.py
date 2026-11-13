@@ -99,6 +99,7 @@ __all__ = [
     "BMUSearcher",
     "NpyReader",
     "NpyWriter",
+    "copy_npy_rows",
     "cuda_available",
     "npy_crc32",
     "train_batch_stream",
@@ -300,18 +301,25 @@ class NpyReader:
 class NpyWriter:
     """Write row ranges of an existing C-order ``.npy`` file with plain file writes.
 
-    Made for several processes, possibly on several nodes, that fill one
-    output file: one process creates the file (for example
-    ``numpy.lib.format.open_memmap(path, mode="w+", ...)``), then every
-    process opens a writer and assigns its own rows, ``writer[a:b] = values``.
-    Each assignment is one ``pwrite`` of exactly those bytes. A writable
-    memory map would instead write back whole pages, and on a network file
-    system two nodes whose rows share a page can overwrite each other's bytes.
+    One process creates the file (for example
+    ``numpy.lib.format.open_memmap(path, mode="w+", ...)``), then a writer
+    assigns rows, ``writer[a:b] = values``. Each assignment is one ``pwrite``
+    of exactly those bytes; no page outside them is written back, as a
+    writable memory map would.
+
+    Use one writer node per file. Processes on one node may share a file, but
+    a file must not be open for writing on two nodes at once: a network file
+    system then stops buffering writes (CephFS turns every write into a
+    synchronous write to the storage servers, 11x slower when measured on
+    one of RIT's clusters). For several nodes, let each write its own file and one node
+    copy them into place with :func:`copy_npy_rows`.
 
     ``crc32`` is the zlib CRC-32 of the bytes written so far when the writes
     covered one contiguous range in ascending order (``first`` to ``end``);
     it is None after an out-of-order write. :func:`npy_crc32` computes the
     same value from the file, so a reader can confirm the bytes arrived.
+    ``pwrite_seconds`` and ``fsync_seconds`` add up the time spent in the
+    writes and in :meth:`close`.
     """
 
     def __init__(self, path: str):
@@ -331,6 +339,7 @@ class NpyWriter:
         self.fd = os.open(self.path, os.O_WRONLY)
         self.first = self.end = None
         self.crc32: Optional[int] = 0
+        self.pwrite_seconds = self.fsync_seconds = 0.0
 
     def __len__(self) -> int:
         return self.shape[0]
@@ -343,11 +352,7 @@ class NpyWriter:
         buf = np.ascontiguousarray(value, dtype=self.dtype)
         if buf.shape != (stop - start, *self.shape[1:]):
             raise ValueError(f"rows [{start}, {stop}) need shape {(stop - start, *self.shape[1:])}, got {buf.shape}")
-        view = memoryview(buf).cast("B")
-        at = self.offset + start * self.row_bytes
-        while len(view):
-            k = os.pwrite(self.fd, view, at)
-            view, at = view[k:], at + k
+        self._pwrite(buf, start)
         if self.first is None:
             self.first = self.end = start
         if self.crc32 is not None and start == self.end:
@@ -356,12 +361,23 @@ class NpyWriter:
         else:
             self.crc32 = None
 
+    def _pwrite(self, buf: np.ndarray, start: int) -> None:
+        t = time.perf_counter()
+        view = memoryview(buf.reshape(-1).view(np.uint8))  # a flat view also for zero rows
+        at = self.offset + start * self.row_bytes
+        while len(view):
+            k = os.pwrite(self.fd, view, at)
+            view, at = view[k:], at + k
+        self.pwrite_seconds += time.perf_counter() - t
+
     def close(self, sync: bool = True) -> None:
         """Close the file (``fsync`` first with ``sync``). Safe to call twice."""
         if self.fd is not None:
             try:
                 if sync:
+                    t = time.perf_counter()
                     os.fsync(self.fd)
+                    self.fsync_seconds += time.perf_counter() - t
             finally:
                 os.close(self.fd)
                 self.fd = None
@@ -377,6 +393,60 @@ def npy_crc32(path: str, start: int, stop: int, block: int = 2**24) -> int:
     for a in range(int(start), int(stop), block):
         crc = zlib.crc32(np.ascontiguousarray(arr[a:min(a + block, int(stop))]), crc)
     del arr
+    return crc
+
+
+def _npy_header(fh):
+    version = np.lib.format.read_magic(fh)
+    read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
+    return read(fh)
+
+
+def copy_npy_rows(part_path: str, writer: "NpyWriter", start: int, block: int = 2**24,
+                  stats: Optional[dict] = None) -> int:
+    """Copy every row of the ``.npy`` file ``part_path`` into ``writer`` from row ``start`` on.
+
+    Reads with plain buffered reads, ``block`` rows at a time, and writes each
+    block with one ``pwrite``. Returns the zlib CRC-32 of the copied bytes,
+    which equals the :attr:`NpyWriter.crc32` of the writer that wrote the part,
+    so the copy doubles as the check that the part arrived intact. The
+    destination writer does not checksum these rows (its ``crc32`` becomes
+    None). With ``stats``, adds ``read_seconds``, ``write_seconds`` and
+    ``bytes`` to it.
+    """
+    t = time.perf_counter()
+    read_s = write_s = 0.0
+    with open(part_path, "rb", buffering=0) as fh:
+        shape, fortran, dtype = _npy_header(fh)
+        dtype = np.dtype(dtype)
+        if fortran or tuple(shape[1:]) != writer.shape[1:] or dtype != writer.dtype:
+            raise ValueError(f"{part_path}: shape {shape} {dtype} does not fit rows of {writer.path}")
+        n = int(shape[0]) if shape else 0
+        if start < 0 or start + n > writer.shape[0]:
+            raise ValueError(f"{part_path}: rows [{start}, {start + n}) outside {writer.path}")
+        buf = np.empty((min(n, int(block)), *writer.shape[1:]), dtype)
+        crc = 0
+        read_s += time.perf_counter() - t
+        for a in range(0, n, int(block)):
+            t = time.perf_counter()
+            m = min(int(block), n - a)
+            view = memoryview(buf[:m]).cast("B")
+            got = 0
+            while got < len(view):
+                k = fh.readinto(view[got:])
+                if not k:
+                    raise IOError(f"{part_path}: short read")
+                got += k
+            t1 = time.perf_counter()
+            crc = zlib.crc32(buf[:m], crc)
+            writer._pwrite(buf[:m], start + a)
+            read_s += t1 - t
+            write_s += time.perf_counter() - t1
+    writer.crc32 = None
+    if stats is not None:
+        stats["read_seconds"] = stats.get("read_seconds", 0.0) + read_s
+        stats["write_seconds"] = stats.get("write_seconds", 0.0) + write_s
+        stats["bytes"] = stats.get("bytes", 0) + n * writer.row_bytes
     return crc
 
 
@@ -1133,19 +1203,21 @@ def predict_stream(
     Two ways to run with several MPI ranks:
 
     - Shared source, ``comm`` given: every rank of ``comm`` calls with the
-      same arguments. Rank r labels the contiguous rows
-      :func:`aweSOM.distributed.row_range` ``(N, r, size)`` and writes only
-      those rows of ``out``, ``out_node`` and ``out_distance``, which are then
-      full-length ``(N,)`` arrays every rank can write. For one file on a
-      shared file system, let one rank create it, then give every rank a
-      :class:`NpyWriter` of it: it writes exactly this rank's bytes, while a
-      writable ``numpy.memmap`` writes back whole pages and two nodes can
-      overwrite each other's rows. The call returns once this rank's rows
-      are written; close the writers and ``comm.Barrier()`` before reading
-      other ranks' rows. With
-      ``out=None`` a rank gets a new array of its own rows only
-      (``stats["start"]`` is its first row). For GPU backends the call is
-      collective (the device choice uses the node communicator).
+      same arguments. Rank r labels the contiguous rows ``[lo, hi)`` =
+      :func:`aweSOM.distributed.row_range` ``(N, r, size)``. Each of ``out``,
+      ``out_node`` and ``out_distance`` holds either all ``N`` rows (this
+      rank writes rows ``lo`` to ``hi``) or only this rank's ``hi - lo``
+      rows (written from 0). With ``out=None`` a rank gets a new array of
+      its own rows (``stats["start"]`` is its first row). For files on a
+      shared file system use :class:`NpyWriter`, one writer node per file:
+      rank 0 writes its rows into the final file, every other rank into a
+      file of its own rows, and after ``comm.Barrier()`` rank 0 copies those
+      into place with :func:`copy_npy_rows`. Several nodes writing one file
+      is slow on network file systems (see :class:`NpyWriter`), and a
+      writable ``numpy.memmap`` there can even overwrite other nodes' rows.
+      The call returns once this rank's rows are written; close the writers
+      before anyone reads them. For GPU backends the call is collective (the
+      device choice uses the node communicator).
     - Local blocks, no ``comm``: each rank holds its own rows (for example the
       cells of one AsterX rank) and calls this function, or
       :func:`aweSOM.inference.predict`, on that block. Pass
@@ -1158,8 +1230,9 @@ def predict_stream(
             for BMU indices).
         data_source: As in :func:`train_batch_stream` (already scaled).
         out: Writable ``(N,)`` int32 array-like (``ndarray``, ``memmap``,
-            ``h5py.Dataset``); allocated in memory if None.
-        out_distance: Optional writable ``(N,)`` array for the BMU distance.
+            ``h5py.Dataset``, :class:`NpyWriter`); allocated in memory if
+            None. With ``comm`` also ``(hi - lo,)`` (see above).
+        out_distance: Optional writable array for the BMU distance, sized like ``out``.
         chunk: Rows per chunk.
         backend: ``predict`` backend, including optional ``"cuda"``, ``"cuda_screen"`` and ``"cuda_prune"``.
             Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
@@ -1167,7 +1240,7 @@ def predict_stream(
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
         hint: Previous int32 BMU per source row for ``"cuda_prune"``.
-        out_node: Optional writable ``(N,)`` int32 array for the BMU node index.
+        out_node: Optional writable int32 array for the BMU node index, sized like ``out``.
         comm: mpi4py communicator: label this rank's row range only (see above).
         device: CUDA device index for GPU backends. Default: with ``comm``,
             :func:`aweSOM.distributed.gpu_device` (the node-local rank modulo
@@ -1195,11 +1268,13 @@ def predict_stream(
 
         lo, hi = row_range(source.n, rank, size)
         for name, a in (("out", out), ("out_distance", out_distance), ("out_node", out_node)):
-            if a is not None and len(a) != source.n:
-                raise ValueError(f"with comm, {name} must hold all {source.n} rows (one shared array)")
+            if a is not None and len(a) not in (source.n, hi - lo):
+                raise ValueError(f"with comm, {name} must hold all {source.n} rows or this rank's {hi - lo}")
     if out is None:
         out = np.empty(hi - lo, np.int32)
-    base = lo if comm is not None and len(out) != source.n else 0  # this rank's own array
+    # Row pos goes to index pos - base: base = lo for an array of this rank's rows only.
+    # (Lengths N and hi - lo agree only when lo = 0, where both bases are 0.)
+    base, base_d, base_n = (0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node))
     if backend in _GPU_BACKENDS and device is None and comm is not None:
         from .distributed import gpu_device
 
@@ -1238,9 +1313,9 @@ def predict_stream(
         t1 = time.perf_counter()
         out[pos - base : pos - base + m] = labels
         if out_distance is not None:
-            out_distance[pos : pos + m] = np.sqrt(d2)
+            out_distance[pos - base_d : pos - base_d + m] = np.sqrt(d2)
         if out_node is not None:
-            out_node[pos : pos + m] = idx
+            out_node[pos - base_n : pos - base_n + m] = idx
         pos += m
         stats["compute"] += t1 - t0
         stats["write"] += time.perf_counter() - t1

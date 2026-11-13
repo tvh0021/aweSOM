@@ -16,7 +16,7 @@ import pytest
 
 from aweSOM import _gpu, _gpu_screen, distributed
 from aweSOM.inference import best_match_nodes, best_match_nodes_patch
-from aweSOM.stream import BMUSearcher, NpyWriter, npy_crc32, predict_stream
+from aweSOM.stream import BMUSearcher, NpyWriter, copy_npy_rows, npy_crc32, predict_stream
 
 import mpi_label_worker as worker
 from production_pool_mpi_test import FakeComm, prepared  # noqa: F401  (module fixture)
@@ -158,6 +158,65 @@ def test_npy_writer_matches_numpy(tmp_path, dtype, shape):
     assert path.read_bytes() == (tmp_path / "ref.npy").read_bytes()
 
 
+def test_npy_writer_times_writes_and_fsync(tmp_path):
+    path = tmp_path / "t.npy"
+    np.save(path, np.zeros(1000, "f8"))
+    w = NpyWriter(path)
+    assert w.pwrite_seconds == w.fsync_seconds == 0.0
+    w[0:1000] = np.ones(1000)
+    w.close()
+    assert w.pwrite_seconds > 0 and w.fsync_seconds > 0
+    w = NpyWriter(path)
+    w.close(sync=False)
+    assert w.fsync_seconds == 0.0
+
+
+@pytest.mark.parametrize("dtype,shape", [("i4", (1003,)), ("f8", (1003,)), ("f4", (101, 7))])
+def test_copy_npy_rows_into_place(tmp_path, dtype, shape):
+    """Parts copied in rank order give np.save's bytes; each copy's CRC is its writer's CRC."""
+    rng = np.random.default_rng(9)
+    ref = rng.normal(size=shape).astype(dtype)
+    np.save(tmp_path / "ref.npy", ref)
+    final = tmp_path / "final.npy"
+    created = np.lib.format.open_memmap(final, mode="w+", dtype=dtype, shape=shape)
+    del created
+    n = shape[0]
+    edges = [0, 0, 40, 41, n]  # an empty part, a one-row part, uneven parts
+    crcs, stats = [], {}
+    dest = NpyWriter(final)
+    dest[0:0] = ref[0:0]
+    for r, (a, b) in enumerate(zip(edges[:-1], edges[1:])):
+        part = tmp_path / f"part{r}.npy"
+        made = np.lib.format.open_memmap(part, mode="w+", dtype=dtype, shape=(b - a, *shape[1:]))
+        del made
+        w = NpyWriter(part)
+        w[0:b - a] = ref[a:b]
+        w.close()
+        crcs.append(w.crc32)
+        assert copy_npy_rows(part, dest, a, block=7, stats=stats) == w.crc32 == zlib.crc32(np.ascontiguousarray(ref[a:b]))
+    assert dest.crc32 is None  # the copies are checked by their own CRC, not the writer's
+    dest.close()
+    assert final.read_bytes() == (tmp_path / "ref.npy").read_bytes()
+    assert stats["bytes"] == ref.nbytes and stats["read_seconds"] >= 0 and stats["write_seconds"] > 0
+
+
+def test_copy_npy_rows_refusals(tmp_path):
+    final = tmp_path / "final.npy"
+    np.save(final, np.zeros(10, "i4"))
+    dest = NpyWriter(final)
+    np.save(tmp_path / "f8.npy", np.zeros(3, "f8"))
+    np.save(tmp_path / "2d.npy", np.zeros((3, 2), "i4"))
+    np.save(tmp_path / "ok.npy", np.arange(3, dtype="i4"))
+    for name, start in (("f8.npy", 0), ("2d.npy", 0), ("ok.npy", 8), ("ok.npy", -1)):
+        with pytest.raises(ValueError):
+            copy_npy_rows(tmp_path / name, dest, start)
+    raw = (tmp_path / "ok.npy").read_bytes()
+    (tmp_path / "short.npy").write_bytes(raw[:-4])  # header says 3 rows, 2 present
+    with pytest.raises(IOError, match="short read"):
+        copy_npy_rows(tmp_path / "short.npy", dest, 0)
+    dest.close()
+
+
 def test_npy_writer_refusals(tmp_path):
     path = tmp_path / "x.npy"
     np.save(path, np.zeros(10, "i4"))
@@ -263,10 +322,39 @@ def test_shared_mode_ranks_in_turn(name, size, tmp_path):
     assert ref_st["start"] == 0 and ref_st["stop"] == n and ref_st["ranks"] == 1
 
 
-def test_shared_mode_refuses_short_outputs():
+@pytest.mark.parametrize("size", [1, 2, 3, 5])
+@pytest.mark.parametrize("name", list(worker.cases()))
+def test_rank_local_outputs(name, size):
+    """Each output may hold this rank's rows only (as the driver's part files do), alone or
+    mixed with full-length outputs."""
+    make, n, backend = worker.cases()[name]
+    ref_lab, _ = worker.label(make(), backend, n_samples=n)
+    ref_node, ref_d2 = best_match_nodes(worker.lattice(), worker.data(n))
+    for mixed in (False, True):
+        labels, nodes, dist = [], np.zeros(n, np.int32), []
+        for r in range(size):
+            lo, hi = distributed.row_range(n, r, size)
+            mine = {"out": np.full(hi - lo, -1, np.int32), "out_distance": np.full(hi - lo, -1.0),
+                    "out_node": nodes if mixed else np.full(hi - lo, -1, np.int32)}
+            _, st = predict_stream(worker.lattice(), np.arange(len(worker.lattice()), dtype=np.int32) % 5,
+                                   make(), chunk=worker.CHUNK, backend=backend, lattice_shape=worker.SHAPE,
+                                   comm=RankComm(r, size), n_samples=n, **mine)
+            assert (st["start"], st["stop"]) == (lo, hi)
+            labels.append(mine["out"])
+            dist.append(mine["out_distance"])
+            if not mixed:
+                nodes[lo:hi] = mine["out_node"]
+        bitwise(np.concatenate(labels), ref_lab)
+        bitwise(nodes, ref_node)
+        bitwise(np.concatenate(dist), np.sqrt(ref_d2))
+
+
+def test_shared_mode_refuses_other_lengths():
     x = worker.data(10)
-    with pytest.raises(ValueError, match="must hold all 10 rows"):
-        worker.label(x, "patch", RankComm(0, 2), out=np.empty(5, np.int32))
+    for out, kw in ((np.empty(4, np.int32), {}), (None, {"out_node": np.empty(9, np.int32)}),
+                    (None, {"out_distance": np.empty(6)})):
+        with pytest.raises(ValueError, match="must hold all 10 rows or this rank's 5"):
+            worker.label(x, "patch", RankComm(1, 2), out=out, **kw)
 
 
 @pytest.mark.parametrize("size", [1, 3])
