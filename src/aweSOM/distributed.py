@@ -11,8 +11,13 @@ run with a fixed number of ranks is bitwise reproducible (``MPI_Allreduce``
 does not promise a fixed order). Different rank counts add the float64 sums in
 a different order, so their weights differ in the last bits.
 
-mpi4py is imported only by :func:`get_comm`; ``import aweSOM.stream`` never
-imports it. MPI calls are made on the main thread only.
+Labelling (:func:`aweSOM.stream.predict_stream` with ``comm``) needs no
+reduction: every rank labels the contiguous row range :func:`row_range` gives
+it. On a node with several GPUs, :func:`gpu_device` gives each rank its own.
+
+mpi4py is imported only by :func:`get_comm` and :func:`node_local_rank` (which
+needs a communicator, so MPI is initialised already); ``import aweSOM.stream``
+never imports it. MPI calls are made on the main thread only.
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-__all__ = ["get_comm", "Reducer"]
+__all__ = ["get_comm", "Reducer", "row_range", "node_local_rank", "gpu_device"]
 
 _PER_RANK = (  # per-rank fields after S, n and the QE sum, in this order
     "rows", "fallbacks", "io_wait", "bmu", "acc", "pass_time")
@@ -38,6 +43,61 @@ def get_comm() -> Optional[Any]:
         return None
     comm = MPI.COMM_WORLD
     return comm if comm.Get_size() > 1 else None
+
+
+def row_range(n: int, rank: int, size: int) -> tuple[int, int]:
+    """Rows ``[start, stop)`` of ``rank`` when ``n`` rows are split over ``size`` ranks.
+
+    Contiguous, in rank order, and deterministic: rank r gets
+    ``[r * n // size, (r + 1) * n // size)``. Sizes differ by at most one row.
+    With fewer rows than ranks some ranks get an empty range.
+    """
+    n, rank, size = int(n), int(rank), int(size)
+    if n < 0 or size < 1 or not 0 <= rank < size:
+        raise ValueError(f"need n >= 0 and 0 <= rank < size, got n={n}, rank={rank}, size={size}")
+    return rank * n // size, (rank + 1) * n // size
+
+
+def _shared_split_type() -> Any:
+    from mpi4py import MPI  # a communicator exists, so MPI is initialised already
+
+    return MPI.COMM_TYPE_SHARED
+
+
+def node_local_rank(comm: Any = None) -> int:
+    """Rank of this process among the ranks of ``comm`` on the same node (0 without ``comm``).
+
+    Uses ``comm.Split_type(COMM_TYPE_SHARED)``, a collective call: every rank of
+    ``comm`` must call it. Reads no system information.
+    """
+    if comm is None:
+        return 0
+    local = comm.Split_type(_shared_split_type(), key=comm.Get_rank())
+    try:
+        return int(local.Get_rank())
+    finally:
+        local.Free()
+
+
+def gpu_device(comm: Any = None, device_count: Optional[int] = None) -> int:
+    """CUDA device index for this rank: node-local rank modulo the visible device count.
+
+    CUDA numbers only the devices in ``CUDA_VISIBLE_DEVICES``. When Slurm gives
+    each task its own GPU (``--gpus-per-task=1``, or one task per node on a
+    one-GPU GH200 node), every rank sees one device and gets index 0, which is
+    its own GPU. When ranks on a node share a list of several devices, rank k
+    on the node takes device ``k % count``. ``device_count`` defaults to the
+    CuPy device count. Collective when ``comm`` is given (see
+    :func:`node_local_rank`).
+    """
+    local = node_local_rank(comm)
+    if device_count is None:
+        import cupy
+
+        device_count = cupy.cuda.runtime.getDeviceCount()
+    if device_count < 1:
+        raise RuntimeError("no CUDA device is visible to this rank")
+    return local % int(device_count)
 
 
 class Reducer:

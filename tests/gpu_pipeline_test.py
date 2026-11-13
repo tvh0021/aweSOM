@@ -5,6 +5,7 @@ or reusing a staging buffer before the matching synchronize gives wrong
 labels here. The fake kernel is the float64 reference search (the screen
 kernel's own parity is checked on a real device).
 """
+import contextlib
 import sys
 import types
 
@@ -128,7 +129,7 @@ def _fake_cupy(fail_after=None):
         asarray=_asarray,
         empty=lambda shape, dtype: Device(np.full(shape, 99, dtype)),
         take=take, RawKernel=raw,
-        cuda=types.SimpleNamespace(runtime=runtime, Stream=Stream,
+        cuda=types.SimpleNamespace(runtime=runtime, Stream=Stream, Device=lambda i: contextlib.nullcontext(),
                                    alloc_pinned_memory=pinned,
                                    get_current_stream=NullStream))
     return cp, launches, busy, pinned_fail
@@ -313,3 +314,47 @@ def test_searcher_queue_and_error(fake):
         search.submit(x[10:], idx[10:], d2[10:])
     assert all(s['pending'] is None for s in search.slots)
     assert all(not s.queue for s in search.streams)
+
+
+class _RankComm:
+    """Rank ``rank`` of ``size`` on one node: what predict_stream and gpu_device call."""
+
+    def __init__(self, rank, size):
+        self.rank, self.size = rank, size
+
+    def Get_rank(self):
+        return self.rank
+
+    def Get_size(self):
+        return self.size
+
+    def Split_type(self, kind, key=0):
+        return types.SimpleNamespace(Get_rank=lambda: self.rank, Free=lambda: None)
+
+
+@pytest.mark.parametrize('size', [2, 3])
+@pytest.mark.parametrize('with_nodes', [False, True])
+def test_predict_stream_queued_ranks(fake, monkeypatch, size, with_nodes):
+    """Each rank labels its rows on the queued path: rank-local new labels (narrow dtype),
+    rank-local distances and full-length nodes, equal to one numba pass."""
+    from aweSOM import distributed
+    fake(4)
+    monkeypatch.setattr(distributed, '_shared_split_type', lambda: 'shared')
+    w, x = _data()
+    clusters = np.arange(len(w)) % 5
+    rd, rn = np.empty(len(x)), np.empty(len(x), np.int32)
+    ref, _ = predict_stream(w, clusters, x, out_distance=rd, out_node=rn, chunk=9, backend='numba',
+                            prefetch=False)
+    labels, dist, nodes = np.zeros(len(x), np.uint8), np.zeros(len(x)), np.full(len(x), 99, np.uint16)
+    for r in range(size):
+        lo, hi = distributed.row_range(len(x), r, size)
+        local = np.zeros(hi - lo)
+        out, st = predict_stream(w, clusters, x, out_distance=local, out_node=nodes if with_nodes else None,
+                                 chunk=9, backend='cuda_screen', comm=_RankComm(r, size), prefetch=False)
+        assert out.dtype == np.uint8 and len(out) == hi - lo
+        assert (st['start'], st['stop'], st['rows'], st['device']) == (lo, hi, hi - lo, 0)
+        labels[lo:hi], dist[lo:hi] = out, local
+    np.testing.assert_array_equal(labels, ref)
+    np.testing.assert_array_equal(dist.view(np.uint64), rd.view(np.uint64))
+    if with_nodes:
+        np.testing.assert_array_equal(nodes, rn)

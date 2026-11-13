@@ -343,3 +343,39 @@ def test_reference_unsafe_without_overflow():
     w, x = _case('unsafe', 7, np.float64)
     with np.errstate(over='raise'):
         _same(_gpu_screen._cuda_screen_reference(w, x), best_match_nodes(w, x))
+
+
+def test_device_index_matches_patch(cuda):
+    """An explicit device (the per-rank choice of aweSOM.distributed.gpu_device) through the
+    searcher, BMUSearcher and predict_stream: nodes and float64 distances bitwise equal to patch."""
+    from aweSOM import distributed
+    from aweSOM.inference import best_match_nodes_patch
+    from aweSOM.stream import BMUSearcher, cuda_available
+
+    assert cuda_available()
+    device = distributed.gpu_device(None)
+    assert device == 0
+    a, b = np.meshgrid(np.linspace(-1, 1, 12), np.linspace(-1, 1, 9), indexing='ij')
+    w = np.column_stack([a.ravel(order='F'), b.ravel(order='F')]
+                        + [np.sin((f + 2) * a.ravel(order='F')) for f in range(5)])
+    w[40] = w[13]  # equal nodes: the lowest index must win
+    rng = np.random.default_rng(11)
+    x = w[rng.integers(len(w), size=3001)] + rng.normal(scale=0.02, size=(3001, 7))
+    x[::7] = w[13]
+    for dtype in (np.float32, np.float64):
+        rows = x.astype(dtype)
+        ref = best_match_nodes_patch(w, rows, 12, 9)
+        assert (ref[0][::7] == 13).all()
+        idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+        _gpu_screen.GpuScreenSearcher(w, 12, 9, chunk=509, device=device)(rows, idx, d2)
+        _same((idx, d2), ref)
+        _same(BMUSearcher(w, 'cuda_screen', device=device)(rows), ref)
+        nodes, dist = np.empty(len(x), np.int32), np.empty(len(x))
+        _, st = predict_stream(w, np.arange(len(w)), rows, out_node=nodes, out_distance=dist,
+                               chunk=509, backend='cuda_screen', device=device, prefetch=False)
+        assert st['device'] == device
+        _same((nodes, dist), (ref[0], np.sqrt(ref[1])))
+        labels, _ = predict_stream(w, np.arange(len(w)) % 7, rows, chunk=509, backend='cuda_screen',
+                                   device=device, prefetch=False)  # gathered on the device
+        assert labels.dtype == np.uint8
+        np.testing.assert_array_equal(labels, ref[0] % 7)

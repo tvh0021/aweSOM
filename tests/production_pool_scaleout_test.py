@@ -105,9 +105,9 @@ def test_parallel_statistics_bitwise(tmp_path):
     with h5py.File(tmp_path/'raw.h5','r') as h:
         raw = h['raw']
         serial = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'serial',29,
-                                        names=pool.NAMES,n_clusters=4,workers=1)
+                                        names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=1)
         parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
-                                          names=pool.NAMES,n_clusters=4,workers=2)
+                                          names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=2)
     assert pool.one_line(serial) == pool.one_line(parallel)
 
 
@@ -263,6 +263,14 @@ def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
                     'reduce_time','checkpoint_time','rank_io_wait','rank_bmu','rank_acc',
                     'rank_pass_time'):
             info.pop(key)
+        # label_rows records these elapsed seconds per rank, and the assembly and CRC check times.
+        for key in ('crc_check_seconds','assemble_seconds','assemble_read_seconds',
+                    'assemble_write_seconds','assemble_fsync_seconds'):
+            record['labelling'].pop(key)
+        for rank in record['labelling']['ranks']:
+            for key in ('seconds','compute_seconds','io_wait_seconds','write_seconds',
+                        'close_seconds','pwrite_seconds','fsync_seconds','wall_seconds'):
+                rank.pop(key)
         return record
     assert without_timings(actual) == without_timings(expected)
     # Check serialized bytes too: dict equality ignores insertion order.

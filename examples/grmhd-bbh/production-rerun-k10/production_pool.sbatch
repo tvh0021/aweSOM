@@ -71,7 +71,7 @@ python -u "$KIT/production_pool.py" --inputs "$INPUT_94208" "$INPUT_98304" \
   --lattices $LATTICES --seeds 42 43 \
   --target-clusters 10 --r-min 8 \
   --seed-workers "${SEED_WORKERS:-2}" \
-  --epochs "${EPOCHS:-40}" --chunk "${CHUNK:-2097152}" \
+  --epochs "${EPOCHS:-60}" --chunk "${CHUNK:-2097152}" \
   --min-free-gb "${MIN_FREE_GB:-10}" > "$OUT/timing.log" 2>&1
 completed=yes
 

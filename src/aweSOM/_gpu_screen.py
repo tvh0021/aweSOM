@@ -41,6 +41,7 @@ unchanged float64 code, so labels and distances stay bitwise those of
 can differ from the CPU screen; :func:`_cuda_screen_reference` emulates the
 fused rounding exactly, so its fallback count is the kernel's.
 """
+import contextlib
 from functools import lru_cache
 
 import numpy as np
@@ -319,6 +320,24 @@ def _kernels(features):
                  for name in ('bmu_screen_f32', 'bmu_screen_f64'))
 
 
+def cuda_available():
+    """True if CuPy imports and sees at least one CUDA device; never raises.
+
+    Uses only the CuPy runtime device count (no system-information reads).
+    """
+    try:
+        import cupy as cp
+
+        return cp.cuda.runtime.getDeviceCount() >= 1
+    except Exception:
+        return False
+
+
+def _on_device(cp, device):
+    """Context that makes ``device`` current; a no-op for None (current device)."""
+    return contextlib.nullcontext() if device is None else cp.cuda.Device(device)
+
+
 def _pinned(cp, shape, dtype):
     owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
     return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
@@ -336,11 +355,13 @@ class GpuScreenSearcher:
     previous one's search, also across ``submit`` calls.
     ``overlap=False`` uses one slot for the probe's serial comparison.
     ``tile`` is the number of nodes per shared-memory tile; each thread
-    screens up to four rows.
+    screens up to four rows. ``device`` (CUDA index) holds the weights,
+    buffers and streams, and every call runs there; None uses the device
+    current at construction.
     """
 
     def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=TILE,
-                 block=128, overlap=True):
+                 block=128, overlap=True, device=None):
         w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
         if not 1 <= w.shape[1] <= 32:
             raise ValueError('CUDA search supports 1 through 32 features')
@@ -355,21 +376,23 @@ class GpuScreenSearcher:
         if cp.cuda.runtime.getDeviceCount() < 1:
             raise RuntimeError('CUDA BMU search needs a CUDA device')
         self.cp = cp
-        self.w = cp.asarray(w)
-        cp.cuda.get_current_stream().synchronize()
+        self.device = None if device is None else int(device)
         self.nodes, self.features = w.shape
         self.chunk, self.tile, self.block = int(chunk), int(tile), int(block)
         self.rows_per_thread, pad = _layout(self.features)  # the grid covers n rows
         self.shared = self.tile * max(8 * self.features, 4 * pad)
-        props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-        if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
-            raise ValueError('tile or block exceeds the device limit')
-        self.kernels = _kernels(self.features)
         safe, wmax = _screen_parameters(w)
         # Kernel arguments after (w, x, idx, d2, rows, nodes, tile); runtime
         # values, so a new lattice reuses the compiled kernel.
         self.args = (np.float64(wmax), np.int32(safe))
-        self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
+        with _on_device(cp, self.device):
+            self.w = cp.asarray(w)
+            cp.cuda.get_current_stream().synchronize()
+            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+            if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
+                raise ValueError('tile or block exceeds the device limit')
+            self.kernels = _kernels(self.features)
+            self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
         self.slots = []
         self.capacity = 0
         self.dtype = None
@@ -403,10 +426,11 @@ class GpuScreenSearcher:
         table = np.asarray(node_cluster).astype(np.dtype(dtype).newbyteorder('=')).ravel()
         if len(table) != self.nodes or table.dtype.itemsize > 4:
             raise ValueError('need one label per node in a dtype of at most 4 bytes')
-        table = self.cp.asarray(table)
-        # The upload runs on the current stream; the searches run on
-        # non-blocking streams that do not order against it.
-        self.cp.cuda.get_current_stream().synchronize()
+        with _on_device(self.cp, self.device):
+            table = self.cp.asarray(table)
+            # The upload runs on the current stream; the searches run on
+            # non-blocking streams that do not order against it.
+            self.cp.cuda.get_current_stream().synchronize()
         return table
 
     def _finish(self, slot, stream):
@@ -460,6 +484,10 @@ class GpuScreenSearcher:
         if not len(x):
             return self.token
         self.token += 1
+        with _on_device(self.cp, self.device):
+            return self._submit(x, out, d2, clusters)
+
+    def _submit(self, x, out, d2, clusters):
         cp = self.cp
         kernel = self.kernels[int(x.dtype == np.float64)]
         try:
