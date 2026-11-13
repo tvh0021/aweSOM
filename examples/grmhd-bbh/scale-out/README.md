@@ -89,8 +89,9 @@ done
 Wall time: training takes about `EPOCHS * ROWS_PER_EPOCH / (2.0e6 * 0.93 * 4)`
 seconds (one node measured about 2.0e6 rows/s on real data at 40 epochs; four
 nodes at about 0.93 efficiency): 2.2 h for the default 60 epochs of 1e9 rows
-(phases 20 at r_max, 10 tapering, 30 at r_min; `--phases P,T,M` sets others). Rank 0 then
-labels the whole pool on one node, about `POOL_ROWS / 2.0e6` seconds, and inline
+(phases 20 at r_max, 10 tapering, 30 at r_min; `--phases P,T,M` sets others). Every rank then
+labels its own row range of the pool, about `POOL_ROWS / (2.0e6 * 4)` seconds on
+four nodes, and inline
 statistics add about an hour at 1e9 rows. The six-hour limit covers 1e9 rows.
 The fit record carries `ranks`, `rank_hostnames`, `rank_numba_threads` and
 `affinity_restored` (null on a rank where MPI_Init left its CPU set alone).
