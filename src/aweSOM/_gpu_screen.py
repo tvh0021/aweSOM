@@ -158,7 +158,7 @@ def _kernels(features, safe, wmax):
 class GpuScreenSearcher(GpuSearcher):
     """Reuse CUDA staging and streams with a certified float32 screening kernel.
 
-    Chunk, tile, block and overlap options match :class:`GpuSearcher`.
+    Chunk, tile, block, overlap and device options match :class:`GpuSearcher`.
     As with that class, the return value is zero (no fallback telemetry).
     """
 

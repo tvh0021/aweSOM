@@ -246,9 +246,11 @@ class PruneGpuSearcher:
 
     Host input/output, synchronous calls, bounded chunk staging. The kernel
     itself takes device pointers, ready for a future resident AsterX caller.
+    ``device`` (CUDA index) holds the metadata and runs every call; None uses
+    the device current at construction.
     """
 
-    def __init__(self, weights, lattice_shape=None, *, chunk=2**20):
+    def __init__(self, weights, lattice_shape=None, *, chunk=2**20, device=None):
         from .inference import _check_inputs
         w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
         perm, off, boxes, self.finite = _prepare(w, lattice_shape)
@@ -261,15 +263,23 @@ class PruneGpuSearcher:
             raise ImportError('CUDA prune search needs CuPy; install aweSOM[cuda]') from exc
         if cp.cuda.runtime.getDeviceCount() < 1:
             raise RuntimeError('CUDA prune search needs a CUDA device')
+        from ._gpu import _on_device
         self.cp = cp
+        self.device = None if device is None else int(device)
         self.nodes, self.features = w.shape
         self.blocks = len(boxes)
-        self.w, self.perm, self.off, self.boxes = map(cp.asarray, (w, perm, off, boxes))
-        cp.cuda.get_current_stream().synchronize()
+        with _on_device(cp, self.device):
+            self.w, self.perm, self.off, self.boxes = map(cp.asarray, (w, perm, off, boxes))
+            cp.cuda.get_current_stream().synchronize()
         self.shared = boxes.nbytes if boxes.nbytes <= 32768 else 0
         self.kernels = _kernels(self.features)
 
     def __call__(self, data, idx, d2, hint=None):
+        from ._gpu import _on_device
+        with _on_device(self.cp, self.device):
+            return self._search(data, idx, d2, hint)
+
+    def _search(self, data, idx, d2, hint=None):
         x = np.asarray(data)
         if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
             raise ValueError('data must be float32 or float64 with matching features')

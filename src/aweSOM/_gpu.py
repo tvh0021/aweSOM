@@ -1,4 +1,5 @@
 """Optional exact CUDA BMU search. CuPy is imported only on construction."""
+import contextlib
 from functools import lru_cache
 
 import numpy as np
@@ -60,6 +61,24 @@ def _kernels(features):
                  for name in ('bmu_f32', 'bmu_f64'))
 
 
+def cuda_available():
+    """True if CuPy imports and sees at least one CUDA device; never raises.
+
+    Uses only the CuPy runtime device count (no system-information reads).
+    """
+    try:
+        import cupy as cp
+
+        return cp.cuda.runtime.getDeviceCount() >= 1
+    except Exception:
+        return False
+
+
+def _on_device(cp, device):
+    """Context that makes ``device`` current; a no-op for None (current device)."""
+    return contextlib.nullcontext() if device is None else cp.cuda.Device(int(device))
+
+
 def _pinned(cp, shape, dtype):
     owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
     return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
@@ -72,10 +91,12 @@ class GpuSearcher:
     subchunks on two streams overlap H2D with the previous subchunk's search.
     ``overlap=False`` uses one slot for the probe's serial comparison.
     No work remains pending when a call returns, including on an error.
+    ``device`` (CUDA index) holds the weights, buffers and streams, and every
+    call runs there; None uses the device current at construction.
     """
 
     def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=32,
-                 block=128, overlap=True):
+                 block=128, overlap=True, device=None):
         from .inference import _check_inputs
 
         w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
@@ -92,16 +113,18 @@ class GpuSearcher:
         if cp.cuda.runtime.getDeviceCount() < 1:
             raise RuntimeError('CUDA BMU search needs a CUDA device')
         self.cp = cp
-        self.w = cp.asarray(w)
-        cp.cuda.get_current_stream().synchronize()
-        self.nodes, self.features = w.shape
-        self.chunk, self.tile, self.block = int(chunk), int(tile), int(block)
-        self.shared = self.tile * self.features * 8
-        props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-        if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
-            raise ValueError('tile or block exceeds the device limit')
-        self.kernels = _kernels(self.features)
-        self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
+        self.device = None if device is None else int(device)
+        with _on_device(cp, self.device):
+            self.w = cp.asarray(w)
+            cp.cuda.get_current_stream().synchronize()
+            self.nodes, self.features = w.shape
+            self.chunk, self.tile, self.block = int(chunk), int(tile), int(block)
+            self.shared = self.tile * self.features * 8
+            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+            if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
+                raise ValueError('tile or block exceeds the device limit')
+            self.kernels = _kernels(self.features)
+            self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
         self.slots = []
         self.capacity = 0
         self.dtype = None
@@ -121,6 +144,10 @@ class GpuSearcher:
         self.capacity, self.dtype = capacity, dtype
 
     def __call__(self, block, idx, d2):
+        with _on_device(self.cp, self.device):
+            return self._search(block, idx, d2)
+
+    def _search(self, block, idx, d2):
         x = np.asarray(block)
         if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
             raise ValueError('block must be float32 or float64 with matching features')

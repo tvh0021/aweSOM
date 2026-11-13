@@ -848,15 +848,152 @@ def statistics_fields(args, raw, nodes, distances, labels, n_nodes, n_clusters, 
 
 
 
+LABEL_BACKENDS = ('auto', 'patch', 'cuda_screen')
+
+
+def resolve_label_backend(choice, comm=None):
+    """The labelling backend every rank uses: 'patch' or 'cuda_screen'.
+
+    'auto' gives cuda_screen when every rank imports CuPy and sees a CUDA device, else patch.
+    An explicit 'cuda_screen' without a device on some rank is an error on every rank. Both
+    are exact: the same nodes (lowest index on ties) and float64 distances bit for bit.
+    Collective with ``comm``. No system information is read (CuPy device count only).
+    """
+    if choice not in LABEL_BACKENDS: raise ValueError(f'label backend must be one of {LABEL_BACKENDS}')
+    if choice == 'patch': return 'patch'
+    from aweSOM.stream import cuda_available
+    usable = bool(cuda_available())
+    every = [usable] if comm is None else list(comm.allgather(usable))
+    if all(every): return 'cuda_screen'
+    if choice == 'auto': return 'patch'
+    missing = [r for r, ok in enumerate(every) if not ok]
+    raise RuntimeError(f'--label-backend cuda_screen: no usable CUDA device (CuPy and a visible GPU) on rank(s) {missing}')
+
+
+class ScaledRows:
+    """Rows of ``raw`` scaled on read: a row-sliceable predict_stream source."""
+
+    def __init__(self, raw, transform):
+        self.raw, self.transform, self.shape = raw, transform, tuple(raw.shape)
+
+    def __getitem__(self, key):
+        return self.transform(self.raw[key])
+
+
+LABEL_FILES = (('labels', 'i4'), ('nodes', 'i4'), ('distances', 'f8'))
+
+
+def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None):
+    """Label every pool row into OUT/<tag>-{labels,nodes,distances}.npy (rank 0 has created them).
+
+    Rank 0 is the only process that opens these files: it writes its own rows into them. With
+    ``comm`` every other rank r labels its contiguous rows (aweSOM.distributed.row_range) into
+    part files of its own, OUT/<tag>-<key>.part<r>.npy, so no file is ever open on two nodes
+    (a network file system stops buffering writes to a file open on several nodes). After every
+    rank has closed its files, rank 0 copies the parts into place in rank order, checks each
+    copy against the CRC-32 its rank computed while writing, and deletes the parts; a failed
+    check stops every rank and keeps the parts. OUT must be one directory every rank can open
+    (a shared file system): a rank that cannot create its files stops every rank. Returns the
+    per-rank records and the assembly timings (rank 0) or None.
+    """
+    from aweSOM.stream import NpyWriter, predict_stream, copy_npy_rows
+    from aweSOM import distributed
+    rank = 0 if comm is None else comm.Get_rank()
+    size = 1 if comm is None else comm.Get_size()
+    gather = (lambda x: [x]) if comm is None else comm.allgather
+    lo, hi = distributed.row_range(len(raw), rank, size)
+    final = lambda key: out / f'{tag}-{key}.npy'
+    part = lambda key, r: out / f'{tag}-{key}.part{r}.npy'
+    t0 = time.perf_counter()
+    writers, problem = {}, None
+    try:
+        for key, dtype in LABEL_FILES:
+            if rank:
+                made = np.lib.format.open_memmap(part(key, rank), mode='w+', dtype=dtype, shape=(hi - lo,))
+                del made
+            writers[key] = NpyWriter(part(key, rank) if rank else final(key))
+    except OSError as e:
+        problem = f'{node_name()} rank {rank}: cannot open {e.filename}: {e.strerror}'
+    except Exception as e:  # a malformed or stale .npy header: every rank must still reach gather
+        problem = f'{node_name()} rank {rank}: cannot open the label files: {type(e).__name__}: {e}'
+    problems = [x for x in gather(problem) if x]
+    if problems:
+        for wr in writers.values(): wr.close(sync=False)
+        raise RuntimeError('multi-rank labelling needs OUT on a file system every rank can open '
+                           '(for example /shared or /lagoon, not node-local /tmp); ' + '; '.join(problems))
+    device = None
+    try:
+        if backend == 'cuda_screen' and comm is not None: device = distributed.gpu_device(comm)
+        _, st = predict_stream(w, nc, ScaledRows(raw, transform), out=writers['labels'],
+                               out_node=writers['nodes'], out_distance=writers['distances'],
+                               chunk=args.chunk, backend=backend, lattice_shape=shape, comm=comm, device=device)
+        crcs = {key: [wr.first, wr.end, wr.crc32] for key, wr in writers.items()}
+        tc = time.perf_counter()
+        for wr in writers.values(): wr.close()
+        mine = dict(rank=rank, hostname=node_name(), backend=backend, device=st['device'],
+                    cuda_visible_devices=os.environ.get('CUDA_VISIBLE_DEVICES'),
+                    start=st['start'], stop=st['stop'], rows=st['rows'], seconds=st['seconds'],
+                    compute_seconds=st['compute'], io_wait_seconds=st['io_wait'],
+                    write_seconds=st['write'], close_seconds=time.perf_counter()-tc,
+                    pwrite_seconds=sum(wr.pwrite_seconds for wr in writers.values()),
+                    fsync_seconds=sum(wr.fsync_seconds for wr in writers.values()),
+                    bytes_written=st['rows'] * sum(np.dtype(d).itemsize for _, d in LABEL_FILES),
+                    part_files=bool(rank), wall_seconds=time.perf_counter()-t0, crc32=crcs)
+    except Exception:
+        for wr in writers.values(): wr.close(sync=False)
+        mine = dict(rank=rank, hostname=node_name(), error=traceback.format_exc())
+    every = gather(mine)
+    failed = [r for r in every if 'error' in r]
+    if failed:
+        raise RuntimeError('labelling failed on rank(s) ' + ', '.join(str(r['rank']) for r in failed)
+                           + '\n' + '\n'.join(r['error'] for r in failed))
+    t1 = time.perf_counter(); checked, check_error = [], None
+    copied = dict(read_seconds=0., write_seconds=0., bytes=0); fsync = 0.
+    if not rank and size > 1:
+        dest = None
+        try:
+            for key, _ in LABEL_FILES:  # one final file at a time, parts in rank order
+                dest = NpyWriter(final(key))
+                for r in every[1:]:
+                    first, end, crc = r['crc32'][key]
+                    if r['rows'] and (first, end) != (0, r['rows']) or crc is None:
+                        raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
+                    # The copy reads every byte of the part: lost or torn writes fail here.
+                    if copy_npy_rows(part(key, r['rank']), dest, r['start'], stats=copied) != crc:
+                        raise RuntimeError(f"rank {r['rank']} {key} rows [{r['start']}, {r['stop']}) "
+                                           'differ on disk from what it wrote')
+                dest.close(); fsync += dest.fsync_seconds; dest = None
+            checked = [r['rank'] for r in every[1:]]
+            for key, _ in LABEL_FILES:
+                for r in every[1:]: os.remove(part(key, r['rank']))
+        except Exception as e:
+            if dest is not None: dest.close(sync=False)
+            hint = (' (OUT must be on a file system every rank can open)'
+                    if isinstance(e, FileNotFoundError) else '')
+            check_error = f'{type(e).__name__}: {e}{hint}'
+    # Every rank learns the outcome of rank 0's check, so a failed check stops all of them.
+    if comm is not None: check_error = comm.bcast(check_error, root=0)
+    if check_error:
+        raise RuntimeError('labelling readback check on rank 0 failed: ' + check_error)
+    if rank: return None
+    seconds = time.perf_counter() - t1
+    return dict(ranks=every, crc_checked_ranks=checked, crc_check_seconds=seconds,
+                assemble_seconds=seconds, assemble_read_seconds=copied['read_seconds'],
+                assemble_write_seconds=copied['write_seconds'], assemble_fsync_seconds=fsync,
+                assemble_bytes=copied['bytes'])
+
+
 def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=None):
-    """One fit. With ``comm`` every rank trains on the windows it owns; rank 0 alone does
-    the rest and returns the record, the other ranks return None after training."""
+    """One fit. With ``comm`` every rank trains on the windows it owns, then labels its own
+    contiguous rows of the pool; rank 0 alone does the rest and returns the record, the
+    other ranks return None after labelling."""
     from aweSOM import Lattice, SOMModel, Scaler
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
     from aweSOM.inference import best_match_nodes_patch
     t = time.perf_counter()
     tag = f'{shape[0]}x{shape[1]}-s{seed}'
     clock = PhaseClock(tag)
+    label_backend = resolve_label_backend(getattr(args, 'label_backend', 'auto'), comm)
     execution = execution_info()
     print(json.dumps(dict(tag=tag, execution=execution)), flush=True)
     scaler = Scaler('median-iqr', np.array(scaling['center']), np.array(scaling['scale']))
@@ -891,28 +1028,36 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                                         r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
                                         final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
                                         comm=comm, **checkpoint_args)
+        rank = 0 if comm is None else comm.Get_rank()
         if comm is not None:
             import numba
             per_rank = comm.gather(dict(hostname=node_name(), numba_threads=numba.get_num_threads(),
                                         affinity_restored=restored), root=0)
-            if comm.Get_rank(): return None
-        clock.finish('training')
-        if w.dtype != np.float64 or not np.isfinite(w).all():
-            raise RuntimeError('training returned invalid float64 weights')
-        lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
-        nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
-        np.save(out / f'{tag}-umat.npy', lat.umat)
-        clock.finish('clustering')
-        labels = np.lib.format.open_memmap(out / f'{tag}-labels.npy', mode='w+', dtype='i4', shape=(len(raw),))
+        prepared = None
+        if not rank:
+            try:
+                clock.finish('training')
+                if w.dtype != np.float64 or not np.isfinite(w).all():
+                    raise RuntimeError('training returned invalid float64 weights')
+                lat = Lattice(*shape); lat.lattice = w; lat.umat = lat.compute_umat()
+                nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
+                np.save(out / f'{tag}-umat.npy', lat.umat)
+                clock.finish('clustering')
+                for key, dtype in LABEL_FILES:  # created here; only rank 0 opens them
+                    created = np.lib.format.open_memmap(out / f'{tag}-{key}.npy', mode='w+', dtype=dtype, shape=(len(raw),))
+                    del created
+                prepared = ('ok', nc)
+            except Exception:
+                prepared = ('error', traceback.format_exc())
+        if comm is not None: prepared = comm.bcast(prepared, root=0)
+        if prepared[0] == 'error':
+            raise RuntimeError(prepared[1] if not rank else 'rank 0 failed before labelling (see its log)')
+        nc = prepared[1]
+        labelling = label_rows(args, w, nc, shape, raw, transform, out, tag, label_backend, comm)
+        if rank: return None
         node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
-        nodes = np.lib.format.open_memmap(node_path, mode='w+', dtype='i4', shape=(len(raw),))
-        distances = np.lib.format.open_memmap(distance_path, mode='w+', dtype='f8', shape=(len(raw),))
-        for a in range(0, len(raw), args.chunk):
-            b = min(a+args.chunk, len(raw))
-            nodes[a:b], d2 = best_match_nodes_patch(w, transform(raw[a:b]), *shape)
-            labels[a:b] = nc[nodes[a:b]]; distances[a:b] = np.sqrt(d2)
-            from aweSOM.pool_statistics import release_mapping
-            for mapped in (labels,nodes,distances): release_mapping(mapped)
+        labels = np.load(out / f'{tag}-labels.npy', mmap_mode='r+')
+        nodes, distances = np.load(node_path, mmap_mode='r+'), np.load(distance_path, mmap_mode='r+')
         clock.finish('labelling')
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         deferred = args.statistics == 'later'
@@ -983,6 +1128,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                selection_rule=SELECTION_RULE, effect_feature_order=names, **statistics,
                selected_sheet_clusters=[], sheet_selection_status='pending', selection_audit=pending, seed_overlap={},
                umat_file=f'{tag}-umat.npy',
+               labelling=dict(requested=getattr(args, 'label_backend', 'auto'), backend=label_backend, **labelling),
                verification=dict(reload_mismatches=mismatch,cluster_label_patch_screen_mismatches=parity,
                                  bmu_node_mismatches=bmu_mismatches, bmu_distance_rtol_1e6=distance_parity,
                                  saved_components_equal=components,
@@ -1169,11 +1315,14 @@ def parser():
     p.add_argument('--check-scaling',type=int,default=0)
     p.add_argument('--scratch',type=Path)
     p.add_argument('--bmu',default='auto')
+    p.add_argument('--label-backend',choices=LABEL_BACKENDS,default='auto',
+                   help='exact BMU search for labelling the pool: auto = cuda_screen when CuPy sees a GPU on every rank, else patch')
     p.add_argument('--verify-labels',action='store_true')
     p.add_argument('--resume',type=Path,help='--fit only: continue from this checkpoint (copied into OUT, left unchanged); same rank count')
     p.add_argument('--reuse-pool',type=Path)
     p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
-    p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); rank 0 writes every output')
+    p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); every rank labels its own rows '
+                   'of the three label files, rank 0 writes every other output; OUT must be on a shared file system')
     p.add_argument('--collect',type=Path,nargs='+')
     p.add_argument('--anchor'); p.add_argument('--held-out',nargs='+')
     p.add_argument('--out',type=Path,required=True)
