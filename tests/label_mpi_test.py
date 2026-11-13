@@ -551,6 +551,8 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
             sys.modules["cupy"] = SimpleNamespace(cuda=SimpleNamespace(runtime=runtime))
             screen.GpuScreenSearcher = StandIn
             StandIn.devices = []
+        else:  # a CPU-only machine, also on a GPU node
+            sys.modules["cupy"] = None
         if mode == "no-shared-out" and rank == 1:
             def missing(path):
                 raise FileNotFoundError(2, "No such file or directory", str(path))
