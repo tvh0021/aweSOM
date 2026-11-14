@@ -1,12 +1,15 @@
 """Tests for aweSOM.model: Scaler, SOMModel construction, prediction and file round-trips."""
 
+import contextlib
+import io
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from aweSOM import SOMModel, Scaler
+from aweSOM import Lattice, SOMModel, Scaler
 from aweSOM.inference import predict
+from aweSOM.model import distance_quantiles, distance_quantiles_fast
 from aweSOM.run_som import manual_scaling
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -187,3 +190,82 @@ def test_predict_patch_rectangular_lattice_roundtrip(tmp_path):
     np.testing.assert_allclose(patch_distance, distance, rtol=1e-14, atol=1e-14)
     np.testing.assert_array_equal(loaded.predict(data[0], backend="patch"), expected[:1])
     assert loaded.predict(data[:0], backend="patch").shape == (0,)
+
+
+def test_median_iqr_scaler_and_fast_quantiles(tmp_path):
+    rng = np.random.default_rng(6)
+    data = rng.normal(loc=[-5.0, 12.0, 100.0], scale=[0.5, 2.0, 15.0], size=(300, 3))
+    miqr = Scaler.fit(data, kind="median-iqr")
+    q25, q50, q75 = np.percentile(data, [25, 50, 75], axis=0)
+    assert np.array_equal(miqr.offset, q50)
+    assert np.array_equal(miqr.scale, q75 - q25)
+    np.testing.assert_allclose(miqr.inverse_transform(miqr.transform(data)), data, rtol=1e-14, atol=1e-14)
+
+    model, _ = _random_model(kind="median-iqr")
+    for suffix in (".h5", ".txt"):
+        path = tmp_path / f"miqr{suffix}"
+        model.save_text(path) if suffix == ".txt" else model.save(path)
+        _assert_models_equal(model, SOMModel.load(path))
+
+    nodes_idx = rng.integers(0, 12, size=500, dtype=np.int32)
+    nodes_idx[nodes_idx == 4] = 0  # leave node 4 empty
+    dist = rng.uniform(0.0, 3.0, size=500)
+    q_slow, rej_slow = distance_quantiles(nodes_idx, dist, 12)
+    q_fast, rej_fast = distance_quantiles_fast(nodes_idx, dist, 12)
+    assert q_slow.tobytes() == q_fast.tobytes()
+    assert rej_slow == rej_fast
+
+
+@pytest.mark.parametrize("suffix", [".h5", ".txt"])
+def test_format_version_is_fixed_and_newer_files_are_refused(tmp_path, suffix):
+    model, _ = _random_model(kind="manual")
+    assert next(iter(model.metadata.items())) == ("format_version", "1")
+    override = SOMModel(**{**model.__dict__, "metadata": {"format_version": "2", "seed": 7}})
+    assert override.metadata == {"format_version": "1", "seed": "7"}
+    path = tmp_path / f"m{suffix}"
+    model.save(path) if suffix == ".h5" else model.save_text(path)
+    if suffix == ".h5":
+        import h5py
+
+        with h5py.File(path, "r+") as f:
+            f.attrs["format_version"] = 2
+    else:
+        path.write_text(path.read_text().replace("# format_version 1\n", "# format_version 2\n"))
+    with pytest.raises(ValueError, match="format_version 2"):
+        SOMModel.load(path)
+
+
+def test_float32_scaled_training_changes_few_labels():
+    """Scaler works in float64 while manual_scaling on float32 inputs works in float32, so a lattice trained on float32-scaled data changes 59 of 10^6 labels and 11,544 of 10^7 labels (0.12%) on the BBH validation sets when frozen with Scaler.fit."""
+    rng = np.random.default_rng(20261112)
+    centers = np.array(
+        [
+            [1.5, -2.8, -0.6, -0.7, 800.0],
+            [2.8, -1.2, 0.4, -0.1, 801.5],
+            [0.4, -3.9, -1.4, -1.3, 798.5],
+        ],
+        dtype=np.float64,
+    )
+    stds = np.array([0.7, 0.85, 0.6, 0.45, 0.95], dtype=np.float64)
+    idx = rng.integers(0, 3, size=20_000)
+    raw = (centers[idx] + rng.normal(size=(20_000, 5)) * stds).astype(np.float32)
+
+    scaled32 = manual_scaling(raw)
+    assert scaled32.dtype == np.float32
+
+    som = Lattice(12, 9, 0.5, 2000, alpha_type="decay", sampling_type="uniform")
+    som.seed = 42
+    with contextlib.redirect_stdout(io.StringIO()):
+        som.train_lattice(scaled32, [f"f{i}" for i in range(5)], history=False)
+        som.assign_cluster_to_lattice(smoothing=None, merge_cost=0.2)
+
+    ref_labels = som.predict(scaled32.astype(np.float64))
+    assert np.array_equal(ref_labels, som.predict(scaled32))
+
+    model64 = SOMModel.from_lattice(som, scaled32, scaler=Scaler.fit(raw, kind="manual"), merge_cost=0.2)
+    mismatches = int(np.count_nonzero(model64.predict(raw) != ref_labels))
+    assert mismatches == 3
+    assert mismatches < 0.01 * len(raw)
+
+    model_id = SOMModel.from_lattice(som, scaled32, scaler=Scaler.identity(5), merge_cost=0.2)
+    assert np.array_equal(model_id.predict(scaled32), ref_labels)

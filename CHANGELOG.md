@@ -4,6 +4,57 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-11-13
+
+This release adds `aweSOM.model`, an opt-in frozen model artifact for
+pickle-free inference.
+
+**`SOMModel` and `Scaler` are new opt-in classes that save a trained map and
+its feature scaler to HDF5 or plain text; training, `Lattice`, `predict`, and
+every existing output are unchanged.** Pickled lattices from v1.1.0 through
+v1.6.0 load and work as before.
+
+### Added
+
+- `SOMModel` in `aweSOM` and `aweSOM.model` freezes a trained `Lattice` via
+  `SOMModel.from_lattice` and classifies raw features in chunks with
+  `SOMModel.predict`. It supports `backend="screen"` by default and
+  `backend="numba"`, and can also return Euclidean BMU distances in the scaled
+  space.
+- `Scaler` in `aweSOM` and `aweSOM.model` fits and applies per-feature float64
+  affine scaling with kinds `"none"` via `Scaler.identity`, `"manual"`,
+  `"minmax"`, and `"median-iqr"`. The `"manual"` kind subtracts the mean and
+  divides by two standard deviations over `bulk_range`, matching
+  `run_som.manual_scaling` on float64 data.
+- `SOMModel.save` writes an HDF5 file at `format_version` 1, and
+  `SOMModel.save_text` writes a self-describing plain-text file with `%.17g`
+  floats for readers in other languages. `SOMModel.load` reads both formats
+  back bit for bit, and files with `format_version` 1 load in every later 1.x
+  release. `SOMModel.load` refuses a file with a newer `format_version`.
+- `SOMModel` stores per-node 99th-percentile BMU distances in `node_dist_q99`,
+  the global 99.9th-percentile BMU distance in `reject_distance` via
+  `distance_quantiles`, and single-line string `metadata` for
+  `format_version`, `awesom_version`, `created`, `git_commit`, and training
+  parameters. `distance_quantiles_fast` also ships in `aweSOM.model`.
+- Tests and fixtures in `tests/model_test.py`, `tests/inference_test.py`, and
+  `tests/fixtures/`.
+
+### Documentation
+
+- `README.md` and the new docs page `docs/source/model.rst` show how to save a
+  trained map and label new data.
+
+### Known limitations
+
+- `Scaler` always works in float64, whereas `run_som.manual_scaling` scales
+  float32 arrays in float32. When a lattice was trained on float32 features
+  scaled in float32, `SOMModel.predict` on the raw float32 features can assign
+  a different cluster near boundaries, changing 59 of 1,000,000 labels on the
+  51x36 binary black hole map and 11,544 of 10,000,000 labels, or 0.12
+  percent, on the 91x64 map. Scaling the input in float32 before `predict`
+  with `Scaler.identity`, or training on float64-scaled features, reproduces
+  the training labels bit for bit.
+
 ## [1.6.0] - 2026-11-05
 
 This release speeds up training and adds a `history` keyword to
@@ -358,6 +409,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/tvh0021/aweSOM/compare/v1.3.0...v1.4.0

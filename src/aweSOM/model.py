@@ -5,7 +5,8 @@ trained lattice: the scaler fitted on the training sample, the node weights,
 the node-to-cluster map, distance thresholds for flagging unfamiliar points,
 and provenance metadata. It is written either to HDF5 (``save``) or to a
 self-describing plain-text file (``save_text``) that the header-only C++
-classifier in ``cpp/awesom_classify.hpp`` reads.
+classifier in ``cpp/awesom_classify.hpp`` reads. ``load`` refuses a file with a
+newer ``format_version``.
 
 Text format (one model per file)::
 
@@ -228,6 +229,14 @@ def _default_metadata() -> dict[str, str]:
     }
 
 
+def _check_format_version(path, version) -> None:
+    if int(version) > int(FORMAT_VERSION):
+        raise ValueError(
+            f"{path} has format_version {int(version)}; this aweSOM reads format_version "
+            f"{FORMAT_VERSION} or lower, so upgrade aweSOM to load it"
+        )
+
+
 def _check_metadata(metadata: dict) -> dict[str, str]:
     clean = {}
     for key, value in metadata.items():
@@ -344,7 +353,9 @@ class SOMModel:
             distance of the training points mapped to each node (NaN if none).
         reject_distance (float): 99.9th percentile of the BMU distance over all training points.
         metadata (dict[str, str]): Provenance (format_version, awesom_version, created,
-            git_commit, and user keys such as dataset, merge_cost, seed).
+            git_commit, and user keys such as dataset, merge_cost, seed). git_commit is
+            the HEAD of the git checkout that contains the installed package, or
+            "unknown" if there is none.
     """
 
     xdim: int
@@ -378,7 +389,10 @@ class SOMModel:
                 raise ValueError(f"feature name {name!r} must be non-empty, without commas or whitespace")
         if self.scaler.offset.shape != (n_features,):
             raise ValueError("scaler must have one offset and scale per feature")
-        self.metadata = _check_metadata(self.metadata)
+        metadata = _check_metadata(self.metadata)
+        # the file format version is set by this code, not by the caller
+        metadata.pop("format_version", None)
+        self.metadata = {"format_version": FORMAT_VERSION, **metadata}
 
     @property
     def n_nodes(self) -> int:
@@ -412,10 +426,12 @@ class SOMModel:
                 thresholds. Defaults to ``lattice.data_array``.
             scaler (Scaler, optional): Scaler that maps raw data to that space.
                 Defaults to the identity.
-            merge_cost (float, optional): Merge threshold for the cluster assignment;
-                also recorded in the metadata. Defaults to None.
+            merge_cost (float, optional): Merge threshold for the cluster assignment.
+                It is used only when the lattice has no cluster assignment, and is
+                recorded in the metadata as given either way. Defaults to None.
             metadata (dict, optional): Extra provenance; values are converted to str
-                and override the defaults. Defaults to None.
+                and override the defaults, except ``format_version``, which is always 1.
+                Defaults to None.
 
         Returns:
             SOMModel: the frozen model.
@@ -599,6 +615,7 @@ class SOMModel:
         import h5py
 
         with h5py.File(path, "r") as f:
+            _check_format_version(path, f.attrs.get("format_version", 1))
             names = [
                 n.decode("utf-8") if isinstance(n, bytes) else str(n)
                 for n in f["feature_names"][()]
@@ -641,6 +658,7 @@ class SOMModel:
                     rows.append(line.split())
         if header.get("format") != _TEXT_MAGIC:
             raise ValueError(f"{path} is not an aweSOM text model")
+        _check_format_version(path, metadata.get("format_version", "1"))
 
         xdim, ydim = int(header["xdim"]), int(header["ydim"])
         n_features = int(header["n_features"])
