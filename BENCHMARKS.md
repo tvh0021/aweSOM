@@ -13,9 +13,9 @@ Data:
 - Binary black hole case: five plasma features per cell from a binary black hole simulation snapshot (iteration 180224), float32, scaled with `run_som.manual_scaling`. The 29x20 case trains on the first 100,000 points for 100,000 steps; the 51x36 case trains on the first 1,000,000 points for 1,000,000 steps. The lattice sizes come from `run_som.initialize_lattice` with ratio 0.7. Settings: `alpha_0=0.5`, `alpha_type="decay"`, `sampling_type="uniform"`, `Lattice.seed = 42`.
 - Plasma case: the fiducial plasma turbulence model of the plasma-turbulence example (a 64x37 lattice with four features, trained on 2,097,152 points), loaded from its pickle. The first 1,000,000 of its stored points are labelled with its own lattice, so every release labels the same lattice.
 
-Training time is the wall time of the `train_lattice` call only, with each release's defaults (from v1.6.0 on also with `history=False`). Each measurement process first trains an 8x6 lattice for 500 steps, so numba compilation is not in the training time; v1.6.0 and v1.7.0 compile in 2.7 to 3.1 s, earlier releases in 1.6 to 1.9 s. Labelling time covers the labels of all points after `assign_cluster_to_lattice(smoothing=None, merge_cost=0.2)`, which is timed separately, and follows a warm-up on 2,000 points. Releases up to v1.3.0 label with `map_data_to_lattice` followed by `assign_cluster_to_data`; from v1.4.0 on the default is `predict`, and every other route is listed too. Every time is the mean of two runs. Peak memory is the `ru_maxrss` of the 51x36 training process (1 GB = 10^9 bytes).
+Training time is the wall time of the `train_lattice` call only, with each release's defaults (from v1.6.0 on also with `history=False`). Each measurement process first trains an 8x6 lattice for 500 steps, so numba compilation is not in the training time; v1.6.0 to v1.8.0 compile in 2.7 to 3.1 s, earlier releases in 1.6 to 1.9 s. Labelling time covers the labels of all points after `assign_cluster_to_lattice(smoothing=None, merge_cost=0.2)`, which is timed separately, and follows a warm-up on 2,000 points. Releases up to v1.3.0 label with `map_data_to_lattice` followed by `assign_cluster_to_data`; from v1.4.0 on the default is `predict`, and every other route is listed too. Every time is the mean of two runs. Peak memory is the `ru_maxrss` of the 51x36 training process (1 GB = 10^9 bytes).
 
-v1.1.0 to v1.4.0 do not seed training, so their maps differ from run to run and only cluster counts compare (4 to 6 clusters at merge cost 0.2 for 51x36). v1.5.0 and later are seeded, and v1.6.0 and v1.7.0 reproduce v1.5.0 bit for bit: lattice, U-matrix, clusters and labels, for both training cases and both history settings. The plasma case gives 9 clusters and the same labels in every release.
+v1.1.0 to v1.4.0 do not seed training, so their maps differ from run to run and only cluster counts compare (4 to 6 clusters at merge cost 0.2 for 51x36). v1.5.0 and later are seeded, and v1.6.0 to v1.8.0 reproduce v1.5.0 bit for bit: lattice, U-matrix, clusters and labels, for both training cases and both history settings. The plasma case gives 9 clusters and the same labels in every release.
 
 ## Training
 
@@ -25,16 +25,18 @@ v1.1.0 to v1.4.0 do not seed training, so their maps differ from run to run and 
 | v1.1.1 | 2026-11-04 | 3.94 | 103 | 1.0x | 1.0x | 0.38 |
 | v1.1.2 | 2026-11-04 | 4.02 | 102 | 1.0x | 1.0x | 0.38 |
 | v1.1.3 | 2026-11-04 | 4.05 | 104 | 0.98x | 0.99x | 0.38 |
-| v1.2.0 | 2026-11-04 | 4.10 | 104 | 1.0x | 0.99x | 0.38 |
+| v1.2.0 | 2026-11-05 | 4.10 | 104 | 1.0x | 0.99x | 0.38 |
 | v1.3.0 | 2026-11-05 | 4.05 | 105 | 0.99x | 0.98x | 0.38 |
 | v1.4.0 | 2026-11-05 | 4.10 | 105 | 1.0x | 0.98x | 0.38 |
 | v1.5.0 | 2026-11-05 | 4.09 | 106 | 0.98x | 0.96x | 0.38 |
 | v1.6.0, history on | 2026-11-05 | 0.691 | 11.8 | 9.0x | 8.7x | 0.43 |
 | v1.6.0, history off | 2026-11-05 | 0.310 | 9.17 | 12x | 11x | 0.43 |
-| v1.7.0, history on | 2026-11-13 | 0.667 | 11.3 | 1.0x | 9.1x | 0.43 |
-| v1.7.0, history off | 2026-11-13 | 0.306 | 8.89 | 1.0x | 12x | 0.43 |
+| v1.7.0, history on | 2026-11-14 | 0.667 | 11.3 | 1.0x | 9.1x | 0.43 |
+| v1.7.0, history off | 2026-11-14 | 0.306 | 8.89 | 1.0x | 12x | 0.43 |
+| v1.8.0, history on | 2026-11-14 | 0.656 | 11.2 | 1.0x | 9.2x | 0.43 |
+| v1.8.0, history off | 2026-11-14 | 0.308 | 8.85 | 1.0x | 12x | 0.43 |
 
-Speed-ups use the 51x36 times against the previous release's default (`history=True`) row and against v1.1.0.
+Speed-ups use the 51x36 times against the previous release's matching history setting when available, or its default row, and against v1.1.0.
 
 ## Labelling
 
@@ -59,10 +61,16 @@ Speed-ups use the 51x36 times against the previous release's default (`history=T
 | v1.7.0 | `predict`, numba | 0.506 | 0.675 | 0.80x | 7.8x |
 | v1.7.0 | `map_data_to_lattice` + `assign_cluster_to_data` (deprecated) | 0.472 | 0.542 | 0.99x | 9.8x |
 | v1.7.0 | `SOMModel.predict`, screen (scaler included) | 0.444 | 0.562 | 0.96x | 9.4x |
+| v1.8.0 | `predict`, screen (default) | 0.434 | 0.513 | 0.99x | 10x |
+| v1.8.0 | `predict`, numba | 0.453 | 0.683 | 0.74x | 7.7x |
+| v1.8.0 | `map_data_to_lattice` + `assign_cluster_to_data` (deprecated) | 0.418 | 0.542 | 0.94x | 9.8x |
+| v1.8.0 | `SOMModel.predict`, screen (scaler included) | 0.440 | 0.542 | 0.94x | 9.8x |
 
 Speed-ups compare the plasma time with the previous release's default route and with v1.1.0, because the plasma lattice is the same in every release while each release trains its own 51x36 lattice. All `Lattice` routes of a release give the same labels; the `SOMModel.predict` row applies `Scaler.fit(raw, kind="manual")` to raw float32 features on 51x36 (46 of 1,000,000 boundary labels differ from float32-scaled training on this benchmark's own 51x36 lattice; 59 on the paper's lattice) and `Scaler.identity` on the stored float64 plasma array (identical labels). Times under one second varied by up to 20 percent between the two runs, so differences of that size between releases that did not change the labelling code are noise.
 
 Cluster assignment (`assign_cluster_to_lattice`, merge cost 0.2) took 1.4 s for 51x36 and 2.4 s for the plasma lattice in v1.1.0 to v1.1.2, and 0.11 to 0.12 s and 0.18 to 0.19 s from v1.1.3 on.
+
+On a `100x100` binary black hole lattice of `10,000` nodes trained for `100,000` steps with seed `42` and `47` initial centroids, `assign_cluster_to_lattice(target_clusters=10)` took `2.86 s` as the mean of three runs after one warm-up call and returned `10` clusters at `merge_cost_used` `0.112`. Threshold mode at `merge_cost=0.2` on the same lattice took `2.85 s` and returned `7` clusters, because both modes walk the same greedy pairwise cost loop.
 
 ## What changed where
 
@@ -72,6 +80,7 @@ Cluster assignment (`assign_cluster_to_lattice`, merge cost 0.2) took 1.4 s for 
 - v1.5.0: 51x36 labelling read 20 percent slower, plasma labelling did not change. The labelling code is the same as in v1.4.0; the 51x36 lattice differs because training is now seeded, and the difference is within the run-to-run spread.
 - v1.6.0: training became 9.0 times faster with the default `history=True` and 12 times faster with `history=False` (51x36, 106 s to 11.8 s and 9.17 s). `Lattice.fast_som` runs the online training steps in compiled numba kernels, and `history=False` skips the snapshots. Compilation takes about 1.2 s longer than in v1.5.0, and peak memory rose from 0.38 GB to 0.43 GB.
 - v1.7.0: 51x36 `predict` and the deprecated route read 17 to 19 percent faster than in v1.6.0 (returning to their v1.4.0 and v1.5.0 levels), while training and plasma `predict` changed by under 6 percent; no training or `Lattice` labelling code changed, so the sub-second shift is run-to-run noise.
+- v1.8.0: training and labelling times match `v1.7.0` within run-to-run noise at `1.0x`, outputs in threshold mode are bit for bit identical to `v1.7.0`, and target-count merging adds no overhead relative to threshold merging on a `100x100` lattice at `2.86 s` versus `2.85 s`.
 
 ## Reproducing
 

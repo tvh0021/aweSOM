@@ -18,6 +18,7 @@ mock_data_3d = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]])
 
 
 def test_jax_gpu_available():
+    pytest.importorskip("jax")
     # Check that the correct device is being used
     with patch("jax.default_backend", return_value="gpu"):
         import aweSOM.sce as sce
@@ -30,6 +31,7 @@ def test_jax_gpu_available():
 
 
 def test_jax_cpu_available():
+    pytest.importorskip("jax")
     # Check that the correct device is being used. `aweSOM.sce` chooses its
     # array library at import time, so the module has to be re-imported
     # under the patched backend and restored afterwards (otherwise this test

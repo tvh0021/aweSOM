@@ -24,8 +24,8 @@ Or run a specific test function within a module:
 
     python -m pytest tests/[module]_test.py::test_[function]
 
-Two tests in ``sce_test.py`` import JAX.
-Without JAX, ``test_jax_gpu_available`` and ``test_jax_cpu_available`` fail with ``ModuleNotFoundError``, and the other four tests pass.
+Two tests in ``sce_test.py`` import JAX with ``pytest.importorskip("jax")``.
+Without JAX, pytest skips ``test_jax_gpu_available`` and ``test_jax_cpu_available`` and runs the other four tests.
 With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`` issues a warning.
 SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 The ensemble loop itself works on integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it
@@ -36,6 +36,7 @@ against the original mask-by-mask loop (bitwise on NumPy, to float32 precision o
 match ``Lattice.predict`` when the input is scaled at the same precision as the training data, whereas a lattice trained
 on float32 features scaled in float32 differs from the float64 ``Scaler`` on 11,544 of :math:`10^7` binary black hole
 points, or 0.12%.
+``merge_target_test.py`` checks target-count cluster merging, threshold replay with ``merge_cost_used``, the ``float64`` U-matrix requirement, and frozen model metadata round-trips.
 
 Performance tests
 -----------------
