@@ -4,6 +4,156 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-11-13
+
+This release adds `aweSOM.model`, an opt-in frozen model artifact for
+pickle-free inference.
+
+**`SOMModel` and `Scaler` are new opt-in classes that save a trained map and
+its feature scaler to HDF5 or plain text; training, `Lattice`, `predict`, and
+every existing output are unchanged.** Pickled lattices from v1.1.0 through
+v1.6.0 load and work as before.
+
+### Added
+
+- `SOMModel` in `aweSOM` and `aweSOM.model` freezes a trained `Lattice` via
+  `SOMModel.from_lattice` and classifies raw features in chunks with
+  `SOMModel.predict`. It supports `backend="screen"` by default and
+  `backend="numba"`, and can also return Euclidean BMU distances in the scaled
+  space.
+- `Scaler` in `aweSOM` and `aweSOM.model` fits and applies per-feature float64
+  affine scaling with kinds `"none"` via `Scaler.identity`, `"manual"`,
+  `"minmax"`, and `"median-iqr"`. The `"manual"` kind subtracts the mean and
+  divides by two standard deviations over `bulk_range`, matching
+  `run_som.manual_scaling` on float64 data.
+- `SOMModel.save` writes an HDF5 file at `format_version` 1, and
+  `SOMModel.save_text` writes a self-describing plain-text file with `%.17g`
+  floats for readers in other languages. `SOMModel.load` reads both formats
+  back bit for bit, and files with `format_version` 1 load in every later 1.x
+  release. `SOMModel.load` refuses a file with a newer `format_version`.
+- `SOMModel` stores per-node 99th-percentile BMU distances in `node_dist_q99`,
+  the global 99.9th-percentile BMU distance in `reject_distance` via
+  `distance_quantiles`, and single-line string `metadata` for
+  `format_version`, `awesom_version`, `created`, `git_commit`, and training
+  parameters. `distance_quantiles_fast` also ships in `aweSOM.model`.
+- Tests and fixtures in `tests/model_test.py`, `tests/inference_test.py`, and
+  `tests/fixtures/`.
+
+### Documentation
+
+- `README.md` and the new docs page `docs/source/model.rst` show how to save a
+  trained map and label new data.
+
+### Known limitations
+
+- `Scaler` always works in float64, whereas `run_som.manual_scaling` scales
+  float32 arrays in float32. When a lattice was trained on float32 features
+  scaled in float32, `SOMModel.predict` on the raw float32 features can assign
+  a different cluster near boundaries, changing 59 of 1,000,000 labels on the
+  51x36 binary black hole map and 11,544 of 10,000,000 labels, or 0.12
+  percent, on the 91x64 map. Scaling the input in float32 before `predict`
+  with `Scaler.identity`, or training on float64-scaled features, reproduces
+  the training labels bit for bit.
+
+## [1.6.0] - 2026-11-05
+
+This release speeds up training and adds a `history` keyword to
+`train_lattice`.
+
+**Training results are unchanged: for the same seed, data and settings,
+v1.6.0 trains bit for bit the same lattice, U-matrix, snapshots and clusters
+as v1.5.0.** Training is 6 to 9 times faster with the default `history=True`
+and 12 to 13 times faster with `history=False` (binary black hole features,
+29x20 and 51x36 lattices, 100,000 and 1,000,000 steps). `train_lattice` has a
+new `history` keyword.
+
+### Added
+
+- `history` keyword for `Lattice.train_lattice`. The default `history=True`
+  keeps the snapshots in `lattice_history` and `umat_history` every
+  `save_frequency` steps, as before. `history=False` skips them; the final
+  lattice and U-matrix are still computed.
+- Compiled numba kernels for the online training steps (`_som_schedule`,
+  `_som_train_steps`, `_som_train_steps_aos`, `_pairwise_sum`,
+  `_neighborhood_weight`, `_first_argmin`). They repeat the NumPy loop's
+  floating-point operations in the same order, so the results are bitwise
+  equal.
+- Tests: `tests/fast_som_test.py` (the kernels against a frozen copy of the
+  NumPy loop, both history settings, restarts) and
+  `test_final_umat_uses_final_lattice_without_history` in `tests/som_test.py`.
+- `BENCHMARKS.md`: training and labelling times for every release since
+  v1.1.0, with speed-ups against the previous release and against v1.1.0;
+  updated with every release.
+
+### Changed
+
+- `Lattice.fast_som` computes the learning rate and neighborhood schedule up
+  front and runs the training steps in numba between progress messages and
+  snapshots. The progress, shrink and decay messages are unchanged.
+- A `restart_lattice` is copied in C order before training, so a
+  Fortran-ordered restart array now trains exactly like a C-ordered one.
+  v1.5.0 summed features in a different order for Fortran-ordered arrays
+  with eight or more features, so such restarts can differ from v1.5.0.
+- The learning-rate schedule is computed in float64. A NumPy float32
+  `alpha_0` was decayed in float32 by v1.5.0; with a Python float, the
+  usual case, nothing changes.
+
+## [1.5.0] - 2026-11-05
+
+This release makes training reproducible for a given seed, computes the final
+U-matrix from the final lattice, and deprecates the old label route.
+
+**Three changes alter trained maps.** First, one generator seeded from
+`Lattice.seed` (42 by default) now draws both the initial lattice and the
+sample order, so the same seed and data give the same lattice, and a map
+trained with a given seed differs from the v1.4.0 map. Second, `Lattice.umat`
+at the end of training is computed from the final lattice. v1.4.0 computed it
+from the last saved snapshot, so U-matrices and clusters of a fresh training
+can differ from v1.4.0 unless the number of steps minus one is a multiple of
+`save_frequency`. Third, a float32 `restart_lattice` is copied to float64 and
+trained in float64; v1.4.0 trained it in float32. In addition, the sampled
+initial lattice (`sampling_type="sampling"`) can now draw the last data row,
+which v1.4.0 never picked. Pickled lattices from earlier versions load and
+work unchanged; their stored `umat` is not recomputed.
+
+### Added
+
+- Tests: `tests/deprecation_test.py`, a same-seed test in
+  `tests/regression_test.py` and `test_final_umat_uses_final_lattice` in
+  `tests/som_test.py`. `tests/small_input_and_restart_test.py` now checks the
+  float64 restart contract and same-seed restarts.
+
+### Changed
+
+- `Lattice.train_lattice` copies `restart_lattice` to float64 before
+  training. The array passed in is not modified, as in v1.1.2 and later.
+- `run_som.py`, the README walkthrough, the example scripts and the notebooks
+  now label data with `Lattice.predict`. The label files are unchanged. The
+  `som_object` pickle written by `run_som.py` no longer stores
+  `projection_1d` and `projection_2d`.
+- `Lattice.plot_heat` calls `best_match` directly instead of
+  `map_data_to_lattice`; it still sets `projection_1d` and `projection_2d`.
+
+### Deprecated
+
+- `Lattice.map_data_to_lattice` and `Lattice.assign_cluster_to_data` are
+  deprecated since 1.5.0 and emit a `DeprecationWarning`. Use
+  `Lattice.predict`, which returns the same labels. Both methods will be
+  removed in a future release. `Lattice.assign_cluster_to_lattice` and
+  `Lattice.best_match` are not deprecated.
+
+### Fixed
+
+- Training was not reproducible: the sample order came from an unseeded
+  `np.random.default_rng()` and the initial lattice from the global NumPy
+  stream. Both now come from `np.random.default_rng(Lattice.seed)`. A
+  restart that continues training (`epoch > 1`) moves the seed on by one, as
+  before.
+- The final `Lattice.umat` came from the last snapshot instead of the final
+  lattice.
+- The sampled initial lattice drew row indices from `0` to `N - 2`; it now
+  draws from `0` to `N - 1`.
+
 ## [1.4.0] - 2026-11-05
 
 This release adds CPU inference (`aweSOM.inference`, `Lattice.predict`) and
@@ -259,6 +409,9 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/tvh0021/aweSOM/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/tvh0021/aweSOM/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/tvh0021/aweSOM/compare/v1.1.3...v1.2.0

@@ -32,6 +32,10 @@ The ensemble loop itself works on integer contingency tables and does not need a
 against the original mask-by-mask loop (bitwise on NumPy, to float32 precision on a JAX device).
 ``combine_clumps_test.py`` tests the clump helpers of the plasma example and is skipped when ``tqdm`` is not installed
 (``pip install -r examples/plasma-turbulence/requirements.txt`` installs it).
+``model_test.py`` checks ``SOMModel`` and ``Scaler`` across HDF5 and plain-text round-trips. Labels from ``SOMModel``
+match ``Lattice.predict`` when the input is scaled at the same precision as the training data, whereas a lattice trained
+on float32 features scaled in float32 differs from the float64 ``Scaler`` on 11,544 of :math:`10^7` binary black hole
+points, or 0.12%.
 
 Performance tests
 -----------------

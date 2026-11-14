@@ -116,12 +116,11 @@ def train_realization(
     t0 = time.perf_counter()
     som.train_lattice(data, names, history=False)
     t1 = time.perf_counter()
-    proj = som.map_data_to_lattice()
+    som.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_cost)
     t2 = time.perf_counter()
-    clusters = som.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_cost)
-    labels = som.assign_cluster_to_data(proj, clusters)
+    labels = som.predict(data)
     t3 = time.perf_counter()
-    timings = {"train": t1 - t0, "projection": t2 - t1, "clustering": t3 - t2}
+    timings = {"train": t1 - t0, "projection": t3 - t2, "clustering": t2 - t1}
     return som, labels, timings
 
 
@@ -169,7 +168,7 @@ def run_realization(cfg: dict) -> dict:
     compact, original_ids = compact_labels(labels)
     np.save(out / f"labels.{tag}.npy", compact)
     som.data_array = None  # keep the pickle small; the rows are the input file's prefix
-    som.projection_1d = som.projection_2d = None
+    som.projection_1d = som.projection_2d = None  # predict does not set these; keep them out of the pickle
     with open(out / f"som_object.{tag}.pkl", "wb") as fh:
         pickle.dump(som, fh)
     counts = np.bincount(compact.astype(np.int64))

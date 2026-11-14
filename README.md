@@ -2,7 +2,7 @@
 
 [![status](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1/status.svg)](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1)
 
-This package combines a JIT-accelerated and parallelized implementation of SOM, integrating parts of [POPSOM](https://github.com/njali2001/popsom) and a contingency-table, optionally GPU-accelerated implementation of SCE using [ensemble learning](https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning). 
+`aweSOM`, pronounced like the word "awesome" (`/ˈɔːsəm/`), combines a JIT-accelerated and parallelized implementation of SOM, integrating parts of [POPSOM](https://github.com/njali2001/popsom) and a contingency-table, optionally GPU-accelerated implementation of SCE using [ensemble learning](https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning). 
 It is optimized for large datasets, up to $\sim 10^8$ points. 
 
 aweSOM is developed specifically to identify intermittent structures (current sheets) in 3D plasma simulations ([Ha et al., 2024](https://arxiv.org/abs/2410.01878)).
@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.4.0
+Version: 1.7.0
 
 ## 1. Installation
 
@@ -114,6 +114,10 @@ map.train_lattice(iris_data_transformed, feature_names, true_labels)
 
 The trained SOM is saved at  `map.lattice`
 
+Since v1.5.0, training draws the initial lattice and the sample order from `map.seed` (42 by default; set it before `train_lattice`), so the same seed and data give the same lattice.
+
+For large runs, `map.train_lattice(..., history=False)` skips the snapshots in `map.lattice_history` and `map.umat_history`; the final lattice and U-matrix are the same.
+
 To visualize the SOM with U-matrix, which is saved at the end of training at `map.umat`
 
 ```python
@@ -155,14 +159,15 @@ Now, we project each data point onto the lattice and get back cluster-id
 
 ```python
 final_clusters = map.assign_cluster_to_lattice(smoothing=None,merge_cost=merge_threshold)
-som_labels = map.assign_cluster_to_data(map.projection_2d, final_clusters)
+som_labels = map.predict(iris_data_transformed)
 ```
 
-For new data in the same scaled space, `map.predict(new_data)` returns the int32 cluster id of each point in one call, without the intermediate projection arrays.
+`map.predict(data)` returns the int32 cluster id of each point in one call, for the training data or for new data in the same scaled space.
 If the lattice has no cluster assignment yet, it calls `assign_cluster_to_lattice` first.
 `aweSOM.predict(weights, node_cluster, data)` does the same from a weight array and one cluster id per node.
+The older route, `map_data_to_lattice` followed by `assign_cluster_to_data`, gives the same labels but is deprecated since v1.5.0 and will be removed in a future release.
 
-`Lattice.best_match`, which `map_data_to_lattice` calls, takes a `backend` keyword.
+`Lattice.best_match` takes a `backend` keyword, and `Lattice.predict` takes one with the same default.
 **Since v1.4.0 the default is `backend="screen"`**: a float32 scan of all nodes whose winner is checked in float64, with distances accumulated in float64.
 `backend="numba"` runs the plain float64 scan and returns the same nodes.
 `backend="legacy"` and `full=True` run the kernel of v1.3.0 and earlier.
@@ -233,6 +238,49 @@ Recall:  [100.0, 92.0, 90.0] %
 
 Is the performance of the aweSOM model.
 
+### Saving a trained map and labeling new data
+
+`SOMModel` and `Scaler` save the trained `map` and its feature scaling to a
+file, so later runs can label raw data without `pickle`.
+
+```python
+from aweSOM import SOMModel, Scaler
+
+# Fit on the raw training features; kind="manual" matches rs.manual_scaling
+scaler = Scaler.fit(iris.data, kind="manual")
+
+# from_lattice reads map.features_names, which cannot contain spaces or commas
+map.features_names = [name.replace(" ", "_") for name in feature_names]
+# map already has clusters, so merge_cost is only recorded in the metadata
+model = SOMModel.from_lattice(map, scaler=scaler, merge_cost=merge_threshold)
+
+# Save to HDF5 or plain text
+model.save("iris_model.h5")
+model.save_text("iris_model.txt")
+
+# Load either file and label raw, unscaled points
+loaded = SOMModel.load("iris_model.h5")
+loaded_text = SOMModel.load("iris_model.txt")
+
+raw_new_data = iris.data[:5]
+new_labels = loaded.predict(raw_new_data)
+new_labels, bmu_distances = loaded.predict(raw_new_data, return_distance=True)
+```
+
+`predict` scales raw input with the stored `Scaler` and, with
+`return_distance=True`, also returns the Euclidean distance to the best-matching
+node in the scaled space. `backend` is `"screen"` (default) or `"numba"`. Files
+record `format_version` 1. Every later 1.x release loads them, and `load` refuses
+a file with a newer version. The text file can be read without HDF5, for example
+from other languages.
+
+`Scaler` works in float64. If you trained the lattice on float32 data scaled by
+`rs.manual_scaling`, keep the training mean and two standard deviations in
+float32, scale new data with them, and build the model with
+`Scaler.identity(n_features)`. The saved file then holds no scaling, so scale every
+input this way before `predict`, never with the new data's own mean and
+standard deviation.
+
 ## 4. Basic Usage - SCE
 
 If a dataset is complex, a single SOM result might not be sufficiently stable.
@@ -253,9 +301,8 @@ for xdim in parameters["xdim"]:
                 print(f'constructing aweSOM lattice for xdim={xdim}, ydim={ydim}, alpha={alpha_0}, train={train}...', flush=True)
                 map = Lattice(xdim, ydim, alpha_0, train, )
                 map.train_lattice(iris_data_transformed, feature_names, true_labels)
-                projection_2d = map.map_data_to_lattice()
-                final_clusters = map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
-                som_labels = map.assign_cluster_to_data(projection_2d, final_clusters)
+                map.assign_cluster_to_lattice(smoothing=None, merge_cost=merge_threshold)
+                som_labels = map.predict(iris_data_transformed)
                 save_cluster_labels(som_labels, xdim, ydim, alpha_0, train, name_of_dataset='iris')
 ```
 

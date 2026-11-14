@@ -31,14 +31,12 @@ class MockLattice:
     ):
         pass
 
-    def map_data_to_lattice(self):
-        return np.zeros((self.xdim, self.ydim))
-
     def assign_cluster_to_lattice(self, smoothing=None, merge_cost=0.2):
-        return np.zeros((self.xdim, self.ydim))
+        self.lattice_assigned_clusters = np.zeros((self.xdim, self.ydim), dtype=np.int32)
+        return self.lattice_assigned_clusters
 
-    def assign_cluster_to_data(self, projection_2d, clusters):
-        return np.zeros(projection_2d.shape[0])
+    def predict(self, data, merge_cost=None):
+        return np.zeros(data.shape[0], dtype=np.int32)
 
 
 @pytest.fixture

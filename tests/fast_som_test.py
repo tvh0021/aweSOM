@@ -130,6 +130,28 @@ def test_training_restart_continues_from_given_lattice():
     assert not np.array_equal(weights, som.lattice)
 
 
+@pytest.mark.parametrize("n_features", [4, 10])
+def test_fortran_ordered_restart_matches_c_ordered(n_features):
+    # the restart copy is made C-contiguous, so the array layout a user passes
+    # does not change the summation order inside the kernels
+    data = np.random.default_rng(11).normal(size=(2000, n_features))
+    names = [f"f{i}" for i in range(n_features)]
+    som = _train_new(data, 12, 9, 0.3, 1000, "decay", "sampling", 3, history=False)
+    weights = som.lattice.copy()
+    results = []
+    for restart in (weights, np.asfortranarray(weights)):
+        again = Lattice(12, 9, 0.3, 1000, alpha_type="decay", sampling_type="sampling")
+        again.seed = 3
+        again.epoch = som.epoch
+        with contextlib.redirect_stdout(io.StringIO()):
+            again.train_lattice(
+                data, names, number_of_steps=200, restart_lattice=restart, history=False
+            )
+        assert again.lattice.flags.c_contiguous
+        results.append(again.lattice.tobytes())
+    assert results[0] == results[1]
+
+
 @pytest.mark.parametrize("xdim,ydim", [(12, 9), (64, 37), (5, 30)])
 def test_inline_neighborhood_weight_is_bitwise_equal_to_gamma(xdim, ydim):
     from aweSOM.som import _neighborhood_weight

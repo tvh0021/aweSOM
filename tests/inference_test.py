@@ -122,7 +122,7 @@ def test_from_lattice_node_cluster_follows_rowix(trained):
 def test_predict_reproduces_lattice_cluster_assignment(trained):
     som, data = trained
     model = SOMModel.from_lattice(som, data)
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), pytest.warns(DeprecationWarning):
         expected = som.assign_cluster_to_data(
             som.map_data_to_lattice(), som.lattice_assigned_clusters
         )

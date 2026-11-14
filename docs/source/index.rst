@@ -13,7 +13,7 @@
 aweSOM - Accelerated Self-organizing Map and Statistically Combined Ensemble
 ============================================================================
 
-The `aweSOM <https://github.com/tvh0021/aweSOM>`_ package combines a JIT-accelerated and parallelized implementation of self-organizing map (SOM),
+The `aweSOM <https://github.com/tvh0021/aweSOM>`_ package, pronounced like the word "awesome" (``/ˈɔːsəm/``), combines a JIT-accelerated and parallelized implementation of self-organizing map (SOM),
 integrating parts of `POPSOM <https://github.com/njali2001/popsom>`_, and a contingency-table, optionally GPU-accelerated implementation of
 statistically combined ensemble (SCE) using `ensemble learning <https://github.com/mkruuse/segmenting-turbulent-simulations-with-ensemble-learning>`_.  
 
@@ -33,7 +33,7 @@ See the :doc:`notebook <notebooks/iris>` for an example application on the class
 `Joonas Nättilä <https://natj.github.io>`_ - University of Helsinki,
 and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
-Current version: 1.4.0
+Current version: 1.7.0
 
 .. [![status](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1/status.svg)](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1)
 
@@ -46,6 +46,7 @@ Current version: 1.4.0
    testing
    notebooks/plasma
    notebooks/iris
+   model
    faqs
    modules
 
