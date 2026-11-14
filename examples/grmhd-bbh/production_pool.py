@@ -959,7 +959,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                     if r['rows'] and (first, end) != (0, r['rows']) or crc is None:
                         raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
                     # The copy reads every byte of the part: lost or torn writes fail here.
-                    if copy_npy_rows(part(key, r['rank']), dest, r['start'], stats=copied) != crc:
+                    if copy_npy_rows(part(key, r['rank']), dest, r['start'], stats=copied, rows=r['rows']) != crc:
                         raise RuntimeError(f"rank {r['rank']} {key} rows [{r['start']}, {r['stop']}) "
                                            'differ on disk from what it wrote')
                 dest.close(); fsync += dest.fsync_seconds; dest = None

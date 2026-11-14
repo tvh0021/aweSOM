@@ -372,15 +372,15 @@ class NpyWriter:
 
     def close(self, sync: bool = True) -> None:
         """Close the file (``fsync`` first with ``sync``). Safe to call twice."""
-        if self.fd is not None:
+        fd, self.fd = self.fd, None  # forget it first: a failed close must not close it again
+        if fd is not None:
             try:
                 if sync:
                     t = time.perf_counter()
-                    os.fsync(self.fd)
+                    os.fsync(fd)
                     self.fsync_seconds += time.perf_counter() - t
             finally:
-                os.close(self.fd)
-                self.fd = None
+                os.close(fd)
 
 
 def npy_crc32(path: str, start: int, stop: int, block: int = 2**24) -> int:
@@ -403,7 +403,7 @@ def _npy_header(fh):
 
 
 def copy_npy_rows(part_path: str, writer: "NpyWriter", start: int, block: int = 2**24,
-                  stats: Optional[dict] = None) -> int:
+                  stats: Optional[dict] = None, rows: Optional[int] = None) -> int:
     """Copy every row of the ``.npy`` file ``part_path`` into ``writer`` from row ``start`` on.
 
     Reads with plain buffered reads, ``block`` rows at a time, and writes each
@@ -412,16 +412,20 @@ def copy_npy_rows(part_path: str, writer: "NpyWriter", start: int, block: int = 
     so the copy doubles as the check that the part arrived intact. The
     destination writer does not checksum these rows (its ``crc32`` becomes
     None). With ``stats``, adds ``read_seconds``, ``write_seconds`` and
-    ``bytes`` to it.
+    ``bytes`` to it. With ``rows``, refuses a part that does not hold
+    exactly that many rows.
     """
     t = time.perf_counter()
     read_s = write_s = 0.0
     with open(part_path, "rb", buffering=0) as fh:
         shape, fortran, dtype = _npy_header(fh)
         dtype = np.dtype(dtype)
-        if fortran or tuple(shape[1:]) != writer.shape[1:] or dtype != writer.dtype:
+        if fortran or len(shape) != len(writer.shape) or tuple(shape[1:]) != writer.shape[1:] \
+                or dtype != writer.dtype:
             raise ValueError(f"{part_path}: shape {shape} {dtype} does not fit rows of {writer.path}")
-        n = int(shape[0]) if shape else 0
+        n = int(shape[0])
+        if rows is not None and n != rows:
+            raise ValueError(f"{part_path}: holds {n} rows, expected {rows}")
         if start < 0 or start + n > writer.shape[0]:
             raise ValueError(f"{part_path}: rows [{start}, {start + n}) outside {writer.path}")
         buf = np.empty((min(n, int(block)), *writer.shape[1:]), dtype)

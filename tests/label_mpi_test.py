@@ -2,6 +2,7 @@
 predict_stream(comm=...), and the production_pool driver labelling on every rank."""
 import json
 import multiprocessing as mp
+import os
 import shutil
 import subprocess
 import sys
@@ -209,9 +210,13 @@ def test_copy_npy_rows_refusals(tmp_path):
     np.save(tmp_path / "f8.npy", np.zeros(3, "f8"))
     np.save(tmp_path / "2d.npy", np.zeros((3, 2), "i4"))
     np.save(tmp_path / "ok.npy", np.arange(3, dtype="i4"))
-    for name, start in (("f8.npy", 0), ("2d.npy", 0), ("ok.npy", 8), ("ok.npy", -1)):
+    np.save(tmp_path / "0d.npy", np.int32(5))
+    for name, start in (("f8.npy", 0), ("2d.npy", 0), ("0d.npy", 0), ("ok.npy", 8), ("ok.npy", -1)):
         with pytest.raises(ValueError):
             copy_npy_rows(tmp_path / name, dest, start)
+    with pytest.raises(ValueError, match="holds 3 rows, expected 4"):
+        copy_npy_rows(tmp_path / "ok.npy", dest, 0, rows=4)
+    assert copy_npy_rows(tmp_path / "ok.npy", dest, 0, rows=3) == zlib.crc32(np.arange(3, dtype="i4"))
     raw = (tmp_path / "ok.npy").read_bytes()
     (tmp_path / "short.npy").write_bytes(raw[:-4])  # header says 3 rows, 2 present
     with pytest.raises(IOError, match="short read"):
@@ -662,3 +667,21 @@ def test_driver_readback_failure_stops_every_rank(prepared, monkeypatch):  # noq
         assert "labelling readback check on rank 0 failed" in message
         assert "rank 1 labels rows" in message and "differ on disk from what it wrote" in message
     assert (out / "results.partial" / "4x3-s42-labels.part1.npy").exists()  # kept for a look
+
+
+def test_npy_writer_close_failure_does_not_close_twice(tmp_path, monkeypatch):
+    final = tmp_path / "final.npy"
+    np.save(final, np.zeros(4, "i4"))
+    w = NpyWriter(final)
+    fd, real_close, calls = w.fd, os.close, []
+
+    def failing_close(f):
+        calls.append(f)
+        real_close(f)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(os, "close", failing_close)
+    with pytest.raises(OSError, match="close failed"):
+        w.close(sync=False)
+    w.close()  # the descriptor number may already belong to another file: must not be closed again
+    assert calls == [fd] and w.fd is None
