@@ -4,6 +4,51 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-11-14
+
+This release adds exact `float64` patch-pruning inference to `aweSOM.inference`
+and `SOMModel.predict`, documents and tests the tie-breaking and non-finite BMU
+contract, and fixes `float32` runner-up overflow handling in the screen kernel.
+
+**Training, default `backend="screen"` outputs on all tested plasma and binary
+black hole lattices, pickled lattices, and `format_version` 1 `SOMModel` files
+are bitwise unchanged from `v1.8.0`.**
+
+### Added
+
+- `best_match_nodes_patch`, `lattice_patches`, and `default_patch_side` in
+  `aweSOM.inference` for exact `float64` patch-pruning best-matching-unit
+  search over `side x side` lattice patch bounding balls on `(xdim, ydim)`
+  lattices. `default_patch_side` selects `side=4` up to `8,000` nodes and
+  `side=5` above `8,000` nodes, and `best_match_nodes_patch` returns winners
+  and squared distances bitwise equal to `best_match_nodes`.
+- `backend="patch"` and `lattice_shape=(xdim, ydim)` on `aweSOM.predict` and
+  `aweSOM.inference.predict`, plus `backend="patch"` on `SOMModel.predict`,
+  which forwards `(self.xdim, self.ydim)` automatically. `Lattice.predict` and
+  `Lattice.best_match` continue to take `"screen"`, `"numba"`, and `"legacy"`.
+- Documented and tested the shared tie-breaking and non-finite contract across
+  `best_match_nodes`, `best_match_nodes_screen`, and `best_match_nodes_patch`:
+  exact `float64` ties return the lowest node index, including ties inside the
+  `float32` rounding interval for `screen`, `NaN` candidate distances never
+  win, and rows with no finite node distance return node `0` and squared
+  distance `inf`.
+- Tests in `tests/inference_patch_test.py` and expanded cases in
+  `tests/inference_screen_test.py`, `tests/inference_test.py`, and
+  `tests/model_test.py`.
+
+### Fixed
+
+- `_screen_kernel` in `aweSOM.inference` checks `s2[p] < np.inf` before
+  accepting the `float32` margin, so finite `float64` inputs whose runner-up
+  squared distance overflows `float32` fall back to the exact `float64` scan
+  instead of accepting a `float32` winner prematurely.
+
+### Documentation
+
+- Added `docs/source/backends.rst` and linked it from `docs/source/index.rst`,
+  added `"Inference backends"` to `README.md`, and updated
+  `docs/source/model.rst`, `docs/source/testing.rst`, and `BENCHMARKS.md`.
+
 ## [1.8.0] - 2026-11-14
 
 This release adds target-count cluster merging to `Lattice` and updates
@@ -454,6 +499,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0

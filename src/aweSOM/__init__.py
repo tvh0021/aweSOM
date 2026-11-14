@@ -4,5 +4,5 @@ from .model import SOMModel, Scaler
 
 # import run_som, sce, make_sce_clusters
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 __author__ = "Trung Ha"

@@ -37,6 +37,8 @@ match ``Lattice.predict`` when the input is scaled at the same precision as the 
 on float32 features scaled in float32 differs from the float64 ``Scaler`` on 11,544 of :math:`10^7` binary black hole
 points, or 0.12%.
 ``merge_target_test.py`` checks target-count cluster merging, threshold replay with ``merge_cost_used``, the ``float64`` U-matrix requirement, and frozen model metadata round-trips.
+``inference_patch_test.py`` checks ``best_match_nodes_patch`` and ``aweSOM.predict(..., backend="patch")`` for bitwise agreement with ``best_match_nodes`` across smooth and random lattices, patch sizes, exact ties, and non-finite inputs, while ``model_test.py`` and ``inference_test.py`` also check ``SOMModel.predict(..., backend="patch")`` and the shared tie and non-finite contract.
+``inference_screen_test.py`` checks ``best_match_nodes_screen`` against ``best_match_nodes`` across exact ties, non-finite inputs, single-node lattices, and ``float32`` runner-up overflow fallback.
 
 Performance tests
 -----------------

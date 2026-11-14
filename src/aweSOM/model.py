@@ -501,7 +501,7 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
-            backend (str, optional): ``"screen"`` or ``"numba"``; see
+            backend (str, optional): ``"screen"``, ``"patch"``, or ``"numba"``; see
                 :func:`aweSOM.inference.predict`. Defaults to ``"screen"``.
 
         Returns:
@@ -528,6 +528,7 @@ class SOMModel:
                 chunk=chunk,
                 return_distance=return_distance,
                 backend=backend,
+                lattice_shape=(self.xdim, self.ydim),
             )
             if return_distance:
                 labels[start:stop], dist[start:stop] = out
