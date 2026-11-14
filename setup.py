@@ -1,4 +1,12 @@
+import os
+import re
 from setuptools import setup, find_packages
+
+with open(
+    os.path.join(os.path.dirname(__file__), "src", "aweSOM", "__init__.py"),
+    encoding="utf-8",
+) as f:
+    version = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', f.read(), re.M).group(1)
 
 # Read the requirements from the requirements.txt file
 with open("requirements.txt") as f:
@@ -6,7 +14,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="aweSOM",
-    version="1.7.0",
+    version=version,
     author="Trung Ha",
     author_email="thccrg@rit.edu",
     description="Accelerated Self-Organizing Maps and Statistically Combined Ensemble method for plasma intermittency detection",

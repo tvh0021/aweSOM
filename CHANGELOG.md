@@ -4,7 +4,52 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.0] - 2026-11-13
+## [1.8.0] - 2026-11-14
+
+This release adds target-count cluster merging to `Lattice` and updates
+`SOMModel` metadata and test skipping without JAX.
+
+**Training, `predict`, and threshold-mode cluster maps and labels are bitwise
+unchanged from `v1.7.0`; pickled lattices and `format_version` 1 models from
+earlier releases load and predict as before.**
+
+### Added
+
+- `target_clusters` and `merge_cost_floor`, with a `0.05` default applied in
+  target mode only, on `Lattice.assign_cluster_to_lattice`, plus
+  `target_clusters` on `Lattice.merge_similar_centroids`. Target mode steps
+  along the greedy merge path with `np.nextafter` until at most
+  `target_clusters` clusters remain, then stores `merge_cost_used`,
+  `n_clusters`, and `target_clusters` on the `Lattice`.
+- `SOMModel.from_lattice` records `merge_cost_used`, `target_clusters`, and
+  `n_clusters` in model metadata when present on the `Lattice`.
+- Tests in `tests/merge_target_test.py`.
+
+### Changed
+
+- `SOMModel.from_lattice` now records `merge_cost_used` and `n_clusters` in
+  threshold mode too, because `Lattice.merge_similar_centroids` sets
+  `merge_cost_used` in both modes and `Lattice.assign_cluster_to_lattice` sets
+  `n_clusters` in both modes.
+- Target mode in `Lattice.merge_similar_centroids` raises `ValueError` unless
+  `umat` has dtype `float64`.
+- `setup.py` and `docs/source/conf.py` read `__version__` from
+  `src/aweSOM/__init__.py`.
+
+### Fixed
+
+- `test_jax_gpu_available` and `test_jax_cpu_available` in
+  `tests/sce_test.py` call `pytest.importorskip("jax")`, so environments
+  without JAX skip them instead of failing.
+- Corrected the `1.7.0` and `1.2.0` headings in `CHANGELOG.md` to `2026-11-14`
+  and `2026-11-05` to match the local dates of their GitHub releases.
+
+### Documentation
+
+- Added `"Choosing a target cluster count"` to `docs/source/faqs.rst` and
+  `README.md`, and updated `docs/source/testing.rst`.
+
+## [1.7.0] - 2026-11-14
 
 This release adds `aweSOM.model`, an opt-in frozen model artifact for
 pickle-free inference.
@@ -220,7 +265,7 @@ aweSOM package itself is unchanged apart from its version number.
 - The test workflow installs `examples/plasma-turbulence/requirements.txt`,
   so CI runs `tests/combine_clumps_test.py`.
 
-## [1.2.0] - 2026-11-04
+## [1.2.0] - 2026-11-05
 
 This release rewrites the SCE ensemble loop in `sce.loop_over_all_clusters`
 to work on contingency tables and adds an opt-in path that does not write the
@@ -409,6 +454,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0

@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.7.0
+Version: 1.8.0
 
 ## 1. Installation
 
@@ -62,7 +62,7 @@ Or run a specific test function within a module:
 python -m pytest tests/[module]_test.py::test_[function]
 ```
 
-Two tests in `sce_test.py` import JAX. Without JAX, `test_jax_gpu_available` and `test_jax_cpu_available` fail with `ModuleNotFoundError`, and the other four tests pass. With JAX installed and no GPU, all six tests pass, and `test_jax_gpu_available` issues a warning. SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
+Two tests in `sce_test.py` import JAX with `pytest.importorskip("jax")`. Without JAX, pytest skips `test_jax_gpu_available` and `test_jax_cpu_available` and runs the other four tests. With JAX installed and no GPU, all six tests pass, and `test_jax_gpu_available` issues a warning. SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 
 ## 3. Basic Usage - SOM
 
@@ -280,6 +280,10 @@ float32, scale new data with them, and build the model with
 `Scaler.identity(n_features)`. The saved file then holds no scaling, so scale every
 input this way before `predict`, never with the new data's own mean and
 standard deviation.
+
+### Choosing a target cluster count
+
+Call `map.assign_cluster_to_lattice(target_clusters=4)` to merge centroids along the greedy U-matrix path until at most four clusters remain. The `target_clusters` setting is an upper bound, because equal merge costs or the default `0.05` `merge_cost_floor` can yield fewer clusters. Target mode requires a `float64` U-matrix and records `map.merge_cost_used` and `map.n_clusters`, so later runs can replay that threshold. Treat the chosen count as a convenience setting for inspection rather than a physical result.
 
 ## 4. Basic Usage - SCE
 
