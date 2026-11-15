@@ -47,6 +47,17 @@ This will identify/merge cluster centroids, then assign each node to the nearest
 A more subtle way to control the number of clusters is to modify the SOM hyperparameters, such as the aspect ratio of the lattice, the learning rate, and the number of epochs. These parameters are less trivial
 in how they modify the number of clusters, so it is recommended to start with the three main ways mentioned above.
 
+Choosing a target cluster count
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Since v1.8.0, you can ask ``map.assign_cluster_to_lattice(target_clusters=k, merge_cost_floor=0.05)`` or ``Lattice.merge_similar_centroids(..., target_clusters=k)`` to merge centroids along the greedy U-matrix merge path until at most ``k`` clusters remain.
+The ``target_clusters`` parameter is an upper bound on the returned cluster count, not an exact count.
+Equal merge costs, called ties, merge together at the same threshold, and the default ``0.05`` ``merge_cost_floor`` sets a minimum threshold, so either can leave fewer clusters than ``target_clusters``.
+Threshold mode ignores ``merge_cost_floor``; the floor applies only when ``target_clusters`` is set.
+
+Target mode requires a ``float64`` U-matrix and raises ``ValueError`` for any other dtype, because a ``float32`` U-matrix would step past the smallest replayable ``float64`` threshold.
+After merging, ``assign_cluster_to_lattice`` stores ``map.merge_cost_used``, ``map.target_clusters``, and ``map.n_clusters`` on ``map``, so later runs can replay ``merge_cost=map.merge_cost_used`` instead of lowering thresholds.
+Treat the returned cluster count as a convenience setting for downstream inspection rather than a physical result on its own, because greedy U-matrix merging can still split a single physical structure such as a current sheet on finer lattices.
+
 Is training reproducible?
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 Since v1.5.0, ``train_lattice`` draws the initial lattice and the sample order from ``map.seed`` (42 by default; set it before training), so the same seed and data give the same lattice.

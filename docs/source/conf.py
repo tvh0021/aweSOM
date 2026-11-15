@@ -4,6 +4,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 import os
+import re
 import sys
 import sphinx_rtd_theme
 
@@ -13,7 +14,11 @@ import sphinx_rtd_theme
 project = "aweSOM"
 copyright = "2024, Trung Ha"
 author = "Trung Ha"
-release = "1.7.0"
+with open(
+    os.path.join(os.path.dirname(__file__), "..", "..", "src", "aweSOM", "__init__.py"),
+    encoding="utf-8",
+) as _f:
+    release = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', _f.read(), re.M).group(1)
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

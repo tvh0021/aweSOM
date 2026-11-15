@@ -6,7 +6,7 @@ pickle was written: ``projection_1d`` (BMU of every training point, from the bas
 pipeline (``best_match`` -> ``coordinate`` -> ``assign_cluster_to_data``) is also re-run
 live on the first ``--baseline-n`` points for timing and to confirm it reproduces the pickle.
 
-Per backend (numba, screen [default], kdtree, jax-cpu) the script reports node-index and
+Per backend (numba, screen [default], jax-cpu) the script reports node-index and
 label equality over all points, max |distance - reference| (reference = NumPy float64
 distance to the baseline's node), and throughput: min of ``--reps`` runs on all points with
 all threads, plus a single-thread rate on ``--onethread-n`` points, which gives the projected
@@ -70,7 +70,7 @@ def main():
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--baseline-n", type=int, default=2_097_152)
     ap.add_argument("--onethread-n", type=int, default=200_000)
-    ap.add_argument("--backends", default="numba,screen,kdtree,jax")
+    ap.add_argument("--backends", default="numba,screen,jax")
     args = ap.parse_args()
 
     bsom = rc.load_baseline("src/aweSOM/som.py", "aweSOM_baseline_som")
@@ -138,7 +138,7 @@ def main():
         # --- new predict, every backend, all points
         res["backends"] = {}
         node_fns = dict(numba=inf.best_match_nodes, screen=inf.best_match_nodes_screen,
-                        kdtree=inf.best_match_nodes_kdtree, jax=inf.best_match_nodes_jax)
+                        jax=inf.best_match_nodes_jax)
         for be in backends:
             kw = {} if be == "jax" else {}
             with rc.quiet_fd():
@@ -199,7 +199,6 @@ def main():
                 ("baseline", lambda: baseline_pipeline(x1)),
                 ("numba", lambda: inf.predict(lattice, node_cluster, x1, backend="numba")),
                 ("screen", lambda: inf.predict(lattice, node_cluster, x1, backend="screen")),
-                ("kdtree", lambda: node_cluster[inf.best_match_nodes_kdtree(lattice, x1, workers=1)[0]]),
             ]:
                 tmin, ts, load, _ = rc.timed(fn, args.reps)
                 rate = n1 / tmin

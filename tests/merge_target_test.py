@@ -94,3 +94,73 @@ def test_grid_stream_uses_saved_target_map(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', [str(script), '--grid', str(grid), '--model', str(path), '--output', str(output)])
     module.main()
     assert np.array_equal(np.load(output), model.predict(lat.lattice, backend='patch'))
+
+
+def test_threshold_mode_records_merge_cost_used_and_n_clusters(tmp_path):
+    lat = synthetic()
+    with contextlib.redirect_stdout(io.StringIO()):
+        assigned = lat.assign_cluster_to_lattice(merge_cost=0.15, target_clusters=None).copy()
+    assert lat.merge_cost_used == 0.15
+    assert lat.target_clusters is None
+    assert lat.n_clusters == len(np.unique(assigned))
+    model = SOMModel.from_lattice(lat, scaled_training_data=lat.lattice)
+    h5_path = tmp_path / 'threshold.h5'
+    txt_path = tmp_path / 'threshold.txt'
+    model.save(h5_path)
+    model.save_text(txt_path)
+    for m in (model, SOMModel.load(h5_path), SOMModel.load(txt_path)):
+        assert np.array_equal(m.node_cluster, assigned.ravel(order='F'))
+        assert float(m.metadata['merge_cost_used']) == 0.15
+        assert int(m.metadata['n_clusters']) == lat.n_clusters
+        assert 'target_clusters' not in m.metadata
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        target_assigned = lat.assign_cluster_to_lattice(target_clusters=3).copy()
+    tmodel = SOMModel.from_lattice(lat, scaled_training_data=lat.lattice)
+    target_txt = tmp_path / 'target.txt'
+    tmodel.save_text(target_txt)
+    loaded_txt = SOMModel.load(target_txt)
+    assert np.array_equal(loaded_txt.node_cluster, target_assigned.ravel(order='F'))
+    assert float(loaded_txt.metadata['merge_cost_used']) == lat.merge_cost_used
+    assert int(loaded_txt.metadata['target_clusters']) == 3
+    assert int(loaded_txt.metadata['n_clusters']) == lat.n_clusters <= 3
+    assert np.array_equal(
+        loaded_txt.predict(lat.lattice, backend='screen'),
+        tmodel.predict(lat.lattice, backend='screen'),
+    )
+
+
+def test_flat_umatrix_target_mode():
+    for umat in (np.ones((6, 5), dtype=np.float64), np.zeros((6, 5), dtype=np.float64)):
+        lat = Lattice(6, 5)
+        lat.umat = umat
+        with contextlib.redirect_stdout(io.StringIO()):
+            assigned = lat.assign_cluster_to_lattice(target_clusters=2)
+        assert not np.any(np.isnan(assigned))
+        assert 1 <= lat.n_clusters == len(np.unique(assigned)) <= 2
+        assert np.isfinite(lat.merge_cost_used) and lat.merge_cost_used >= 0.05
+
+
+def test_plot_heat_keeps_merge_cost_used():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    lat = synthetic()
+    lat.data_array = lat.lattice
+    lat.labels = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            lat.plot_heat(lat.umat, merge=True, merge_cost=0.001)
+        assert not hasattr(lat, "merge_cost_used")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            lat.assign_cluster_to_lattice(target_clusters=3)
+            cost = lat.merge_cost_used
+            assert cost != 0.001
+            lat.plot_heat(lat.umat, merge=True, merge_cost=0.001)
+        assert lat.merge_cost_used == cost
+        model = SOMModel.from_lattice(lat, scaled_training_data=lat.lattice)
+        assert float(model.metadata["merge_cost_used"]) == cost
+    finally:
+        plt.close("all")

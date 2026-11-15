@@ -24,8 +24,8 @@ Or run a specific test function within a module:
 
     python -m pytest tests/[module]_test.py::test_[function]
 
-Two tests in ``sce_test.py`` import JAX.
-Without JAX, ``test_jax_gpu_available`` and ``test_jax_cpu_available`` fail with ``ModuleNotFoundError``, and the other four tests pass.
+Two tests in ``sce_test.py`` import JAX with ``pytest.importorskip("jax")``.
+Without JAX, pytest skips ``test_jax_gpu_available`` and ``test_jax_cpu_available`` and runs the other four tests.
 With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`` issues a warning.
 SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 The ensemble loop itself works on integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it
@@ -36,6 +36,9 @@ against the original mask-by-mask loop (bitwise on NumPy, to float32 precision o
 match ``Lattice.predict`` when the input is scaled at the same precision as the training data, whereas a lattice trained
 on float32 features scaled in float32 differs from the float64 ``Scaler`` on 11,544 of :math:`10^7` binary black hole
 points, or 0.12%.
+``merge_target_test.py`` checks target-count cluster merging, threshold replay with ``merge_cost_used``, the ``float64`` U-matrix requirement, and frozen model metadata round-trips.
+``inference_patch_test.py`` checks ``best_match_nodes_patch`` and ``aweSOM.predict(..., backend="patch")`` for bitwise agreement with ``best_match_nodes`` across smooth and random lattices, patch sizes, exact ties, and non-finite inputs, while ``model_test.py`` and ``inference_test.py`` also check ``SOMModel.predict(..., backend="patch")`` and the shared tie and non-finite contract.
+``inference_screen_test.py`` checks ``best_match_nodes_screen`` against ``best_match_nodes`` across exact ties, non-finite inputs, single-node lattices, and ``float32`` runner-up overflow fallback.
 
 Performance tests
 -----------------
@@ -132,27 +135,22 @@ cluster labels, BMU distances, trained lattices, U-matrices, SCE output files an
      - Baseline
      - ``numba``
      - ``screen`` (default)
-     - ``kdtree``
    * - plasma, 64 x 37 lattice, :math:`2.1\times10^6` points
      - 1.5e5
      - 1.0e6
      - 2.1e6
-     - 1.9e6
    * - BBH 29 x 20, :math:`10^5` points
      - 3.7e5
      - 3.1e6
      - 5.2e6
-     - 1.5e6
    * - BBH 51 x 36, :math:`10^6` points
      - 9.0e4
      - 1.1e6
      - 2.4e6
-     - 1.7e6
    * - BBH 91 x 64, :math:`10^7` points
      - 2.9e4
      - 3.7e5
      - 6.9e5
-     - 1.2e6
 
 .. list-table:: Training and post-processing
    :header-rows: 1
@@ -178,7 +176,7 @@ cluster labels, BMU distances, trained lattices, U-matrices, SCE output files an
      - 0.06 to 0.13 s
      - 71x to 296x
 
-The ``kdtree`` backend wins on the largest lattice (5824 nodes); ``screen`` wins on the others. Labels from
+``screen`` is faster than ``numba`` in every case. Labels from
 ``SOMModel`` agree with the baseline only when the input is scaled at the same precision as the training data: the
 BBH lattices were trained on float32 features scaled in float32, and ``Scaler`` works in float64, so on
 :math:`10^7` points 11,544 labels (0.12%) differ.

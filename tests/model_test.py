@@ -84,6 +84,8 @@ def test_model_predict_applies_scaler():
     labels_c, dist_c = model.predict(raw, chunk=13, return_distance=True)
     assert np.array_equal(labels_c, labels) and np.array_equal(dist_c, dist)
     assert np.array_equal(model.predict(raw[0]), labels[:1])
+    labels_n, dist_n = model.predict(raw, return_distance=True, backend="numba")
+    assert np.array_equal(labels_n, labels) and np.array_equal(dist_n, dist)
 
 
 def _assert_models_equal(a: SOMModel, b: SOMModel):
@@ -171,27 +173,6 @@ def test_committed_fixture_formats_agree():
     )
 
 
-def test_predict_patch_rectangular_lattice_roundtrip(tmp_path):
-    """Frozen patch inference uses the saved rectangular topology in every chunk."""
-    rng = np.random.default_rng(7)
-    model = SOMModel(
-        5, 3, rng.normal(size=(15, 4)), np.arange(15) % 4,
-        ["a", "b", "c", "d"],
-        Scaler("median-iqr", np.arange(4), np.arange(4) + 1),
-        np.ones(15), 10.,
-    )
-    path = tmp_path / "model.h5"
-    model.save(path)
-    loaded = SOMModel.load(path)
-    data = rng.normal(size=(53, 4))
-    expected, distance = model.predict(data, chunk=11, return_distance=True, backend="screen")
-    actual, patch_distance = loaded.predict(data, chunk=7, return_distance=True, backend="patch")
-    np.testing.assert_array_equal(actual, expected)
-    np.testing.assert_allclose(patch_distance, distance, rtol=1e-14, atol=1e-14)
-    np.testing.assert_array_equal(loaded.predict(data[0], backend="patch"), expected[:1])
-    assert loaded.predict(data[:0], backend="patch").shape == (0,)
-
-
 def test_median_iqr_scaler_and_fast_quantiles(tmp_path):
     rng = np.random.default_rng(6)
     data = rng.normal(loc=[-5.0, 12.0, 100.0], scale=[0.5, 2.0, 15.0], size=(300, 3))
@@ -269,3 +250,41 @@ def test_float32_scaled_training_changes_few_labels():
 
     model_id = SOMModel.from_lattice(som, scaled32, scaler=Scaler.identity(5), merge_cost=0.2)
     assert np.array_equal(model_id.predict(scaled32), ref_labels)
+
+
+def test_predict_patch_rectangular_lattice_roundtrip(tmp_path):
+    """Frozen patch inference uses the saved rectangular topology in every chunk."""
+    rng = np.random.default_rng(7)
+    model = SOMModel(
+        5, 3, rng.normal(size=(15, 4)), np.arange(15) % 4,
+        ["a", "b", "c", "d"],
+        Scaler("median-iqr", np.arange(4), np.arange(4) + 1),
+        np.ones(15), 10.,
+    )
+    path = tmp_path / "model.h5"
+    model.save(path)
+    loaded = SOMModel.load(path)
+    data = rng.normal(size=(53, 4))
+    expected, distance = model.predict(data, chunk=11, return_distance=True, backend="screen")
+    actual, patch_distance = loaded.predict(data, chunk=7, return_distance=True, backend="patch")
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_allclose(patch_distance, distance, rtol=1e-14, atol=1e-14)
+    np.testing.assert_array_equal(patch_distance.view(np.uint64), distance.view(np.uint64))
+    np.testing.assert_array_equal(loaded.predict(data[0], backend="patch"), expected[:1])
+    assert loaded.predict(data[:0], backend="patch").shape == (0,)
+
+
+@pytest.mark.parametrize("name", ["iris_like_model.txt", "iris_like_model.h5"])
+def test_committed_fixture_patch_backend(name):
+    model = SOMModel.load(FIXTURES / name)
+    points = np.load(FIXTURES / "iris_like_points.npy")
+    expected_labels = np.load(FIXTURES / "iris_like_expected_labels.npy")
+    expected_dist = np.load(FIXTURES / "iris_like_expected_dist.npy")
+    labels, dist = model.predict(points, return_distance=True, backend="patch")
+    numba_labels, numba_dist = model.predict(points, return_distance=True, backend="numba")
+    assert labels.dtype == np.int32 and dist.dtype == np.float64
+    assert np.array_equal(labels, expected_labels)
+    assert np.array_equal(dist, expected_dist)
+    assert np.array_equal(dist.view(np.uint64), expected_dist.view(np.uint64))
+    assert np.array_equal(labels, numba_labels)
+    assert np.array_equal(dist.view(np.uint64), numba_dist.view(np.uint64))

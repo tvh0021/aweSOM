@@ -30,8 +30,7 @@ Relation to :func:`aweSOM.batch.train_batch`: same initial lattice for the same
 ``train_batch`` finds BMUs with the float32 matmul expansion, which flips the
 BMU of about 1e-5 of the samples against exact arithmetic; with
 ``train_batch(..., dtype=np.float64)`` the two agree to float64 rounding (see
-``tests/stream_test.py``). :func:`aweSOM.batch.train_batch_kdtree` with
-``bmu="numba"`` uses the same exact BMUs.
+``tests/stream_test.py``).
 
 Per-epoch subsampling (``sample_fraction < 1``): each epoch uses a fresh,
 stratified random subset of the rows. The row range is split into blocks of

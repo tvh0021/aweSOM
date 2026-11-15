@@ -62,17 +62,6 @@ def test_matches_numpy_reference(data):
     assert info["qe"][-1] == pytest.approx(quantization_error(w, data), rel=1e-12)
 
 
-def test_matches_train_batch_kdtree_numba(data):
-    pytest.importorskip("jax")
-    from aweSOM.batch import train_batch_kdtree
-
-    w_ref, i_ref = train_batch_kdtree(data, 9, 6, epochs=8, bmu="numba")
-    w, info = train_batch_stream(data, 9, 6, epochs=8, chunk=777)
-    np.testing.assert_allclose(w, w_ref, rtol=1e-12, atol=1e-12)
-    np.testing.assert_array_equal(info["hits"], i_ref["hits"])
-    np.testing.assert_allclose(info["qe"], i_ref["qe"], rtol=1e-12)
-
-
 def test_matches_jax_train_batch_float64(data):
     pytest.importorskip("jax")
     from aweSOM.batch import train_batch

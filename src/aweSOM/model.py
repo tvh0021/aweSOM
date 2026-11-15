@@ -3,10 +3,20 @@
 A :class:`SOMModel` holds everything needed to classify new data with a
 trained lattice: the scaler fitted on the training sample, the node weights,
 the node-to-cluster map, distance thresholds for flagging unfamiliar points,
-and provenance metadata. It is written either to HDF5 (``save``) or to a
-self-describing plain-text file (``save_text``) that the header-only C++
-classifier in ``cpp/awesom_classify.hpp`` reads. ``load`` refuses a file with a
-newer ``format_version``.
+and provenance metadata. Calling ``save`` writes an HDF5 file, and calling
+``save_text`` writes a self-describing plain-text file meant for readers in
+other languages. Files with ``format_version`` 1 load in every later 1.x
+release, and ``load`` refuses a file with a newer ``format_version``.
+
+HDF5 layout (written by ``save``):
+    Root attributes ``format_version`` (int, ``1``), ``xdim`` (int), ``ydim``
+    (int), ``reject_distance`` (float), ``scaler_kind`` (str), and
+    ``bulk_range`` (float). Root datasets ``weights`` (float64
+    ``[xdim * ydim, F]``), ``node_cluster`` (int32 ``[xdim * ydim]``),
+    ``node_dist_q99`` (float64 ``[xdim * ydim]``), and ``feature_names``
+    (UTF-8 strings ``[F]``). Group ``scaler`` holds float64 ``[F]`` datasets
+    ``offset`` and ``scale``. Group ``metadata`` stores provenance key-value
+    pairs as string attributes.
 
 Text format (one model per file)::
 
@@ -147,15 +157,17 @@ class Scaler:
         so a lattice trained on float32 features scaled that way sees slightly
         different inputs (on the BBH features, F = 5: up to 1.5e-3 absolute in
         the scaled space and 59 of 10^6 labels changed on the 10^6-point run,
-        up to 4.4e-2 and 11,544 of 10^7 labels (0.12%) on the 10^7-point run;
-        see ``planning/benchmarks/real_inference.py``). To reproduce such a
-        lattice's labels exactly, scale the input in float32 the same way
-        before ``predict``, or retrain on float64-scaled data. For "minmax",
-        ``offset = min`` and ``scale = max - min``.
+        up to 4.4e-2 and 11,544 of 10^7 labels (0.12%) on the 10^7-point run,
+        measured on the BBH lattices of the aweSOM paper's validation). To
+        reproduce such a lattice's labels exactly, scale the input in float32
+        the same way before ``predict``, or retrain on float64-scaled data. For
+        "minmax", ``offset = min`` and ``scale = max - min``. For "median-iqr",
+        ``offset = median`` and ``scale = q75 - q25``.
 
         Args:
             data (np.ndarray): [N, F] training sample.
-            kind (str, optional): "none", "manual" or "minmax". Defaults to "manual".
+            kind (str, optional): "none", "manual", "minmax", or "median-iqr".
+                Defaults to "manual".
             bulk_range (float, optional): Range that holds ~95% of the scaled
                 data ("manual" only). Defaults to 1.0.
 
@@ -338,9 +350,7 @@ class SOMModel:
     """A trained SOM frozen for inference.
 
     Normalization is part of the model. Fit it once on the lattice training
-    sample, then apply it unchanged across snapshots and runs. GRMHD v2 uses
-    median/IQR scaling; see docs/source/grmhd-comparison.md for floor, clipping,
-    and resolution limits.
+    sample, then apply it unchanged across snapshots and runs.
 
     Attributes:
         xdim (int): x dimension of the lattice.
@@ -504,7 +514,7 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
-            backend (str, optional): ``"screen"``, ``"patch"``, ``"numba"``, ``"kdtree"`` or
+            backend (str, optional): ``"screen"``, ``"patch"``, ``"numba"``, or
                 ``"jax"``; see :func:`aweSOM.inference.predict`. The JAX path picks
                 its own device tile size inside each chunk. Defaults to ``"screen"``.
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 R = Path(sys.argv[1] if len(sys.argv) > 1 else "/Volumes/ExternalNVMe/awesom-results/2026-10-28/validate")
 CASES = ["plasma", "bbh-29x20", "bbh-51x36", "bbh-91x64"]
-BACKENDS = ["numba", "screen", "kdtree", "jax"]
+BACKENDS = ["numba", "screen", "jax"]
 
 
 def ld(name):
@@ -53,7 +53,7 @@ def inference():
         print("| " + " | ".join(row) + " |")
 
     print("\n### A. One thread, and 1e10 points on 48 cores (a projection from the per-core rate, not a measurement)\n")
-    one = ["baseline", "numba", "screen", "kdtree"]
+    one = ["baseline", "numba", "screen"]
     print("| Case | " + " | ".join(f"{k}: pts/s/core [load] -> 1e10 on 48 cores" for k in one) + " |")
     print("|---" * (1 + len(one)) + "|")
     for c, d in rows:

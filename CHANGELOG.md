@@ -34,7 +34,97 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
   rank count.
 
-## [1.7.0] - 2026-11-13
+## [1.9.0] - 2026-11-14
+
+This release adds exact `float64` patch-pruning inference to `aweSOM.inference`
+and `SOMModel.predict`, documents and tests the tie-breaking and non-finite BMU
+contract, and fixes `float32` runner-up overflow handling in the screen kernel.
+
+**Training, default `backend="screen"` outputs on all tested plasma and binary
+black hole lattices, pickled lattices, and `format_version` 1 `SOMModel` files
+are bitwise unchanged from `v1.8.0`.**
+
+### Added
+
+- `best_match_nodes_patch`, `lattice_patches`, and `default_patch_side` in
+  `aweSOM.inference` for exact `float64` patch-pruning best-matching-unit
+  search over `side x side` lattice patch bounding balls on `(xdim, ydim)`
+  lattices. `default_patch_side` selects `side=4` up to `8,000` nodes and
+  `side=5` above `8,000` nodes, and `best_match_nodes_patch` returns winners
+  and squared distances bitwise equal to `best_match_nodes`.
+- `backend="patch"` and `lattice_shape=(xdim, ydim)` on `aweSOM.predict` and
+  `aweSOM.inference.predict`, plus `backend="patch"` on `SOMModel.predict`,
+  which forwards `(self.xdim, self.ydim)` automatically. `Lattice.predict` and
+  `Lattice.best_match` continue to take `"screen"`, `"numba"`, and `"legacy"`.
+- Documented and tested the shared tie-breaking and non-finite contract across
+  `best_match_nodes`, `best_match_nodes_screen`, and `best_match_nodes_patch`:
+  exact `float64` ties return the lowest node index, including ties inside the
+  `float32` rounding interval for `screen`, `NaN` candidate distances never
+  win, and rows with no finite node distance return node `0` and squared
+  distance `inf`.
+- Tests in `tests/inference_patch_test.py` and expanded cases in
+  `tests/inference_screen_test.py`, `tests/inference_test.py`, and
+  `tests/model_test.py`.
+
+### Fixed
+
+- `_screen_kernel` in `aweSOM.inference` checks `s2[p] < np.inf` before
+  accepting the `float32` margin, so finite `float64` inputs whose runner-up
+  squared distance overflows `float32` fall back to the exact `float64` scan
+  instead of accepting a `float32` winner prematurely.
+
+### Documentation
+
+- Added `docs/source/backends.rst` and linked it from `docs/source/index.rst`,
+  added `"Inference backends"` to `README.md`, and updated
+  `docs/source/model.rst`, `docs/source/testing.rst`, and `BENCHMARKS.md`.
+
+## [1.8.0] - 2026-11-14
+
+This release adds target-count cluster merging to `Lattice` and updates
+`SOMModel` metadata and test skipping without JAX.
+
+**Training, `predict`, and threshold-mode cluster maps and labels are bitwise
+unchanged from `v1.7.0`; pickled lattices and `format_version` 1 models from
+earlier releases load and predict as before.**
+
+### Added
+
+- `target_clusters` and `merge_cost_floor`, with a `0.05` default applied in
+  target mode only, on `Lattice.assign_cluster_to_lattice`, plus
+  `target_clusters` on `Lattice.merge_similar_centroids`. Target mode steps
+  along the greedy merge path with `np.nextafter` until at most
+  `target_clusters` clusters remain, then stores `merge_cost_used`,
+  `n_clusters`, and `target_clusters` on the `Lattice`.
+- `SOMModel.from_lattice` records `merge_cost_used`, `target_clusters`, and
+  `n_clusters` in model metadata when present on the `Lattice`.
+- Tests in `tests/merge_target_test.py`.
+
+### Changed
+
+- `SOMModel.from_lattice` now records `merge_cost_used` and `n_clusters` in
+  threshold mode too, because `Lattice.merge_similar_centroids` sets
+  `merge_cost_used` in both modes and `Lattice.assign_cluster_to_lattice` sets
+  `n_clusters` in both modes.
+- Target mode in `Lattice.merge_similar_centroids` raises `ValueError` unless
+  `umat` has dtype `float64`.
+- `setup.py` and `docs/source/conf.py` read `__version__` from
+  `src/aweSOM/__init__.py`.
+
+### Fixed
+
+- `test_jax_gpu_available` and `test_jax_cpu_available` in
+  `tests/sce_test.py` call `pytest.importorskip("jax")`, so environments
+  without JAX skip them instead of failing.
+- Corrected the `1.7.0` and `1.2.0` headings in `CHANGELOG.md` to `2026-11-14`
+  and `2026-11-05` to match the local dates of their GitHub releases.
+
+### Documentation
+
+- Added `"Choosing a target cluster count"` to `docs/source/faqs.rst` and
+  `README.md`, and updated `docs/source/testing.rst`.
+
+## [1.7.0] - 2026-11-14
 
 This release adds `aweSOM.model`, an opt-in frozen model artifact for
 pickle-free inference.
@@ -250,7 +340,7 @@ aweSOM package itself is unchanged apart from its version number.
 - The test workflow installs `examples/plasma-turbulence/requirements.txt`,
   so CI runs `tests/combine_clumps_test.py`.
 
-## [1.2.0] - 2026-11-04
+## [1.2.0] - 2026-11-05
 
 This release rewrites the SCE ensemble loop in `sce.loop_over_all_clusters`
 to work on contingency tables and adds an opt-in path that does not write the
@@ -439,6 +529,8 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0
+[1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/tvh0021/aweSOM/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/tvh0021/aweSOM/compare/v1.4.0...v1.5.0
