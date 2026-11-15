@@ -12,40 +12,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from fake_comm import FakeComm
+
 DRIVER = ROOT/'examples/grmhd-bbh/production_pool.py'
 COMMON = ['--anchor','1','--held-out','3','--rows-per-snapshot','60','--rows-per-epoch','60',
           '--epochs','3','--chunk','13','--min-free-gb','0','--target-clusters','1',
           '--threads-per-seed','1']
-
-
-class FakeComm:
-    """The mpi4py calls of the driver and train_batch_stream, over processes sharing a
-    barrier and a manager dict. Collective k of rank r posts its payload under (k, r)."""
-
-    def __init__(self, rank, size, barrier, slots):
-        self.rank, self.size, self.barrier, self.slots, self.k = rank, size, barrier, slots, 0
-
-    def Get_rank(self): return self.rank
-    def Get_size(self): return self.size
-    def Barrier(self): self.barrier.wait(120)
-
-    def _exchange(self, obj):
-        key = self.k; self.k += 1
-        self.slots[(key, self.rank)] = obj
-        self.barrier.wait(120)
-        every = [self.slots[(key, r)] for r in range(self.size)]
-        self.barrier.wait(120)
-        del self.slots[(key, self.rank)]
-        return every
-
-    def Allgather(self, send, recv): recv[...] = np.stack(self._exchange(np.array(send)))
-    def Bcast(self, buf, root=0): buf[...] = self._exchange(np.array(buf) if self.rank == root else None)[root]
-    def bcast(self, obj, root=0): return self._exchange(obj if self.rank == root else None)[root]
-    def allgather(self, obj): return self._exchange(obj)
-
-    def gather(self, obj, root=0):
-        every = self._exchange(obj)
-        return every if self.rank == root else None
 
 
 class StopFit(Exception):

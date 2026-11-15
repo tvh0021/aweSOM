@@ -1,8 +1,7 @@
 """Exact, chunked best-matching-unit (BMU) inference for a trained SOM.
 
 The functions here are the reference classifier that the frozen model
-artifact (:class:`aweSOM.model.SOMModel`) and the C++ header
-``cpp/awesom_classify.hpp`` both reproduce.
+artifact (:class:`aweSOM.model.SOMModel`) reproduces.
 
 Exactness contract:
     For every point, the squared distance to node ``i`` is accumulated in a
@@ -20,24 +19,23 @@ Exactness contract:
 Measured throughput (``benchmark()``, N = 2,000,000, F = 6, 2368 nodes,
 float64, Apple M1 Max with 10 threads, numba 0.68): ``best_match_nodes``
 1.61e6 points/s, ``Lattice.best_match`` 1.00e5 points/s, identical labels.
-See ``cpp/README.md`` for the C++ figure.
 
 :func:`best_match_nodes_jax` is the same search on a JAX device (CPU, CUDA,
 ROCm or Apple Metal), imported lazily so ``aweSOM`` does not need JAX. With
 float64 available it follows the contract above and its labels and distances
 equal :func:`best_match_nodes` bitwise; without float64 (Apple Metal) it runs
-the same direct-difference arithmetic in float32. Measured with
-``planning/benchmarks/bench_inference_jax.py`` (N = 2,000,000, F = 4, 2368
-nodes, default tile of 14,169 rows, Apple M1 Max): numba 2.2e6 points/s; JAX
-0.12 CPU float64 5.1e5 points/s (bitwise-equal labels and distances); JAX
-0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s (0 label disagreements). On
-a CPU-only machine the numba path is the faster one.
+the same direct-difference arithmetic in float32. Measured at N = 2,000,000,
+F = 4, 2368 nodes and the default tile of 14,169 rows on an Apple M1 Max:
+numba 2.2e6 points/s; JAX 0.12 CPU float64 5.1e5 points/s (bitwise-equal
+labels and distances); JAX 0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s
+(0 label disagreements). On a CPU-only machine the numba path is the faster
+one.
 
 :func:`best_match_nodes_screen` (the ``predict`` default) scans every node
 in float32, certifies the float32 winner with a rounding-error bound and
 falls back to the float64 scan for every point it cannot certify, so its
 labels and distances equal :func:`best_match_nodes` bitwise. Points per
-second on an Apple M1 Max, 2368 nodes, ``planning/opt/inference-cpu``:
+second on an Apple M1 Max, 2368 nodes:
 
 =====================  ======  ======
 data                   numba   screen
@@ -49,7 +47,7 @@ random, F = 10         9.6e5   2.5e6
 :func:`best_match_nodes_patch` prunes the scan with bounding balls of
 lattice patches (side x side neighbouring nodes) and is also bitwise equal to
 :func:`best_match_nodes`. It needs the lattice shape. On synthetic 5-feature
-data (``planning/benchmarks/bench_stream.py``, M1 Max shared with other jobs)
+data (M1 Max shared with other jobs)
 it was 2.2-2.9x faster than the screen at 91 x 64 nodes (2.2 vs 4.8
 core-microseconds per row when labelling with a trained lattice) and 4.5x
 (trained) to 13x (contracted early-training lattice, where the screen falls
@@ -954,7 +952,7 @@ def predict(
     (CPU, float32 screen certified in float64; labels and distances bitwise
     equal to ``"numba"`` and the fastest CPU path measured).
     ``backend="numba"`` runs :func:`best_match_nodes` on the CPU, the exact
-    reference scan that ``cpp/awesom_classify.hpp`` reproduces.
+    float64 reference scan.
     ``backend="patch"`` runs :func:`best_match_nodes_patch` (CPU, exact,
     bitwise equal to ``"numba"``; needs ``lattice_shape``), the fastest exact
     CPU path on trained lattices of a few thousand nodes or more.

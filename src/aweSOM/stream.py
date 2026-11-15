@@ -1,36 +1,37 @@
 """Streaming CPU batch SOM trainer for data sets larger than memory.
 
-:func:`train_batch_stream` runs the batch map of :func:`aweSOM.batch.train_batch`
-(same radius schedule, same neighbourhood, same update
-``w_i = sum_c h(c, i) S_c / sum_c h(c, i) n_c``, nodes with no hit keep their
-weight) without JAX, reading the data one chunk at a time from a NumPy array, a
-``numpy.memmap``, an ``h5py`` dataset, or a callable that yields chunks. Only
-one chunk (plus one being prefetched) and the per-node accumulators are in
-memory, so N is limited by the disk, not by RAM.
+:func:`train_batch_stream` runs the batch SOM map without JAX. It reads the
+data one chunk at a time from a NumPy array, a ``numpy.memmap``, an ``h5py``
+dataset, or a callable that yields chunks. Only one chunk, one more being
+prefetched and the per-node accumulators are in memory, so the disk limits N,
+not RAM.
+
+The radius follows :func:`aweSOM._batch_core.radius_schedule`. Each epoch
+applies the batch update ``w_i = sum_c h(c, i) S_c / sum_c h(c, i) n_c``,
+where ``h`` is a Gaussian of the Chebyshev lattice distance with
+``sigma = radius / 3``, cut to zero beyond the radius. Nodes with no hit in
+their neighbourhood keep their weight.
 
 Per epoch and chunk:
 
-1. Exact BMU search. ``bmu="screen"`` (default) is the float32 screen of
-   :func:`aweSOM.inference.best_match_nodes_screen`, certified against the
-   float64 reference, so every BMU equals the exact float64 BMU of
-   :func:`aweSOM.inference.best_match_nodes` (ties to the lowest node).
-   ``bmu="numba"`` is the float64 brute-force scan itself.
+1. Exact BMU search. Every ``bmu`` choice returns the exact float64 BMU of
+   :func:`aweSOM.inference.best_match_nodes`, with ties going to the lowest
+   node. ``bmu="auto"`` (the default) times the screen and patch searches on
+   the first rows of each pass and keeps the faster one. ``bmu="screen"`` is
+   the float32 screen of :func:`aweSOM.inference.best_match_nodes_screen`,
+   certified against float64. ``bmu="patch"`` prunes the scan with bounding
+   balls of lattice patches. ``bmu="numba"`` is the float64 brute-force scan.
 2. Accumulation of ``S_c = sum x`` and ``n_c`` in float64. The chunk is cut
    into ``groups`` contiguous row ranges, each range accumulates into its own
    slot, and the slots are summed in a fixed order at the end of the epoch, so
    the weights are bitwise independent of the thread count.
-3. After the last chunk, the neighbourhood update: for every node, the sum over
-   the nodes within the radius (Chebyshev distance on the lattice) is done
-   directly in numba with a 1-D table of ``h(d)``; the dense ``nodes x nodes``
-   matrix of :func:`aweSOM.batch.neighbourhood_matrix` is never formed (it is
-   2 GB in float64 at 16,000 nodes).
+3. After the last chunk, the neighbourhood update. For every node, numba sums
+   over the nodes within the radius with a 1-D table of ``h(d)``. The dense
+   ``nodes x nodes`` neighbourhood matrix is never formed; it would take 2 GB
+   in float64 at 16,000 nodes.
 
-Relation to :func:`aweSOM.batch.train_batch`: same initial lattice for the same
-``seed`` (``init="sampling"`` draws the same rows), same schedule and update.
-``train_batch`` finds BMUs with the float32 matmul expansion, which flips the
-BMU of about 1e-5 of the samples against exact arithmetic; with
-``train_batch(..., dtype=np.float64)`` the two agree to float64 rounding (see
-``tests/stream_test.py``).
+``init="sampling"`` draws the initial lattice from the data rows with
+``np.random.default_rng(seed)``.
 
 Per-epoch subsampling (``sample_fraction < 1``): each epoch uses a fresh,
 stratified random subset of the rows. The row range is split into blocks of
@@ -48,8 +49,7 @@ rows multiplies the variance by the design effect ``1 + (b - 1) rho``
 With 10^8 rows per epoch and 10^4 nodes there are ~10^4 rows per node and, at
 the final radius 8 (about 45 nodes of effective neighbourhood), ``n_eff ~
 4e5``: the sampling noise of a weight is ~1.5e-3 of the local spread, far
-below the quantization error. ``planning/benchmarks/bench_stream.py`` measures
-the effect on QE and TE.
+below the quantization error.
 
 Sources and memory: ``data_source`` is anything with a 2-D ``shape`` that can
 be sliced by rows (``ndarray``, ``memmap``, ``h5py.Dataset``), or a
@@ -71,7 +71,6 @@ import concurrent.futures
 import json
 import math
 import os
-import resource
 import sys
 import time
 import zlib
@@ -81,8 +80,12 @@ import numba
 import numpy as np
 from numba import njit, prange
 
+try:
+    import resource
+except ImportError:
+    resource = None
+
 from ._batch_core import radius_schedule
-from ._gpu_screen import cuda_available
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
@@ -324,8 +327,10 @@ class NpyWriter:
     a file must not be open for writing on two nodes at once: a network file
     system then stops buffering writes (CephFS turns every write into a
     synchronous write to the storage servers, 11x slower when measured on
-    one of RIT's clusters). For several nodes, let each rank write its own
-    part file inside ``<stem>.parts/`` and publish ``manifest.json`` with
+    one of RIT's clusters).
+
+    For several nodes, let each rank write its own part file inside
+    ``<stem>.parts/`` and publish ``manifest.json`` with
     :func:`write_npy_manifest` (read lazily via :func:`open_npy`, or stitched
     later into one ``.npy`` file with :func:`stitch_npy`).
 
@@ -596,7 +601,11 @@ def _neighbourhood_update_kernel(s, n, w, xdim, ydim, table, reach, out):
 
 
 def _h_table(xdim: int, ydim: int, radius: float) -> tuple[np.ndarray, int]:
-    """h(d) for Chebyshev distance d = 0..max(xdim, ydim) - 1, as in ``batch._neighbourhood64``."""
+    """h(d) for Chebyshev distance d = 0..max(xdim, ydim) - 1, and the reach of the cut.
+
+    ``h(d) = exp(-d^2 / (2 (radius / 3)^2))`` for ``d <= radius`` and 0 beyond. For
+    ``radius <= 0`` only ``h(0) = 1`` is nonzero.
+    """
     d = np.arange(max(xdim, ydim), dtype=np.float64)
     if radius <= 0:
         return (d == 0).astype(np.float64), 0
@@ -609,10 +618,12 @@ def _h_table(xdim: int, ydim: int, radius: float) -> tuple[np.ndarray, int]:
 def neighbourhood_update(
     s: np.ndarray, n: np.ndarray, w: np.ndarray, xdim: int, ydim: int, radius: float
 ) -> np.ndarray:
-    """Batch-map update ``H^T S / H^T n`` without forming H (nodes with no hit keep ``w``).
+    """Batch-map update ``H^T S / H^T n`` without forming H.
 
-    Equal to ``neighbourhood_matrix(xdim, ydim, radius)`` in float64 applied as
-    in :func:`aweSOM.batch.train_batch`, up to float64 summation order.
+    ``H`` is :func:`aweSOM._batch_core.neighbourhood_matrix` ``(xdim, ydim, radius)``
+    in float64. The result equals ``(H.T @ S) / (H.T @ n)[:, None]`` up to
+    float64 summation order. A node whose neighbourhood holds no hit keeps its
+    row of ``w``.
     """
     table, reach = _h_table(xdim, ydim, radius)
     out = np.empty_like(w, dtype=np.float64)
@@ -648,8 +659,15 @@ class _BMU:
 
     PROBE = 16384
 
-    def __init__(self, weights: np.ndarray, kind: str, xdim: int, ydim: int,
-                 first_epoch: bool = False, device: Optional[int] = None):
+    def __init__(
+        self,
+        weights: np.ndarray,
+        kind: str,
+        xdim: int,
+        ydim: int,
+        first_epoch: bool = False,
+        device: Optional[int] = None,
+    ):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
         if kind == "cuda_screen":
@@ -698,20 +716,26 @@ class _BMU:
 class BMUSearcher:
     """Exact BMU search of fixed weights, built once and reused across calls.
 
-    For repeated small calls (for example labelling the cells of one MPI rank
-    at every step), this keeps the backend state: the patch tables, or the
-    CUDA weights, compiled kernels and staging buffers on ``device``. Backends
-    ``"patch"`` (needs ``lattice_shape``), ``"screen"``, ``"numba"`` and
-    ``"cuda_screen"`` give bitwise the same nodes (lowest index on ties) and float64 squared distances as
-    :func:`aweSOM.inference.best_match_nodes`.
+    For repeated small calls, for example labelling the cells of one MPI rank
+    at every step, this keeps the backend state such as the patch tables.
+    Backends ``"patch"`` (needs ``lattice_shape``), ``"screen"`` and
+    ``"numba"`` give bitwise the same nodes (lowest index on ties) and float64
+    squared distances as :func:`aweSOM.inference.best_match_nodes`.
+    ``"cuda_screen"`` gives the same nodes and distances, and keeps the CUDA
+    weights, compiled kernels and staging buffers on ``device``.
 
     Example:
-        >>> search = BMUSearcher(weights, "cuda_screen", device=gpu_device(comm))
+        >>> search = BMUSearcher(weights, "patch", lattice_shape=(xdim, ydim))
         >>> nodes, d2 = search(local_rows)
     """
 
-    def __init__(self, weights: np.ndarray, backend: str = "patch",
-                 lattice_shape: Optional[tuple[int, int]] = None, device: Optional[int] = None):
+    def __init__(
+        self,
+        weights: np.ndarray,
+        backend: str = "patch",
+        lattice_shape: Optional[tuple[int, int]] = None,
+        device: Optional[int] = None,
+    ):
         if backend not in _SEARCH_BACKENDS:
             raise ValueError(f"backend must be one of {', '.join(_SEARCH_BACKENDS)}")
         w = np.ascontiguousarray(weights, np.float64)
@@ -723,8 +747,16 @@ class BMUSearcher:
             xdim, ydim = lattice_shape
         else:
             xdim, ydim = len(w), 1
-        self.backend, self.device, self.n_feat = backend, device, w.shape[1]
-        self._bmu = _BMU(w, backend, int(xdim), int(ydim), device=device)
+        self.backend = backend
+        self.device = device
+        self.n_feat = w.shape[1]
+        self._bmu = _BMU(
+            w,
+            backend,
+            int(xdim),
+            int(ydim),
+            device=device,
+        )
 
     def __call__(self, data: np.ndarray, idx: Optional[np.ndarray] = None,
                  d2: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
@@ -743,10 +775,28 @@ class BMUSearcher:
         return idx, d2
 
 
-def peak_rss_bytes() -> int:
-    """Peak resident set size of this process (``ru_maxrss``; bytes on macOS, KiB on Linux)."""
+def peak_rss_bytes() -> Optional[int]:
+    """Peak resident set size of this process in bytes, or None without ``resource``.
+
+    Reads ``ru_maxrss``, which is in bytes on macOS and in KiB on Linux. The
+    ``resource`` module does not exist on Windows, so the function returns None
+    there instead of a number.
+    """
+    if resource is None:
+        return None
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(r if sys.platform == "darwin" else r * 1024)
+
+
+def cuda_available() -> bool:
+    """True if CuPy imports and sees at least one CUDA device; never raises.
+
+    Imports :mod:`aweSOM._gpu_screen` only when called, so importing
+    :mod:`aweSOM.stream` does not load the GPU module.
+    """
+    from ._gpu_screen import cuda_available as _cuda_available
+
+    return _cuda_available()
 
 
 # --------------------------------------------------------------------- trainer
@@ -800,22 +850,15 @@ def _pass(
     return stats
 
 
+_TRAIN_BMU = (
+    "auto",
+    "screen",
+    "patch",
+    "numba",
+    "cuda_screen",
+)
 CHECKPOINT_FORMAT = "aweSOM.stream.checkpoint/1"
 _RANK_FIELDS = ("rows", "fallbacks", "io_wait", "bmu", "acc", "pass_time")
-
-
-def _git_commit() -> str:
-    """HEAD of the git checkout that holds this file, or "" (no checkout, no git)."""
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def _write_checkpoint(path: str, arrays: dict, meta: dict) -> None:
@@ -867,6 +910,13 @@ def train_batch_stream(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Train a SOM lattice with the batch map, streaming the data chunk by chunk.
 
+    The defaults ``epochs=40``, ``r_min=8``, ``bmu="auto"`` and
+    ``final_pass="full"`` are library defaults. Application drivers set their
+    own schedule and parameters.
+
+    ``train_batch_stream`` takes no ``device`` argument. With
+    ``bmu="cuda_screen"``, each rank trains on its current CUDA device.
+
     Args:
         data_source: ``(N, F)`` ndarray, ``numpy.memmap`` or ``h5py.Dataset``
             (sliced by rows), or a zero-argument callable returning a fresh
@@ -879,11 +929,11 @@ def train_batch_stream(
             ``2 * chunk * F * itemsize + chunk * 12`` bytes for data, prefetch
             and BMU buffers, plus ``groups * nodes * (F + 1) * 8`` bytes of
             accumulators.
-        r_max: Initial radius; defaults to ``max(xdim, ydim) + 1`` as in
-            :func:`aweSOM.batch.train_batch`.
+        r_max: Initial radius; defaults to ``max(xdim, ydim) + 1``.
         r_min: Final radius; clamped to ``r_max``.
-        seed: Seed of ``np.random.default_rng`` for the initial lattice; the
-            same rows as :func:`aweSOM.batch.train_batch` are drawn.
+        seed: Seed of ``np.random.default_rng`` for the initial lattice. With
+            ``init="sampling"`` it draws ``xdim * ydim`` row indices with
+            ``integers(0, N, xdim * ydim)``.
         init: ``"sampling"`` or ``"uniform"``; ignored with ``initial_weights``.
         initial_weights: Optional ``(xdim * ydim, F)`` starting lattice.
         bmu: ``"auto"`` (default: per pass, the faster of screen and patch on
@@ -891,9 +941,10 @@ def train_batch_stream(
             float64), ``"patch"`` (bounding-ball pruned search over lattice
             patches, :func:`aweSOM.inference.best_match_nodes_patch`; the first
             epoch uses feature-space groups with certified bounds) or ``"numba"``
-            (float64 brute force). Optional ``"cuda_screen"`` uses CuPy and
-            a CUDA device. All give the exact float64 BMU
-            (bitwise-equal labels), so the weights do not depend on the choice.
+            (float64 brute force).
+            The optional ``"cuda_screen"`` runs the screen with CuPy on a CUDA device.
+            All give the exact float64 BMU (bitwise-equal labels), so the
+            weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified
             block sample every epoch; see the module docstring). 1.0 = all rows.
         sample_block: Rows per sampled block (array sources). Use 1 for i.i.d.
@@ -931,23 +982,25 @@ def train_batch_stream(
 
     Returns:
         ``(weights, info)``; ``weights`` float64 ``(xdim * ydim, F)`` (equal on
-        every rank). ``info`` has the keys of :func:`aweSOM.batch.train_batch`
-        (``radius``, ``qe``, ``qe_initial``, ``hits``, ``epoch_time``,
-        ``chunk``, ``n_samples``) plus ``rows_per_epoch``, ``fallbacks`` (rows
-        that needed the float64 rescan; always 0 for ``"cuda_screen"``, which
-        keeps no device counter), ``io_wait``, ``bmu_time``,
+        every rank). ``info`` has the keys ``radius`` (per epoch), ``qe``
+        (after each epoch), ``qe_initial``, ``hits`` (rows per node of the
+        final weights), ``epoch_time``, ``chunk``, ``n_samples``,
+        ``rows_per_epoch``, ``fallbacks`` (rows that needed the float64
+        rescan), ``bmu_kind`` (search kind per epoch), ``io_wait``, ``bmu_time``,
         ``acc_time``, ``update_time``, ``reduce_time``, ``checkpoint_time``
         (seconds per epoch; io/bmu/acc of this rank), ``final_time``,
-        ``n_threads``, ``peak_rss`` (bytes, this rank), ``ranks``, ``rank``,
+        ``n_threads``, ``peak_rss`` (bytes, this rank, or None without the
+        ``resource`` module), ``ranks``, ``rank``,
         ``resumed_from`` (epochs read from the checkpoint) and ``rank_rows``,
         ``rank_fallbacks``, ``rank_io_wait``, ``rank_bmu``, ``rank_acc``,
         ``rank_pass_time`` (one list per epoch, one value per rank). ``qe`` is
         exact (float64 distance of the exact BMU); with sampling it is
         measured on the next epoch's sample. ``hits`` is empty when
         ``final_pass="none"``.
+        ``fallbacks`` is always 0 with ``"cuda_screen"``, which keeps no device counter.
     """
-    if bmu not in ("auto", "screen", "patch", "numba", "cuda_screen"):
-        raise ValueError('bmu must be "auto", "screen", "patch", "numba" or "cuda_screen"')
+    if bmu not in _TRAIN_BMU:
+        raise ValueError(f"bmu must be one of {', '.join(_TRAIN_BMU)}")
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError("sample_fraction must be in (0, 1]")
     if final_pass not in ("full", "sample", "none"):
@@ -958,12 +1011,13 @@ def train_batch_stream(
         raise ValueError(f"init must be 'sampling' or 'uniform', got {init!r}")
     if resume and checkpoint is None:
         raise ValueError("resume=True needs a checkpoint path")
+    rank, size = 0, 1
     red = None
     if comm is not None:
         from .distributed import Reducer
 
         red = Reducer(comm)
-    rank, size = (red.rank, red.size) if red is not None else (0, 1)
+        rank, size = red.rank, red.size
     root = rank == 0
     old_threads = numba.get_num_threads()
     if n_threads is not None:
@@ -1039,6 +1093,8 @@ def train_batch_stream(
             if red is not None:
                 w = red.bcast(w if root else None, (n_nodes, n_feat))
 
+        from .model import _git_commit
+
         commit = _git_commit() if (checkpoint is not None and root) else ""
 
         def save(e: int) -> None:
@@ -1060,10 +1116,9 @@ def train_batch_stream(
             st["pass_time"] = time.perf_counter() - t0
             bmu_kinds.append(searcher.kind)
             t_red = time.perf_counter()
+            tot, per = st, {k: np.array([st[k]]) for k in _RANK_FIELDS}
             if red is not None:
                 tot, per = red.reduce_pass(st)
-            else:
-                tot, per = st, {k: np.array([st[k]]) for k in _RANK_FIELDS}
             t1 = time.perf_counter()
             w = neighbourhood_update(tot["s"], tot["n"], w, xdim, ydim, r)
             t2 = time.perf_counter()
@@ -1083,17 +1138,16 @@ def train_batch_stream(
             for k in _RANK_FIELDS:
                 rank_rec[k].append(np.asarray(per[k]).tolist())
             if verbose and root:
-                print(
+                line = (
                     f"epoch {e + 1}/{epochs}  radius {r:.3f}  rows {tot['rows']}  "
                     f"qe(entering) {qe_entering:.6g}  {t2 - t0:.3f} s "
                     f"(io wait {st['io_wait']:.2f}, bmu {st['bmu']:.2f}, update {t2 - t1:.3f}, "
                     f"fallbacks {tot['fallbacks']}, {searcher.kind}"
-                    + (f", reduce {t1 - t_red:.3f}, ranks {size}" if red is not None else "") + ")",
-                    flush=True,
                 )
-            # Checkpoint and callback run on rank 0 only. Its outcome is broadcast, so a
-            # failure or a stop raised by the callback ends every rank, not only rank 0;
-            # the broadcast also keeps the other ranks until the file is complete.
+                if red is not None:
+                    line += f", reduce {t1 - t_red:.3f}, ranks {size}"
+                print(line + ")", flush=True)
+            # Checkpoint and callback run on rank 0 only.
             stop = None
             if root:
                 try:
@@ -1105,6 +1159,9 @@ def train_batch_stream(
                         callback(e, w.copy())
                 except BaseException as exc:
                     stop = exc
+            # Rank 0 broadcasts the outcome, so a failure or a stop raised by the callback
+            # ends every rank, not only rank 0. The broadcast also holds the other ranks
+            # until the checkpoint file is complete.
             if red is not None and (checkpoint is not None or callback is not None):
                 status = red.bcast_object(None if stop is None else repr(stop))
                 if status is not None and not root:
@@ -1161,7 +1218,19 @@ def _version() -> str:
 # --------------------------------------------------------------------- inference
 
 
-_SEARCH_BACKENDS = ("numba", "screen", "patch", "cuda_screen")
+_SEARCH_BACKENDS = (
+    "numba",
+    "screen",
+    "patch",
+    "cuda_screen",
+)
+_PREDICT_BACKENDS = (
+    "numba",
+    "screen",
+    "patch",
+    "cuda_screen",
+    "jax",
+)
 
 
 def _range_chunks(source, chunk: int, start: int, stop: int) -> Iterator[np.ndarray]:
@@ -1207,9 +1276,11 @@ def predict_stream(
     """Label every row of a streamed source with its best-matching node's cluster.
 
     Labels, BMU nodes and distances are those of :func:`aweSOM.inference.predict`
-    with the same backend. Every exact backend (all but ``"kdtree"`` and
-    ``"jax"``) gives the same nodes, including the lowest-index tie rule, and
-    the same float64 distances bit for bit.
+    with the same backend. ``"numba"``, ``"screen"`` and ``"patch"`` give the
+    same nodes, including the lowest-index tie rule, and the same float64
+    distances bit for bit.
+    ``"cuda_screen"`` gives the same nodes and distances as well.
+    ``"jax"`` gives the same labels where its devices support float64.
 
     Two ways to run with several MPI ranks:
 
@@ -1219,22 +1290,25 @@ def predict_stream(
       ``out_node`` and ``out_distance`` holds either all ``N`` rows (this
       rank writes rows ``lo`` to ``hi``) or only this rank's ``hi - lo``
       rows (written from 0). With ``out=None`` a rank gets a new array of
-      its own rows (``stats["start"]`` is its first row). For files on a
-      shared file system use :class:`NpyWriter`, one writer node per file:
-      each rank writes ``part-RRRR.npy`` of its own ``hi - lo`` rows inside
-      ``<stem>.parts/``, closes with ``fsync``, and after ``comm.allgather``
-      rank 0 publishes ``manifest.json`` via :func:`write_npy_manifest` (read
-      lazily via :func:`open_npy` or stitched later with :func:`stitch_npy`).
+      its own rows (``stats["start"]`` is its first row).
+      For files on a shared file system use :class:`NpyWriter`, one writer
+      node per file.
+      Each rank writes ``part-RRRR.npy`` of its own ``hi - lo`` rows inside
+      ``<stem>.parts/`` and closes it with ``fsync``. After ``comm.allgather``,
+      rank 0 publishes ``manifest.json`` via :func:`write_npy_manifest`.
+      :func:`open_npy` reads the parts lazily, and :func:`stitch_npy` joins
+      them into one file later.
       Several nodes writing one file is slow on network file systems (see
       :class:`NpyWriter`), and a writable ``numpy.memmap`` there can even
       overwrite other nodes' rows.
       The call returns once this rank's rows are written; close the writers
-      before anyone reads them. For ``"cuda_screen"`` the call is
-      collective (the device choice uses the node communicator).
+      before anyone reads them.
+      For ``"cuda_screen"`` the call is collective, because the device choice
+      uses the node communicator.
     - Local blocks, no ``comm``: each rank holds its own rows (for example the
       cells of one AsterX rank) and calls this function, or
-      :func:`aweSOM.inference.predict`, on that block. Pass
-      ``device=aweSOM.distributed.gpu_device(comm)`` for ``"cuda_screen"``
+      :func:`aweSOM.inference.predict`, on that block.
+      Pass ``device=aweSOM.distributed.gpu_device(comm)`` for ``"cuda_screen"``
       when a node has several GPUs.
 
     Args:
@@ -1243,16 +1317,20 @@ def predict_stream(
             for BMU indices).
         data_source: As in :func:`train_batch_stream` (already scaled).
         out: Writable ``(N,)`` integer array-like (``ndarray``, ``memmap``,
-            ``h5py.Dataset``, :class:`NpyWriter`) that holds every cluster
-            id; with ``comm`` also ``(hi - lo,)`` (see above). If None, it is
-            allocated in memory as the smallest of uint8, uint16 and int32
+            ``h5py.Dataset``, :class:`NpyWriter`) that holds every cluster id.
+            With ``comm`` it may hold only this rank's ``hi - lo`` rows (see above).
+            If None, it is allocated in memory as the smallest of uint8, uint16 and int32
             that holds every entry of ``node_cluster``
             (:func:`aweSOM.inference.narrow_label_dtype`): uint8 for up to
             256 clusters, uint16 for node IDs of up to 65536 nodes.
         out_distance: Optional writable array for the BMU distance, sized like ``out``.
         chunk: Rows per chunk.
-        backend: ``predict`` backend, including the optional ``"cuda_screen"``.
-            Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
+        backend: Search backend, as in :func:`aweSOM.inference.predict`.
+            ``"screen"`` is the default.
+            ``"numba"`` is the float64 reference scan.
+            ``"patch"`` is exact too and faster on trained lattices; it needs ``lattice_shape``.
+            ``"cuda_screen"`` (optional) needs CuPy and a CUDA device.
+            ``"jax"`` runs on the default JAX devices.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
@@ -1263,35 +1341,38 @@ def predict_stream(
             the visible device count); without, the current device.
 
     Returns:
-        ``(out, stats)`` with ``stats`` = rows, seconds, io_wait, compute,
-        write, start and stop (this rank's rows), rank, ranks and device
-        (CUDA index, or None).
+        ``(out, stats)``. ``stats`` holds rows, seconds, io_wait, compute,
+        write, start and stop (this rank's rows), rank and ranks.
+        ``stats["device"]`` is the CUDA device index, or None.
     """
-    if backend not in _SEARCH_BACKENDS + ("kdtree", "jax"):
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda_screen" or "jax"')
+    if backend not in _PREDICT_BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(_PREDICT_BACKENDS)}")
     if backend == "patch" and lattice_shape is None:
         raise ValueError('backend="patch" needs lattice_shape=(xdim, ydim)')
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if len(clusters) != np.shape(weights)[0]:
         raise ValueError("node_cluster must have one entry per node")
     source = _make_source(data_source, n_samples)
-    rank, size = (0, 1) if comm is None else (int(comm.Get_rank()), int(comm.Get_size()))
-    if comm is None:
-        lo, hi = 0, source.n
-    else:
+    rank, size = 0, 1
+    lo, hi = 0, source.n
+    if comm is not None:
         from .distributed import row_range
 
+        rank, size = int(comm.Get_rank()), int(comm.Get_size())
         lo, hi = row_range(source.n, rank, size)
         for name, a in (("out", out), ("out_distance", out_distance), ("out_node", out_node)):
             if a is not None and len(a) not in (source.n, hi - lo):
                 raise ValueError(f"with comm, {name} must hold all {source.n} rows or this rank's {hi - lo}")
     if out is None:
         out = np.empty(hi - lo, narrow_label_dtype(clusters))
-    # Row pos goes to index pos - base: base = lo for an array of this rank's rows only.
-    # (Lengths N and hi - lo agree only when lo = 0, where both bases are 0.) Without comm
-    # every base is 0, and outputs need no len().
-    bases = (0, 0, 0) if comm is None else tuple(
-        0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node))
+    # Row pos goes to index pos - base. Without comm every base is 0, and outputs need no len().
+    bases = (0, 0, 0)
+    if comm is not None:
+        # base = lo for an array of this rank's rows only. Lengths N and hi - lo agree
+        # only when lo = 0, where both bases are 0.
+        bases = tuple(
+            0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node)
+        )
     if backend == "cuda_screen" and device is None and comm is not None:
         from .distributed import gpu_device
 
@@ -1302,14 +1383,20 @@ def predict_stream(
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
     if backend == "cuda_screen":
-        gpu = _BMU(weights, backend, len(clusters), 1, device=device).gpu
+        gpu = _BMU(
+            weights,
+            backend,
+            len(clusters),
+            1,
+            device=device,
+        ).gpu
         rows = _label_queued(gpu, clusters, it, (out, out_distance, out_node), lo, bases, stats)
-    else:
+    if backend != "cuda_screen":
         rows = _label_host(weights, clusters, it, (out, out_distance, out_node), lo, bases, stats,
                            backend, lattice_shape)
     stats["seconds"] = time.perf_counter() - t_start
-    stats.update(rows=rows, start=lo, stop=hi, rank=rank, ranks=size,
-                 device=None if device is None else int(device))
+    stats.update(rows=rows, start=lo, stop=hi, rank=rank, ranks=size)
+    stats["device"] = None if device is None else int(device)
     return out, stats
 
 
@@ -1317,23 +1404,24 @@ def _label_host(weights, clusters, chunks, outs, pos, bases, stats, backend, lat
     """Label ``chunks`` with a CPU backend from row ``pos`` on; return the row count."""
     out, out_distance, out_node = outs
     base, base_d, base_n = bases
-    searcher = None
     if backend in _SEARCH_BACKENDS:
         xdim, ydim = lattice_shape if backend == "patch" else (len(clusters), 1)
         searcher = _BMU(weights, backend, xdim, ydim)
-    else:
-        from .inference import best_match_nodes_jax, best_match_nodes_kdtree
 
-        search = best_match_nodes_kdtree if backend == "kdtree" else best_match_nodes_jax
+        def search(c):
+            idx, d2 = np.empty(c.shape[0], np.int32), np.empty(c.shape[0], np.float64)
+            searcher(c, idx, d2)
+            return idx, d2
+    if backend == "jax":
+        from .inference import best_match_nodes_jax
+
+        def search(c):
+            return best_match_nodes_jax(weights, c, chunk=c.shape[0])
     first = pos
     for c in chunks:
         t0 = time.perf_counter()
         m = c.shape[0]
-        if searcher is None:
-            idx, d2 = search(weights, c, chunk=m)
-        else:
-            idx, d2 = np.empty(m, np.int32), np.empty(m, np.float64)
-            searcher(c, idx, d2)
+        idx, d2 = search(c)
         labels = clusters[idx]
         t1 = time.perf_counter()
         out[pos - base : pos - base + m] = labels

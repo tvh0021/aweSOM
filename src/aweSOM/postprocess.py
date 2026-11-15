@@ -13,7 +13,7 @@ another region are usually noise at a cluster boundary in feature space.
 - ``majority_iters``: that many passes of a majority (mode) filter over a
   ``majority_size``-wide box. It smooths boundaries but also erodes structures
   thinner than about half the box, i.e. thin current sheets; the 2026-10-28
-  study (``planning/physical``) recommends ``min_size`` alone.
+  BBH study recommends ``min_size`` alone.
 
 Points on several uniform grids (AMR levels) are cleaned one grid at a time
 (``groups``), with neighbours and component sizes counted in cells of each
@@ -157,7 +157,7 @@ def clean_labels(
       ``groups`` (e.g. AMR refinement levels; each is cleaned on its own grid),
       or a prebuilt ``grid`` (:class:`aweSOM.physics_score.VoxelGrid`).
 
-    Recommended (2026-10-28 BBH study, ``planning/physical/README.md``):
+    Recommended by the 2026-10-28 BBH study:
     ``min_size=27`` (one 3^3 stencil), ``majority_iters=0``.
 
     Args:

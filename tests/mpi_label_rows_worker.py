@@ -1,4 +1,4 @@
-"""Run by tests/label_mpi_test.py under ``mpirun -n P python -m mpi4py``.
+"""Run by tests/label_rows_mpi_test.py under ``mpirun -n P python -m mpi4py``.
 
 ``python mpi_label_rows_worker.py OUT`` runs the driver's ``label_rows``
 (examples/grmhd-bbh/production_pool.py) with ``COMM_WORLD`` on the cases of

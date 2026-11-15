@@ -1,9 +1,13 @@
 """Tests for the streaming CPU batch trainer (aweSOM.stream). Small and fast; no JAX needed
 except for the comparison with aweSOM.batch.train_batch, which is skipped without it."""
 
+import importlib.util
+import sys
+
 import numpy as np
 import pytest
 
+import aweSOM.stream as stream
 from aweSOM._batch_core import neighbourhood_matrix, quantization_error, radius_schedule
 from aweSOM.inference import best_match_nodes, predict
 from aweSOM.stream import (
@@ -488,3 +492,22 @@ def test_lattice_unsafe_centroid_rows():
     actual = best_match_nodes_patch(w, x, 7, 5)
     np.testing.assert_array_equal(actual[0], expected[0])
     np.testing.assert_array_equal(actual[1].view(np.uint64), expected[1].view(np.uint64))
+
+
+def test_peak_rss_bytes_without_resource(monkeypatch, data):
+    """No ``resource`` module (Windows): peak_rss_bytes returns None, never 0."""
+    monkeypatch.setattr(stream, "resource", None)
+    assert stream.peak_rss_bytes() is None
+    _, info = train_batch_stream(data[:500], 3, 2, epochs=1, final_pass="none")
+    assert info["peak_rss"] is None
+
+
+def test_stream_imports_without_resource(monkeypatch):
+    """A fresh import with ``resource`` blocked takes the ImportError branch."""
+    monkeypatch.setitem(sys.modules, "resource", None)
+    spec = importlib.util.spec_from_file_location("aweSOM._stream_without_resource", stream.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, fresh)  # dataclasses look up their module
+    spec.loader.exec_module(fresh)
+    assert fresh.resource is None
+    assert fresh.peak_rss_bytes() is None

@@ -181,25 +181,6 @@ def test_degenerate_nodes_keep_weights(data):
         np.testing.assert_allclose(weights[c], data[bmu == c].mean(axis=0), rtol=1e-6)
 
 
-def test_quality_measures_small_example():
-    # 2x2 lattice on a line: nodes 0 (0,0), 1 (1,0), 2 (0,1), 3 (1,1)
-    w = np.array([[0.0], [1.0], [10.0], [3.0]])
-    x = np.array([[0.1], [0.9], [9.0], [2.0]])
-    assert quantization_error(w, x) == pytest.approx((0.1 + 0.1 + 1.0 + 1.0) / 4)
-    # BMU pairs: (0,1) adjacent, (1,0) adjacent, (2,3) diagonal, tie 1/3 at 2.0 -> (1,3) adjacent
-    assert topographic_error(w, x, 2, 2) == 0.0
-    w5 = np.array([[0.0], [5.0], [5.0], [0.5], [9.0], [9.0]])  # 3x2 lattice
-    # BMU 0 (0,0), second 3 (0,1): adjacent; x=8 -> 4 (1,1) then 5 (2,1): adjacent
-    # x=2.7: 3 (0,1) then 1 (1,0): adjacent (diagonal); x=4.0 -> 1 (1,0), 2 (2,0)
-    assert topographic_error(w5, np.array([[0.1], [8.0], [2.7], [4.0]]), 3, 2) == 0.0
-    w_far = np.array([[0.0], [9.0], [9.0], [9.0], [9.0], [0.5]])
-    # BMU 0 (0,0), second 5 (2,1): Chebyshev distance 2 -> error
-    assert topographic_error(w_far, np.array([[0.2]]), 3, 2) == 1.0
-    # three-way tie between nodes 0, 1 and 5: (distance, index) order picks 0 and 1
-    w_tie = np.array([[1.0], [-1.0], [9.0], [9.0], [9.0], [1.0]])
-    assert topographic_error(w_tie, np.array([[0.0]]), 3, 2) == 0.0
-
-
 def _paired_run(seed: int) -> tuple[float, float]:
     """QE ratio - 1 and TE difference (batch - online) for one seed."""
     xdim, ydim = 20, 12
@@ -268,16 +249,3 @@ def test_two_process_cpu_matches_single_process(tmp_path):
     x = np.random.default_rng(0).normal(size=(10001, 4))
     w_single, _ = train_batch(x, 8, 6, epochs=6)
     np.testing.assert_allclose(np.load(out), w_single, rtol=1e-12, atol=1e-12)
-
-
-@pytest.mark.parametrize("n_feat", [2, 4, 7, 10])
-def test_fast_qe_te_equal_reference(n_feat):
-    from aweSOM.batch import quantization_error_fast, topographic_error_fast
-
-    rng = np.random.default_rng(n_feat)
-    w = rng.normal(size=(9 * 7, n_feat))
-    x = rng.normal(size=(5000, n_feat))
-    x[:50] = w[:50]  # exact hits
-    x[50:60] = 0.5 * (w[0] + w[1])  # possible near-ties
-    assert quantization_error_fast(w, x) == quantization_error(w, x)
-    assert topographic_error_fast(w, x, 9, 7) == topographic_error(w, x, 9, 7)

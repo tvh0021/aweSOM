@@ -1,9 +1,8 @@
-"""JAX-free pieces of the batch SOM map shared by :mod:`aweSOM.batch` and :mod:`aweSOM.stream`.
+"""JAX-free pieces of the batch SOM map.
 
 Radius schedule, neighbourhood matrix and the exact float64 quality measures
-(quantization and topographic error). They are re-exported by
-:mod:`aweSOM.batch`; this module exists so that the streaming CPU trainer
-(:mod:`aweSOM.stream`) runs without JAX installed.
+(quantization and topographic error). The streaming CPU trainer
+(:mod:`aweSOM.stream`) uses them, and none of them needs JAX.
 """
 
 from __future__ import annotations
@@ -97,7 +96,8 @@ def neighbourhood_matrix(xdim: int, ydim: int, radius: float) -> np.ndarray:
     ``xdim x ydim`` grid (node i at ``(i % xdim, i // xdim)``, no wrap). Row ``c``
     equals ``Lattice.Gamma(c, m2Ds, 1.0, radius)`` for an integer radius. For
     ``radius <= 0`` (where Gamma divides by zero) the limit is used: H is the
-    identity. :func:`train_batch` uses the same matrix in float64.
+    identity. :func:`aweSOM.stream.neighbourhood_update` applies the same
+    weights in float64 without forming the matrix.
 
     Args:
         xdim: Lattice x dimension.

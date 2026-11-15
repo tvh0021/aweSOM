@@ -321,3 +321,36 @@ def test_grid_file_source_sharded_parts(tmp_path):
         src_plain.close()
         src_parts.close()
 
+
+
+def test_without_resource_module(monkeypatch):
+    """No ``resource`` module (Windows): peak RSS is None and the log lines still format."""
+    import aweSOM.sheet_stats as sheet_stats
+
+    monkeypatch.setattr(sheet_stats, "resource", None)
+    assert sheet_stats._rss_gb() is None
+    xyz = _single(n=(12, 12, 8))
+    iz = np.rint(xyz[:, 2] / 0.5).astype(int)
+    labels = np.where((iz >= 3) & (iz < 5), SHEET, 0)
+    lines = []
+    src = ArraySource(xyz, np.full(len(xyz), 5, dtype=np.int8), labels)
+    res = sheet_statistics(src, [SHEET], config=SheetConfig(plane_z=None), log=lines.append)
+    assert res.summary["peak_rss_gb"] is None
+    assert any("peak RSS unknown" in line for line in lines)
+    json.dumps(res.summary)  # None is valid JSON (null)
+
+
+def test_imports_without_resource_module(monkeypatch):
+    """A fresh import with ``resource`` blocked takes the ImportError branch."""
+    import importlib.util
+    import sys
+
+    import aweSOM.sheet_stats as sheet_stats
+
+    monkeypatch.setitem(sys.modules, "resource", None)
+    spec = importlib.util.spec_from_file_location("aweSOM._sheet_stats_without_resource", sheet_stats.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, fresh)  # dataclasses look up their module
+    spec.loader.exec_module(fresh)
+    assert fresh.resource is None
+    assert fresh._rss_gb() is None

@@ -61,17 +61,21 @@ from __future__ import annotations
 import csv
 import json
 import math
-import resource
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 from scipy import ndimage
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 from .amr_adjacency import OwnedLevel, touching
 
@@ -566,9 +570,17 @@ def _composite_sheet(L: LevelLattice, margin: int, lattices, sheets, owned) -> n
     return out
 
 
-def _rss_gb() -> float:
+def _rss_gb() -> Optional[float]:
+    """Peak resident set size of this process in GB, or None without ``resource``."""
+    if resource is None:
+        return None
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return r / 1e9 if sys.platform == "darwin" else r / 1e6
+
+
+def _gb_text(gb: Optional[float]) -> str:
+    """``gb`` for a log line, such as "1.23 GB", or "unknown" for None."""
+    return "unknown" if gb is None else f"{gb:.2f} GB"
 
 
 # --------------------------------------------------------------------------- main entry
@@ -838,7 +850,7 @@ def sheet_statistics(
             "n_components_on_level": int(ncomp[L]),
         }
         say(f"[sheet_stats] level {L}: sheet fraction {per_level[L]['sheet_fraction']:.4%} "
-            f"({time.perf_counter() - t0:.0f}s, peak RSS {_rss_gb():.2f} GB)")
+            f"({time.perf_counter() - t0:.0f}s, peak RSS {_gb_text(_rss_gb())})")
     timings["point_pass"] = time.perf_counter() - t0
     del comp, owned, sheet
 
@@ -1029,9 +1041,10 @@ def sheet_statistics(
         }
     timings["total"] = time.perf_counter() - t_start
     summary["timings_s"] = {k: round(v, 2) for k, v in timings.items()}
-    summary["peak_rss_gb"] = round(_rss_gb(), 3)
+    rss = _rss_gb()
+    summary["peak_rss_gb"] = None if rss is None else round(rss, 3)
     say(f"[sheet_stats] done in {timings['total']:.0f}s: sheet fraction {summary['volume']['sheet_fraction']:.4%}, "
-        f"{nc} components, peak RSS {summary['peak_rss_gb']:.2f} GB")
+        f"{nc} components, peak RSS {_gb_text(summary['peak_rss_gb'])}")
     return SheetResult(summary=summary, components=table, planes=planes)
 
 
