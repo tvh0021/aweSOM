@@ -12,10 +12,23 @@
 ## are bitwise identical to the mask-by-mask loop on the NumPy backend. compute_SQ and
 ## create_mask are kept (JAX-accelerated when a GPU or Metal backend is present) for direct use.
 
+from __future__ import annotations
+
 import os
 import glob
 import argparse
 import numpy as np
+
+if __package__:
+    from .npy_parts import open_npy
+else:
+    try:
+        from aweSOM.npy_parts import open_npy
+    except ModuleNotFoundError:
+        import sys as _sys
+
+        _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from aweSOM.npy_parts import open_npy
 
 # Use JAX if GPU and the jax package is installed, otherwise use NumPy
 # added support for experimental JAX backend with METAL on Apple silicon
@@ -52,8 +65,6 @@ def conditional_jit(func):
 
 # read array from clusterID.npy or clusterID.parts
 def load_som_npy(path: str):
-    from .npy_parts import open_npy
-
     if USE_JAX:
         if os.path.isfile(path):
             return array_lib.load(path, "r")
@@ -173,8 +184,6 @@ def _load_labels(path: str) -> np.ndarray:
     Non-integer values can never equal a cluster id in ``create_mask`` so they
     are mapped to -1, which the contingency table ignores.
     """
-    from .npy_parts import open_npy
-
     raw = open_npy(path, mmap_mode="r")
     try:
         labels = np.asarray(raw).reshape(-1)
@@ -414,8 +423,6 @@ def find_number_of_clusters(cluster_files: list[str]) -> array_lib.ndarray:
     Returns:
         number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
     """
-    from .npy_parts import open_npy
-
     number_of_clusters = np.empty(len(cluster_files), dtype=int)
     for run in range(len(cluster_files)):
         clusters = open_npy(cluster_files[run], mmap_mode="r")

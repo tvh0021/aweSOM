@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import matplotlib.pyplot as plt
@@ -5,6 +7,17 @@ import shutil
 import numpy as np
 import numba
 from scipy.signal import savgol_filter
+
+if __package__:
+    from .npy_parts import open_npy
+else:
+    try:
+        from aweSOM.npy_parts import open_npy
+    except ModuleNotFoundError:
+        import sys as _sys
+
+        _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from aweSOM.npy_parts import open_npy
 
 
 def plot_gsum_values(
@@ -266,8 +279,6 @@ def combine_separated_clusters_from_labels(
     run_index = {}
     for _, _, run_name in map_list:
         run_index.setdefault(run_name, len(run_index))
-    from .npy_parts import open_npy
-
     opened = [open_npy(os.path.join(labels_path, name + ".npy"), mmap_mode="r") for name in run_index]
     try:
         raw = [r.reshape(-1) for r in opened]
@@ -442,7 +453,10 @@ def anchored_sce_labels(
             with ``medoid``, ``mean_ari`` per run, the final ``groups`` (list of
             ``[weight, cid, run_name]`` per label) and ``map_list``.
     """
-    from .sce import contingency_table
+    if __package__:
+        from .sce import contingency_table
+    else:
+        from aweSOM.sce import contingency_table
 
     if weighting not in ("gsum", "vote"):
         raise ValueError("weighting must be 'gsum' or 'vote'")
@@ -450,8 +464,6 @@ def anchored_sce_labels(
     _, map_list = get_gsum_values(mapping_file)
     gsum = {(name, int(cid)): float(g) for g, cid, name in map_list}
     runs = sorted({name for _, _, name in map_list})
-    from .npy_parts import open_npy
-
     labs = [np.ascontiguousarray(open_npy(os.path.join(labels_path, r + ".npy"), mmap_mode=None).reshape(-1)) for r in runs]
     nids = [int(l.max()) + 1 for l in labs]  # ids below 0 are ignored by contingency_table
 
