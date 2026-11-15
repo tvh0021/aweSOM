@@ -293,7 +293,7 @@ def parse(argv):
     p.add_argument("--lattice", default="91x64")
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--threads", type=int, required=True)
-    p.add_argument("--r-min", type=float, default=None, help="default 8 for >= 91 columns, else 5")
+    p.add_argument("--r-min", type=float, default=8.0, help="default 8")
     p.add_argument("--chunk", type=int, default=2**21)
     p.add_argument("--groups", type=int, default=64)
     p.add_argument("--bmu", default="patch")
@@ -308,7 +308,7 @@ def main(argv=None) -> int:
     args = parse(argv)
     n = int(args.n)
     xdim, ydim = (int(v) for v in args.lattice.lower().split("x"))
-    r_min = args.r_min if args.r_min is not None else (8.0 if xdim >= 91 else 5.0)
+    r_min = args.r_min
     comm = None
     if args.mpi:
         from aweSOM.distributed import get_comm

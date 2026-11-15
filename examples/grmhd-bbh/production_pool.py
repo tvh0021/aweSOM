@@ -998,6 +998,11 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                 assemble_bytes=copied['bytes'])
 
 
+def default_r_min(shape):
+    # 8 on every lattice: final-radius study 2026-10-29 (48x34 at 5 failed the topology guardrail)
+    return 8
+
+
 def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=None):
     """One fit. With ``comm`` every rank trains on the windows it owns, then labels its own
     contiguous rows of the pool; rank 0 alone does the rest and returns the record, the
@@ -1040,7 +1045,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         with explicit_radii(resolve_phases(args)):
             w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
                                         bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
-                                        r_min=args.r_min if args.r_min is not None else (8 if shape[0] >= 91 else 5),
+                                        r_min=args.r_min if args.r_min is not None else default_r_min(shape),
                                         final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
                                         comm=comm, **checkpoint_args)
         rank = 0 if comm is None else comm.Get_rank()

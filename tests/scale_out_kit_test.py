@@ -330,3 +330,11 @@ def test_gp_only_surveys_skip_or_refuse_on_rit_rc(tmp_path, monkeypatch):
     monkeypatch.setenv("PWD", "/home/thccrg/work")
     with pytest.raises(SystemExit, match="refusing to run on RIT RC"):
         probe.refuse_on_tigris()
+
+
+def test_r_min_default_is_8_on_every_lattice():
+    for lat in ("48x34", "91x64", "100x100", "160x100"):
+        assert scale_out.parse(["--out", "o", "--threads", "1", "--lattice", lat]).r_min == 8.0
+    assert scale_out.parse(["--out", "o", "--threads", "1", "--lattice", "48x34", "--r-min", "5"]).r_min == 5.0
+    out = _bash("for L in 48x34 91x64 100x100 160x100; do r_min_for $L; done")
+    assert out.returncode == 0 and out.stdout.splitlines() == ["8", "8", "8", "8"]
