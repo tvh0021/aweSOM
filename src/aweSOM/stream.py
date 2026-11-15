@@ -96,19 +96,32 @@ from .inference import (
     predict,
 )
 
+from .npy_parts import (
+    ShardedNpyArray,
+    open_npy,
+    stitch_npy,
+    verify_npy_parts,
+    write_npy_manifest,
+)
+
 __all__ = [
     "BMUSearcher",
     "NpyReader",
     "NpyWriter",
+    "ShardedNpyArray",
     "copy_npy_rows",
     "cuda_available",
     "npy_crc32",
+    "open_npy",
+    "stitch_npy",
     "train_batch_stream",
     "read_checkpoint",
     "predict_stream",
     "stratified_sample",
     "neighbourhood_update",
     "peak_rss_bytes",
+    "verify_npy_parts",
+    "write_npy_manifest",
 ]
 
 DEFAULT_CHUNK = 2**20
@@ -312,8 +325,10 @@ class NpyWriter:
     a file must not be open for writing on two nodes at once: a network file
     system then stops buffering writes (CephFS turns every write into a
     synchronous write to the storage servers, 11x slower when measured on
-    one of RIT's clusters). For several nodes, let each write its own file and one node
-    copy them into place with :func:`copy_npy_rows`.
+    one of RIT's clusters). For several nodes, let each rank write its own
+    part file inside ``<stem>.parts/`` and publish ``manifest.json`` with
+    :func:`write_npy_manifest` (read lazily via :func:`open_npy`, or stitched
+    later into one ``.npy`` file with :func:`stitch_npy`).
 
     ``crc32`` is the zlib CRC-32 of the bytes written so far when the writes
     covered one contiguous range in ascending order (``first`` to ``end``);
@@ -1207,11 +1222,13 @@ def predict_stream(
       rows (written from 0). With ``out=None`` a rank gets a new array of
       its own rows (``stats["start"]`` is its first row). For files on a
       shared file system use :class:`NpyWriter`, one writer node per file:
-      rank 0 writes its rows into the final file, every other rank into a
-      file of its own rows, and after ``comm.Barrier()`` rank 0 copies those
-      into place with :func:`copy_npy_rows`. Several nodes writing one file
-      is slow on network file systems (see :class:`NpyWriter`), and a
-      writable ``numpy.memmap`` there can even overwrite other nodes' rows.
+      each rank writes ``part-RRRR.npy`` of its own ``hi - lo`` rows inside
+      ``<stem>.parts/``, closes with ``fsync``, and after ``comm.allgather``
+      rank 0 publishes ``manifest.json`` via :func:`write_npy_manifest` (read
+      lazily via :func:`open_npy` or stitched later with :func:`stitch_npy`).
+      Several nodes writing one file is slow on network file systems (see
+      :class:`NpyWriter`), and a writable ``numpy.memmap`` there can even
+      overwrite other nodes' rows.
       The call returns once this rank's rows are written; close the writers
       before anyone reads them. For ``"cuda_screen"`` the call is
       collective (the device choice uses the node communicator).
