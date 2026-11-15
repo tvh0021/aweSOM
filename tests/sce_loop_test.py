@@ -241,3 +241,80 @@ def test_default_float32_masks(tmp_path, monkeypatch):
     from_labels_f64 = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, ".", mask_dtype=np.float64)
     assert from_labels.tobytes() == from_f32.tobytes()
     assert from_labels_f64.tobytes() == from_f64.tobytes() == from_f32.tobytes()
+
+
+def test_sharded_parts_loop_and_discovery(tmp_path, monkeypatch):
+    """Sharded .parts label sets produce bitwise identical SCE outputs and combine maps as plain .npy files."""
+    from aweSOM import make_sce_clusters as msc
+    from aweSOM.npy_parts import write_npy_manifest
+    from aweSOM.stream import npy_crc32
+
+    rng = np.random.default_rng(11)
+    dims = [6, 5, 4]
+    n_cells = int(np.prod(dims))
+    plain_dir = tmp_path / "plain"
+    sharded_dir = tmp_path / "sharded"
+    plain_dir.mkdir()
+    sharded_dir.mkdir()
+
+    for k, n_ids in enumerate((4, 5, 3)):
+        flat = rng.integers(0, n_ids, size=n_cells, dtype=np.uint8)
+        np.save(plain_dir / f"labels.run-{k}.npy", flat)
+        if k == 0:
+            # Mix one plain .npy with sharded .parts datasets and an incomplete .parts (no manifest)
+            np.save(sharded_dir / f"labels.run-{k}.npy", flat)
+        else:
+            pdir = sharded_dir / f"labels.run-{k}.parts"
+            pdir.mkdir()
+            cuts = [0, 47, n_cells]
+            part_entries = []
+            for r in range(2):
+                a, b = cuts[r], cuts[r + 1]
+                pf = pdir / f"part-{r:04d}.npy"
+                np.save(pf, flat[a:b])
+                part_entries.append(
+                    dict(rank=r, file=pf.name, start=a, stop=b, rows=b - a, bytes=b - a, crc32=int(npy_crc32(pf, 0, b - a)))
+                )
+            write_npy_manifest(pdir, dtype=flat.dtype, shape=(n_cells,), parts=part_entries)
+
+    # An incomplete .parts without manifest.json is skipped by folder discovery; when both .npy and .parts exist, .npy wins.
+    (sharded_dir / "incomplete.parts").mkdir()
+    dup_parts = sharded_dir / "labels.run-0.parts"
+    dup_parts.mkdir()
+    np.save(dup_parts / "part-0000.npy", np.zeros(n_cells, dtype=np.uint8))
+    write_npy_manifest(
+        dup_parts,
+        dtype=np.uint8,
+        shape=(n_cells,),
+        parts=[dict(rank=0, file="part-0000.npy", start=0, stop=n_cells, rows=n_cells, bytes=n_cells, crc32=int(npy_crc32(dup_parts / "part-0000.npy", 0, n_cells)))],
+    )
+
+    monkeypatch.chdir(plain_dir)
+    plain_files = sce._discover_cluster_files(".")
+    plain_nids = sce.find_number_of_clusters(plain_files)
+    os.mkdir("SCE")
+    open("SCE/multimap_mappings.txt", "w").close()
+    with contextlib.redirect_stdout(io.StringIO()):
+        sce.loop_over_all_clusters(plain_files, plain_nids, np.array(dims), "SCE")
+
+    monkeypatch.chdir(sharded_dir)
+    sharded_files = sce._discover_cluster_files(".")
+    assert sharded_files == ["labels.run-0.npy", "labels.run-1.parts", "labels.run-2.parts"]
+    sharded_nids = sce.find_number_of_clusters(sharded_files)
+    np.testing.assert_array_equal(sharded_nids, plain_nids)
+    np.testing.assert_array_equal(np.asarray(sce.load_som_npy("labels.run-1.parts")), np.load(plain_dir / "labels.run-1.npy"))
+    os.mkdir("SCE")
+    open("SCE/multimap_mappings.txt", "w").close()
+    with contextlib.redirect_stdout(io.StringIO()):
+        sce.loop_over_all_clusters(sharded_files, sharded_nids, np.array(dims), "SCE")
+
+    assert (sharded_dir / "SCE" / "multimap_mappings.txt").read_text() == (plain_dir / "SCE" / "multimap_mappings.txt").read_text()
+    for p in (plain_dir / "SCE").glob("mask-*.npy"):
+        np.testing.assert_array_equal(np.load(sharded_dir / "SCE" / p.name), np.load(p))
+
+    _, map_list = msc.get_gsum_values(str(sharded_dir / "SCE" / "multimap_mappings.txt"))
+    ranges = [[0, 4], [4, len(map_list)]]
+    got = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, str(sharded_dir))
+    ref = msc.combine_separated_clusters_from_labels(map_list, ranges, dims, str(plain_dir))
+    assert got.tobytes() == ref.tobytes()
+

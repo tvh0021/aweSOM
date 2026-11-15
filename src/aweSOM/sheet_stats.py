@@ -353,9 +353,15 @@ class GridFileSource:
         self.names = [n.decode() if isinstance(n, bytes) else str(n) for n in self.h5["names"][()]]
         self.attrs = {k: _plain(v) for k, v in self.h5.attrs.items()}
         self._spacing = dict(spacing or {})
+        self._owned_labels = False
         if isinstance(labels, (str, Path)):
-            labels = np.load(labels, mmap_mode="r")
+            from .npy_parts import open_npy
+
+            labels = open_npy(labels, mmap_mode="r")
+            self._owned_labels = True
         if labels is not None and len(labels) != self.h5["level"].shape[0]:
+            if self._owned_labels and hasattr(labels, "close"):
+                labels.close()
             raise ValueError(f"{len(labels)} labels for {self.h5['level'].shape[0]} grid points")
         self.labels = labels
 
@@ -412,6 +418,8 @@ class GridFileSource:
         return out
 
     def close(self):
+        if getattr(self, "_owned_labels", False) and hasattr(self.labels, "close"):
+            self.labels.close()
         self.h5.close()
 
 

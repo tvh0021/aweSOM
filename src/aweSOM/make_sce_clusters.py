@@ -266,16 +266,24 @@ def combine_separated_clusters_from_labels(
     run_index = {}
     for _, _, run_name in map_list:
         run_index.setdefault(run_name, len(run_index))
-    raw = [np.load(os.path.join(labels_path, name + ".npy"), mmap_mode="r").reshape(-1) for name in run_index]
-    lo = min(int(r.min()) for r in raw) if raw else 0
-    hi = max(int(r.max()) for r in raw) if raw else 0
-    # compact copy of all runs; every value equals the file's (non-integer files keep their dtype)
-    dtype = np.result_type(*[r.dtype for r in raw]) if raw else np.int64
-    if np.issubdtype(dtype, np.integer):
-        dtype = np.uint8 if 0 <= lo and hi < 256 else np.int16 if -(2**15) <= lo and hi < 2**15 else np.int64
-    labels = np.empty((len(run_index), n_cells), dtype=dtype)
-    for r, lab in enumerate(raw):
-        labels[r] = lab
+    from .npy_parts import open_npy
+
+    opened = [open_npy(os.path.join(labels_path, name + ".npy"), mmap_mode="r") for name in run_index]
+    try:
+        raw = [r.reshape(-1) for r in opened]
+        lo = min(int(r.min()) for r in raw) if raw else 0
+        hi = max(int(r.max()) for r in raw) if raw else 0
+        # compact copy of all runs; every value equals the file's (non-integer files keep their dtype)
+        dtype = np.result_type(*[r.dtype for r in raw]) if raw else np.int64
+        if np.issubdtype(dtype, np.integer):
+            dtype = np.uint8 if 0 <= lo and hi < 256 else np.int16 if -(2**15) <= lo and hi < 2**15 else np.int64
+        labels = np.empty((len(run_index), n_cells), dtype=dtype)
+        for r, lab in enumerate(raw):
+            labels[r] = lab
+    finally:
+        for r in opened:
+            if hasattr(r, "close"):
+                r.close()
     all_signals_map = np.empty([len(cluster_ranges)] + dims, dtype=np.float32)
     for cluster, (start_pointer, end_pointer) in enumerate(cluster_ranges):
         inst = map_list[start_pointer:end_pointer]
@@ -442,8 +450,9 @@ def anchored_sce_labels(
     _, map_list = get_gsum_values(mapping_file)
     gsum = {(name, int(cid)): float(g) for g, cid, name in map_list}
     runs = sorted({name for _, _, name in map_list})
-    labs = [np.load(os.path.join(labels_path, r + ".npy"), mmap_mode="r").reshape(-1) for r in runs]
-    labs = [np.ascontiguousarray(l) for l in labs]
+    from .npy_parts import open_npy
+
+    labs = [np.ascontiguousarray(open_npy(os.path.join(labels_path, r + ".npy"), mmap_mode=None).reshape(-1)) for r in runs]
     nids = [int(l.max()) + 1 for l in labs]  # ids below 0 are ignored by contingency_table
 
     R = len(runs)

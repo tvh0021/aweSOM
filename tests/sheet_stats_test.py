@@ -283,3 +283,41 @@ def test_composite_mask_keeps_fine_background():
     sheets[7][:] = True
     comp = _composite_sheet(coarse, 1, {5: coarse, 7: fine}, sheets, owned)
     assert comp[1, 1, 1]  # the coarse cell itself
+
+
+def test_grid_file_source_sharded_parts(tmp_path):
+    from aweSOM.npy_parts import write_npy_manifest
+    from aweSOM.stream import npy_crc32
+
+    xyz, level, _, _ = _two_level()
+    rng = np.random.default_rng(2)
+    names = ["log_beta_inv", "log_theta", "log_chi_B"]
+    feats = {n: rng.normal(size=len(xyz)).astype(np.float32) for n in names}
+    labels = np.where((xyz[:, 2] >= 14) & (xyz[:, 2] < 16), SHEET, 1).astype(np.uint8)
+    attrs = {"horizon_centres": np.array([[10.0, 16.0, 16.0], [22.0, 16.0, 16.0]]), "horizon_mass": np.array([0.5, 0.5])}
+    _write_grid(tmp_path / "grid.h5", xyz, level, feats, names, attrs)
+    np.save(tmp_path / "plain.npy", labels)
+
+    pdir = tmp_path / "sharded.parts"
+    pdir.mkdir()
+    mid = len(labels) // 2
+    entries = []
+    for r, (a, b) in enumerate(((0, mid), (mid, len(labels)))):
+        pf = pdir / f"part-{r:04d}.npy"
+        np.save(pf, labels[a:b])
+        entries.append(dict(rank=r, file=pf.name, start=a, stop=b, rows=b - a, bytes=b - a, crc32=int(npy_crc32(pf, 0, b - a))))
+    write_npy_manifest(pdir, dtype=labels.dtype, shape=labels.shape, parts=entries)
+
+    cfg = SheetConfig(plane_z=16.0, chunk_rows=5000)
+    src_plain = GridFileSource(tmp_path / "grid.h5", tmp_path / "plain.npy")
+    src_parts = GridFileSource(tmp_path / "grid.h5", tmp_path / "sharded.npy")  # resolves to sharded.parts
+    try:
+        res_plain = sheet_statistics(src_plain, [SHEET], config=cfg, log=None)
+        res_parts = sheet_statistics(src_parts, [SHEET], config=cfg, log=None)
+        assert res_parts.summary["volume"] == res_plain.summary["volume"]
+        for k in res_plain.components:
+            np.testing.assert_allclose(res_parts.components[k], res_plain.components[k], rtol=1e-12, equal_nan=True)
+    finally:
+        src_plain.close()
+        src_parts.close()
+

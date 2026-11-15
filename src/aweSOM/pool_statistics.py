@@ -162,10 +162,14 @@ def summarize(blocks, counts, probabilities, directory, chunk):
 
 def release_mapping(array):
     """Drop mapped pages after a sequential read or committed write on Linux."""
+    if hasattr(array, 'release_mapping'):
+        array.release_mapping()
+        return
     import mmap
     mapping = getattr(array, '_mmap', None)
     if mapping is not None and hasattr(mapping, 'madvise') and hasattr(mmap, 'MADV_DONTNEED'):
-        array.flush()
+        if getattr(array, 'mode', 'r') != 'r':
+            array.flush()
         mapping.madvise(mmap.MADV_DONTNEED)
 
 
@@ -180,13 +184,18 @@ def feature_summary(job):
     filename, dataset, label_path, column, counts, chunk, scratch = job
     import h5py
     import numba
+    from .npy_parts import open_npy
     numba.set_num_threads(1)
-    labels = np.load(label_path,mmap_mode='r')
-    with h5py.File(filename,'r') as source, scratch_directory(scratch) as directory:
-        raw = source[dataset]
-        blocks = ((raw[a:a+chunk,column],read_slice(labels,a,a+chunk))
-                  for a in range(0,len(raw),chunk))
-        return summarize(blocks,counts,[.25,.5,.75],directory,chunk)
+    labels = open_npy(label_path, mmap_mode='r')
+    try:
+        with h5py.File(filename,'r') as source, scratch_directory(scratch) as directory:
+            raw = source[dataset]
+            blocks = ((raw[a:a+chunk,column],read_slice(labels,a,a+chunk))
+                      for a in range(0,len(raw),chunk))
+            return summarize(blocks,counts,[.25,.5,.75],directory,chunk)
+    finally:
+        if hasattr(labels, 'close'):
+            labels.close()
 
 
 def parallel_features(raw, labels, counts, chunk, scratch, workers):
