@@ -414,3 +414,151 @@ def test_cli_verify_and_stitch(tmp_path):
     assert s.returncode == 0, s.stderr
     assert out.is_file() and not parts.exists()
     np.testing.assert_array_equal(np.load(out), ref)
+
+
+def test_symlinked_parts_cleanup_preserves_target_dataset(tmp_path):
+    ref = np.arange(12, dtype=np.uint8)
+    source = make_sharded(tmp_path / "source.npy", ref, [0, 5, 12])
+    other = make_sharded(tmp_path / "other.npy", ref + 10, [0, 6, 12])
+
+    # Direct .parts directory symlink removal unlinks only the alias.
+    alias = tmp_path / "alias.parts"
+    alias.symlink_to(source, target_is_directory=True)
+    remove_npy_output(alias)
+    assert not alias.exists() and not alias.is_symlink()
+    assert sorted(p.name for p in source.iterdir()) == ["manifest.json", "part-0000.npy", "part-0001.npy"]
+    np.testing.assert_array_equal(open_npy(source, mmap_mode=None), ref)
+
+    # Stem .npy target with a sibling .parts directory symlink also unlinks only the alias.
+    alias2 = tmp_path / "alias2.parts"
+    alias2.symlink_to(source, target_is_directory=True)
+    remove_npy_output(tmp_path / "alias2.npy")
+    assert not alias2.exists() and not alias2.is_symlink()
+    np.testing.assert_array_equal(open_npy(source, mmap_mode=None), ref)
+
+    # Dangling .parts symlink is removed cleanly instead of raising FileNotFoundError.
+    broken = tmp_path / "broken.parts"
+    broken.symlink_to(tmp_path / "missing.parts", target_is_directory=True)
+    remove_npy_output(broken)
+    assert not broken.is_symlink()
+
+    # Stale <dst>.parts.partial symlink to source.parts does not delete source.parts during copy.
+    stale_staging = tmp_path / "copied.parts.partial"
+    stale_staging.symlink_to(source, target_is_directory=True)
+    copied = copy_npy_output(other, tmp_path / "copied.npy")
+    assert copied == tmp_path / "copied.parts"
+    np.testing.assert_array_equal(open_npy(copied, mmap_mode=None), ref + 10)
+    np.testing.assert_array_equal(open_npy(source, mmap_mode=None), ref)
+
+    # stitch_npy(..., delete_parts=True) on a .parts symlink unlinks the symlink and keeps source.parts intact.
+    alias3 = tmp_path / "alias3.parts"
+    alias3.symlink_to(source, target_is_directory=True)
+    stitched = tmp_path / "stitched_from_alias.npy"
+    stitch_npy(alias3, stitched, delete_parts=True)
+    assert not alias3.exists() and not alias3.is_symlink()
+    np.testing.assert_array_equal(np.load(stitched), ref)
+    np.testing.assert_array_equal(open_npy(source, mmap_mode=None), ref)
+
+
+def test_structured_and_nonscalar_dtypes_rejected_before_publication(tmp_path):
+    rec = np.zeros(4, dtype=[("id", "u1"), ("value", "f8")])
+    with pytest.raises(ValueError, match="non-scalar dtypes are not supported"):
+        make_sharded(tmp_path / "records.npy", rec, [0, 2, 4])
+    rec_dir = tmp_path / "records.parts"
+    assert not (rec_dir / "manifest.json").exists()
+    assert not (rec_dir / "manifest.json.partial").exists()
+
+    sub_dir = tmp_path / "subarray.parts"
+    sub_dir.mkdir()
+    with pytest.raises(ValueError, match="non-scalar dtypes are not supported"):
+        write_npy_manifest(
+            sub_dir,
+            dtype=np.dtype("(2,)f4"),
+            shape=(4,),
+            parts=[dict(rank=0, file="part-0000.npy", start=0, stop=4, rows=4, bytes=32, crc32=0)],
+        )
+    assert not (sub_dir / "manifest.json").exists()
+
+    # A hand-edited manifest with a JSON list-of-lists dtype descriptor is rejected cleanly.
+    bad_dir = make_sharded(tmp_path / "bad_descr.npy", np.arange(4, dtype=np.uint8), [0, 2, 4])
+    doc = json.loads((bad_dir / "manifest.json").read_text(encoding="utf-8"))
+    doc["dtype"] = [["id", "|u1"], ["value", "<f8"]]
+    (bad_dir / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    for fn in (open_npy, verify_npy_parts, stitch_npy):
+        with pytest.raises(ValueError, match="expected scalar dtype string"):
+            fn(bad_dir)
+
+
+def test_proposal_stream_stages_sharded_and_plain_labels_for_stage_sample(tmp_path, monkeypatch):
+    import types
+    import h5py
+
+    grmhd_dir = Path(__file__).resolve().parents[1] / "examples" / "grmhd-bbh"
+    monkeypatch.syspath_prepend(str(grmhd_dir))
+    import proposal_figure
+    import proposal_stream
+
+    features = ["log_beta_inv", "log_chi_B"]
+    monkeypatch.setattr(proposal_figure, "FEATURES", features, raising=False)
+    monkeypatch.setattr(proposal_figure, "grid_clip", lambda grid, train: {"check": "ok"})
+
+    attrs = dict(
+        b2_min=1e-10,
+        s_v=1e-3,
+        winsor_log_chi_B=[-5.0, 5.0],
+        winsor_log_grad_ln_b2=[-5.0, 5.0],
+        winsor_asinh_div_v=[-5.0, 5.0],
+    )
+    grid_h5 = tmp_path / "grid.h5"
+    train_h5 = tmp_path / "train.h5"
+    x = np.array([[-1.0, 0.2], [-0.5, 0.3], [1.2, 2.4], [1.4, 2.6]], dtype=np.float32)
+    levels = np.array([5, 6, 7, 8], dtype=np.int32)
+    for h5_path in (grid_h5, train_h5):
+        with h5py.File(h5_path, "w") as h:
+            h.create_dataset("features", data=x)
+            h.create_dataset("level", data=levels)
+            for k, v in attrs.items():
+                h.attrs[k] = v
+
+    ref_labels = np.array([0, 0, 2, 2], dtype=np.uint8)
+    sharded = make_sharded(tmp_path / "src" / "labels.npy", ref_labels, [0, 2, 4])
+    plain = tmp_path / "src" / "plain_labels.npy"
+    np.save(plain, ref_labels)
+
+    for tag, grid_labels, expect_sharded in [
+        ("from_parts", sharded, True),
+        ("from_manifest", sharded / "manifest.json", True),
+        ("from_stem_npy", tmp_path / "src" / "labels.npy", True),
+        ("from_plain", plain, False),
+    ]:
+        out_dir = tmp_path / f"out_{tag}"
+        out_dir.mkdir()
+        args = types.SimpleNamespace(
+            grid_labels=str(grid_labels),
+            grid=str(grid_h5),
+            train_features=str(train_h5),
+            out=str(out_dir),
+            tag=tag,
+            merge_cost=0.1,
+            som="dummy.pkl",
+        )
+        proposal_stream.label_statistics(args)
+
+        # stage_sample always opens Path(out) / f"labels_{args.tag}.npy" via open_npy(..., mmap_mode="r").
+        opened = open_npy(out_dir / f"labels_{tag}.npy", mmap_mode="r")
+        try:
+            assert isinstance(opened, ShardedNpyArray) is expect_sharded
+            np.testing.assert_array_equal(opened[:], ref_labels)
+        finally:
+            if isinstance(opened, ShardedNpyArray):
+                opened.close()
+
+        info = json.loads((out_dir / f"clusters_{tag}.json").read_text(encoding="utf-8"))
+        assert info["sheet_cluster"] == 2
+        assert info["n_points"] == 4
+
+        # Removing the staged alias leaves the source dataset intact.
+        remove_npy_output(out_dir / f"labels_{tag}.npy")
+        np.testing.assert_array_equal(open_npy(sharded, mmap_mode=None), ref_labels)
+        np.testing.assert_array_equal(np.load(plain), ref_labels)
+

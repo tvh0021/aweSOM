@@ -191,12 +191,15 @@ def _validate_manifest_dict(data: Any, manifest_path: Path) -> tuple[np.dtype, t
     ver = data.get("version")
     if type(ver) is not int or ver != FORMAT_VERSION:
         raise ValueError(f"{manifest_path}: unsupported manifest version {ver!r}, expected {FORMAT_VERSION}")
+    raw_dtype = data.get("dtype")
+    if not isinstance(raw_dtype, str):
+        raise ValueError(f"{manifest_path}: invalid dtype {raw_dtype!r}; expected scalar dtype string")
     try:
-        dtype = np.dtype(data["dtype"])
+        dtype = np.dtype(raw_dtype)
     except Exception as exc:
-        raise ValueError(f"{manifest_path}: invalid dtype {data.get('dtype')!r}") from exc
-    if dtype.hasobject:
-        raise ValueError(f"{manifest_path}: object dtypes are not supported")
+        raise ValueError(f"{manifest_path}: invalid dtype {raw_dtype!r}") from exc
+    if dtype.names is not None or dtype.subdtype is not None or dtype.hasobject:
+        raise ValueError(f"{manifest_path}: non-scalar dtypes are not supported: {dtype!r}")
     raw_shape = data.get("shape")
     if not isinstance(raw_shape, list) or len(raw_shape) < 1 or any(type(d) is not int or d < 0 for d in raw_shape):
         raise ValueError(f"{manifest_path}: invalid shape {raw_shape!r}")
@@ -285,23 +288,29 @@ def write_npy_manifest(
     if manifest_path.exists() or manifest_path.is_symlink():
         raise FileExistsError(f"manifest already exists: {manifest_path}")
     dt = np.dtype(dtype)
+    if dt.names is not None or dt.subdtype is not None or dt.hasobject:
+        raise ValueError(f"{manifest_path}: non-scalar dtypes are not supported: {dt!r}")
+    descr = np.lib.format.dtype_to_descr(dt)
+    if not isinstance(descr, str):
+        raise ValueError(f"{manifest_path}: non-scalar dtype descriptor is not supported: {descr!r}")
     shp = [int(d) for d in shape]
     doc: dict[str, Any] = {
         "format": FORMAT_NAME,
         "version": FORMAT_VERSION,
-        "dtype": np.lib.format.dtype_to_descr(dt),
+        "dtype": descr,
         "shape": shp,
         "total_rows": shp[0] if shp else 0,
         "ranks": len(parts),
         "parts": _plain_json(list(parts)),
         "provenance": _plain_json(dict(provenance or {})),
     }
-    _, clean_shape, clean_parts = _validate_manifest_dict(doc, manifest_path)
+    payload_str = json.dumps(doc, indent=2, allow_nan=False) + "\n"
+    _, clean_shape, clean_parts = _validate_manifest_dict(json.loads(payload_str), manifest_path)
     tail = clean_shape[1:]
     for p in clean_parts:
         _check_part_header(directory / p["file"], dt, (p["rows"], *tail))
 
-    payload = (json.dumps(doc, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    payload = payload_str.encode("utf-8")
     partial = directory / (MANIFEST_NAME + ".partial")
     fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     try:
@@ -596,25 +605,30 @@ def verify_npy_parts(path: str | os.PathLike[str], *, block: int = 2**24) -> dic
 
 
 def _remove_parts_dir(parts_dir: Path) -> None:
-    """Remove ``parts_dir`` safely without ``shutil.rmtree``."""
+    """Remove ``parts_dir`` safely without ``shutil.rmtree`` (never following a symlink root)."""
+    if parts_dir.is_symlink():
+        parts_dir.unlink()
+        return
     manifest_path = parts_dir / MANIFEST_NAME
     part_names: list[str] = []
-    if manifest_path.is_file():
+    if manifest_path.is_symlink():
+        manifest_path.unlink()
+    elif manifest_path.is_file():
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         _, _, parts = _validate_manifest_dict(data, manifest_path)
         part_names = [p["file"] for p in parts]
         manifest_path.unlink()
     partial = parts_dir / (MANIFEST_NAME + ".partial")
-    if partial.is_file() or partial.is_symlink():
+    if partial.is_symlink() or partial.is_file():
         partial.unlink()
     if part_names:
         for fname in part_names:
             target = parts_dir / fname
-            if target.is_file() or target.is_symlink():
+            if target.is_symlink() or target.is_file():
                 target.unlink()
     else:
         for entry in parts_dir.iterdir():
-            if entry.name.startswith("part-") and entry.name.endswith(".npy") and entry.is_file():
+            if entry.name.startswith("part-") and entry.name.endswith(".npy") and (entry.is_symlink() or entry.is_file()):
                 entry.unlink()
     parts_dir.rmdir()
 
@@ -622,17 +636,20 @@ def _remove_parts_dir(parts_dir: Path) -> None:
 def remove_npy_output(path: str | os.PathLike[str]) -> None:
     """Remove ``<stem>.npy`` and/or ``<stem>.parts`` (unlinking ``manifest.json`` first).
 
-    Never calls ``shutil.rmtree``. When both ``<stem>.npy`` and ``<stem>.parts``
-    exist, removes both.
+    Never calls ``shutil.rmtree`` and never follows a ``.parts`` directory symlink.
+    When both ``<stem>.npy`` and ``<stem>.parts`` exist, removes both.
     """
     _, stem = _parse_npy_target(path)
     npy_path = Path(stem + ".npy")
     parts_dir = Path(stem + PARTS_SUFFIX)
     removed = False
-    if npy_path.is_file() or npy_path.is_symlink():
+    if npy_path.is_symlink() or npy_path.is_file():
         npy_path.unlink()
         removed = True
-    if parts_dir.is_dir():
+    if parts_dir.is_symlink():
+        parts_dir.unlink()
+        removed = True
+    elif parts_dir.is_dir():
         _remove_parts_dir(parts_dir)
         removed = True
     if not removed:
@@ -657,8 +674,12 @@ def copy_npy_output(src: str | os.PathLike[str], dst: str | os.PathLike[str]) ->
 
     _, _, _, parts = _load_and_validate_manifest(src_parts)
     staging = Path(dst_stem + PARTS_SUFFIX + ".partial")
-    if staging.exists():
+    if staging.is_symlink():
+        staging.unlink()
+    elif staging.is_dir():
         _remove_parts_dir(staging)
+    elif staging.exists():
+        staging.unlink()
     staging.mkdir()
     try:
         for p in parts:
@@ -668,7 +689,9 @@ def copy_npy_output(src: str | os.PathLike[str], dst: str | os.PathLike[str]) ->
         (staging / (MANIFEST_NAME + ".partial")).unlink()
         os.rename(staging, dst_parts)
     except BaseException:
-        if staging.is_dir():
+        if staging.is_symlink():
+            staging.unlink()
+        elif staging.is_dir():
             _remove_parts_dir(staging)
         raise
     return dst_parts
