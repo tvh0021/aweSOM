@@ -308,6 +308,6 @@ def test_d3_infinite_rows_and_single_node_lattice_across_backends(dtype):
     assert np.all(np.isposinf(d2_1[2:])) and np.all(np.isposinf(dist1[2:]))
 
     with pytest.raises(
-        ValueError, match='backend must be "numba", "kdtree", "screen", "patch" or "jax"'
+        ValueError, match='backend must be "numba", "screen", "patch" or "jax"'
     ):
         predict(weights, node_cluster, data, backend="unknown")

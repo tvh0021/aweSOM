@@ -33,25 +33,18 @@ nodes, default tile of 14,169 rows, Apple M1 Max): numba 2.2e6 points/s; JAX
 0.4.34 + jax-metal 0.1.1 float32 2.9e6 points/s (0 label disagreements). On
 a CPU-only machine the numba path is the faster one.
 
-:func:`best_match_nodes_kdtree` queries a ``scipy.spatial.cKDTree`` of the
-nodes and then re-evaluates the chosen node's distance with the exact
-float64 scan, so distances follow the contract above; only exact ties can
-pick a different node. On random data in [0, 1) it reaches 8.0e6 points/s
-at F = 4, but a trained lattice lies close to a 2D sheet in feature space,
-so the tree visits hundreds of nodes per point on real data.
-
 :func:`best_match_nodes_screen` (the ``predict`` default) scans every node
 in float32, certifies the float32 winner with a rounding-error bound and
 falls back to the float64 scan for every point it cannot certify, so its
 labels and distances equal :func:`best_match_nodes` bitwise. Points per
 second on an Apple M1 Max, 2368 nodes, ``planning/opt/inference-cpu``:
 
-=====================  ======  ======  ======
-data                   numba   kdtree  screen
-=====================  ======  ======  ======
-plasma lattice, F = 4  2.2e6   3.0e6   4.9e6
-random, F = 10         9.6e5   5.9e5   2.5e6
-=====================  ======  ======  ======
+=====================  ======  ======
+data                   numba   screen
+=====================  ======  ======
+plasma lattice, F = 4  2.2e6   4.9e6
+random, F = 10         9.6e5   2.5e6
+=====================  ======  ======
 
 :func:`best_match_nodes_patch` prunes the scan with bounding balls of
 lattice patches (side x side neighbouring nodes) and is also bitwise equal to
@@ -76,7 +69,6 @@ from numba import njit, prange
 __all__ = [
     "best_match_nodes",
     "best_match_nodes_jax",
-    "best_match_nodes_kdtree",
     "best_match_nodes_patch",
     "best_match_nodes_screen",
     "predict",
@@ -85,7 +77,6 @@ __all__ = [
 
 DEFAULT_CHUNK = 2**20
 SCREEN_TILE = 512
-KDTREE_LEAFSIZE = 64
 _U32 = 2.0**-24  # float32 unit roundoff
 JAX_TILE_ELEMENTS = 2**25
 
@@ -532,77 +523,6 @@ def _collect(item, nodes_idx: np.ndarray, dist2: np.ndarray) -> None:
     dist2[start:stop] = np.asarray(d2)[: stop - start]
 
 
-@njit(parallel=True, nogil=True, cache=True)
-def _dist2_kernel(
-    weights: np.ndarray, data: np.ndarray, idx: np.ndarray, out_dist2: np.ndarray
-) -> None:
-    """Exact squared distance of every point to its given node (same arithmetic as _bmu_kernel)."""
-    n_features = weights.shape[1]
-    for p in prange(data.shape[0]):
-        i = idx[p]
-        acc = 0.0
-        for f in range(n_features):
-            d = weights[i, f] - np.float64(data[p, f])
-            acc += d * d
-        out_dist2[p] = acc
-
-
-def best_match_nodes_kdtree(
-    weights: np.ndarray,
-    data: np.ndarray,
-    chunk: int = DEFAULT_CHUNK,
-    workers: int = -1,
-    leafsize: int = KDTREE_LEAFSIZE,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Find the best-matching node of every point with a KD-tree over the nodes.
-
-    A ``scipy.spatial.cKDTree`` is built on the lattice weights and queried
-    ``chunk`` points at a time with ``workers`` threads. The squared distance
-    of each point to its node is then recomputed with the exact float64 scan of
-    :func:`best_match_nodes`, so the distance of the chosen node is bitwise
-    equal to that function. The labels are equal except for ties and near-ties:
-    the tree compares distances computed with its own rounding, so two nodes
-    whose exact distances differ by about one float64 ulp, or are equal, can
-    be resolved the other way. Weights and points must be finite (the tree
-    rejects NaN); the brute-force scan is used for any point the tree cannot
-    place (squared distances overflowing float64). Faster than the brute-force
-    scan for a few features (about F <= 8 on 2368 nodes), slower above.
-
-    Args:
-        weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
-        data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
-        chunk (int, optional): Points per query. Defaults to 2**20.
-        workers (int, optional): Threads for the query, -1 for all cores. Defaults to -1.
-        leafsize (int, optional): ``cKDTree`` leaf size. Defaults to 64 (scipy's
-            16 is about 1.35x slower on 2368 nodes at F = 4 to 10).
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]: int32 [N] node indices and float64 [N]
-            squared Euclidean distances to those nodes.
-    """
-    from scipy.spatial import cKDTree
-
-    weights, data = _check_inputs(weights, data)
-    if chunk < 1:
-        raise ValueError("chunk must be positive")
-    if not np.all(np.isfinite(weights)):
-        raise ValueError("weights must be finite for the kdtree backend")
-    tree = cKDTree(weights, leafsize=leafsize)
-    n_points = data.shape[0]
-    nodes_idx = np.empty(n_points, dtype=np.int32)
-    dist2 = np.empty(n_points, dtype=np.float64)
-    for start in range(0, n_points, chunk):
-        stop = min(start + chunk, n_points)
-        block = np.ascontiguousarray(data[start:stop])
-        _, idx = tree.query(block, k=1, workers=workers)
-        missing = idx >= weights.shape[0]  # cKDTree's "no neighbour" sentinel
-        if missing.any():
-            idx[missing], _ = best_match_nodes(weights, block[missing])
-        nodes_idx[start:stop] = idx
-        _dist2_kernel(weights, block, nodes_idx[start:stop], dist2[start:stop])
-    return nodes_idx, dist2
-
-
 PATCH_TILE = 64
 
 
@@ -1019,8 +939,6 @@ def predict(
     equal to ``"numba"`` and the fastest CPU path measured).
     ``backend="numba"`` runs :func:`best_match_nodes` on the CPU, the exact
     reference scan that ``cpp/awesom_classify.hpp`` reproduces.
-    ``backend="kdtree"`` runs :func:`best_match_nodes_kdtree` (CPU; ties may
-    go to a higher node; points must be finite).
     ``backend="patch"`` runs :func:`best_match_nodes_patch` (CPU, exact,
     bitwise equal to ``"numba"``; needs ``lattice_shape``), the fastest exact
     CPU path on trained lattices of a few thousand nodes or more.
@@ -1032,13 +950,11 @@ def predict(
     Tie and non-finite contract (D3):
         Exact ties assign ``node_cluster[lowest_idx]`` using the lowest tied
         node index on ``"screen"``, ``"patch"``, ``"numba"``, and float64
-        ``"jax"`` above subnormal distances; ``"kdtree"`` may resolve ties or
-        one-ulp near-ties to another node. ``"screen"``, ``"patch"``,
+        ``"jax"`` above subnormal distances. ``"screen"``, ``"patch"``,
         ``"numba"``, and ``"jax"`` skip nodes with ``NaN`` distances, and any
         row with no finite distance, including ``NaN``, ``+inf``, or ``-inf``
         coordinates against finite weights, receives ``node_cluster[0]`` and
-        Euclidean distance ``inf``; ``"kdtree"`` requires finite weights and
-        points. On CPU, ``"screen"``, ``"patch"``, and ``"numba"`` return
+        Euclidean distance ``inf``. On CPU, ``"screen"``, ``"patch"``, and ``"numba"`` return
         bitwise-identical ``int32`` labels and ``float64`` Euclidean distances.
 
     Args:
@@ -1050,7 +966,7 @@ def predict(
             for jax.
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
-        backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"``,
+        backend (str, optional): ``"screen"``, ``"numba"``,
             ``"patch"`` or ``"jax"``. Defaults to ``"screen"``.
         lattice_shape (tuple[int, int] | None, optional): ``(xdim, ydim)``,
             required by ``backend="patch"``.
@@ -1067,10 +983,6 @@ def predict(
         nodes_idx, dist2 = best_match_nodes(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
-    elif backend == "kdtree":
-        nodes_idx, dist2 = best_match_nodes_kdtree(
-            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
-        )
     elif backend == "screen":
         nodes_idx, dist2 = best_match_nodes_screen(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
@@ -1084,7 +996,7 @@ def predict(
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch" or "jax"')
+        raise ValueError('backend must be "numba", "screen", "patch" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)

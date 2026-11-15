@@ -5,9 +5,8 @@ trained lattice: the scaler fitted on the training sample, the node weights,
 the node-to-cluster map, distance thresholds for flagging unfamiliar points,
 and provenance metadata. Calling ``save`` writes an HDF5 file, and calling
 ``save_text`` writes a self-describing plain-text file meant for readers in
-other languages (including ``cpp/awesom_classify.hpp``). Files with
-``format_version`` 1 load in every later 1.x release, and ``load`` refuses a
-file with a newer ``format_version``.
+other languages. Files with ``format_version`` 1 load in every later 1.x
+release, and ``load`` refuses a file with a newer ``format_version``.
 
 HDF5 layout (written by ``save``):
     Root attributes ``format_version`` (int, ``1``), ``xdim`` (int), ``ydim``
@@ -515,7 +514,7 @@ class SOMModel:
             chunk (int, optional): Points per chunk. Defaults to 2**20.
             return_distance (bool, optional): Also return the Euclidean BMU distance
                 in the scaled space. Defaults to False.
-            backend (str, optional): ``"screen"``, ``"patch"``, ``"numba"``, ``"kdtree"``, or
+            backend (str, optional): ``"screen"``, ``"patch"``, ``"numba"``, or
                 ``"jax"``; see :func:`aweSOM.inference.predict`. The JAX path picks
                 its own device tile size inside each chunk. Defaults to ``"screen"``.
 

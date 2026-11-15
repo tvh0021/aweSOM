@@ -487,10 +487,15 @@ class Lattice:
         The single-best search delegates to ``aweSOM.inference``: by default the
         float32 screen certified in float64 (``best_match_nodes_screen``), whose
         node indices are bitwise those of the float64 reference scan
-        (``backend="numba"``, ``best_match_nodes``). Both return the same node
-        indices as the original per-point kernel, which is kept as
+        (``backend="numba"``, ``best_match_nodes``); distances are accumulated
+        in float64. For finite float64 input both return the same node indices
+        as the original per-point kernel, which is kept as
         ``_best_match_legacy`` (``backend="legacy"``) and is always used for
-        ``full=True``.
+        ``full=True``. The original kernel computes in the dtype of its inputs
+        and returns the first NaN distance, so with a float32 lattice and
+        float32 observations it can pick another node where two nodes are tied
+        within float32 rounding, and it can pick a node with non-finite
+        weights, which the default never selects.
 
         Args:
                 lattice (np.ndarray): weight values of the lattice
@@ -567,15 +572,14 @@ class Lattice:
         ``merge_cost`` (0.0 if None). Replaces the deprecated
         ``map_data_to_lattice`` + ``assign_cluster_to_data`` route and gives
         the same labels without the two full-size intermediates
-        (exactly with the default ``"screen"`` and with ``"numba"``; ``"kdtree"``
-        can resolve exact ties differently).
+        (exactly, with either CPU backend).
 
         Args:
                 data (np.ndarray): [N, F] float64 or float32 points in the same space as the training data.
                 merge_cost (float, optional): Merge threshold used only if the lattice has no cluster assignment yet.
                 chunk (int, optional): Points per kernel call. Defaults to 2**20.
                 return_distance (bool, optional): Also return the Euclidean BMU distance. Defaults to False.
-                backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"`` or ``"jax"``; see :func:`aweSOM.inference.predict`. Defaults to ``"screen"``.
+                backend (str, optional): ``"screen"`` or ``"numba"`` (or ``"jax"``); see :func:`aweSOM.inference.predict`. Defaults to ``"screen"``.
 
         Returns:
                 np.ndarray: int32 [N] cluster labels, plus float64 [N] distances if ``return_distance``.
@@ -1513,8 +1517,17 @@ class Lattice:
             # find the centroid for each node on the map
             centroids = self.compute_centroids(explicit)
             if merge:
-                # find the unique centroids for the nodes on the map
-                centroids = self.merge_similar_centroids(centroids, merge_cost)
+                # find the unique centroids for the nodes on the map; keep the
+                # merge_cost_used of the cluster assignment, if there is one
+                had_cost = hasattr(self, "merge_cost_used")
+                prior_cost = getattr(self, "merge_cost_used", None)
+                try:
+                    centroids = self.merge_similar_centroids(centroids, merge_cost)
+                finally:
+                    if had_cost:
+                        self.merge_cost_used = prior_cost
+                    elif hasattr(self, "merge_cost_used"):
+                        del self.merge_cost_used
 
             unique_centroids = self.get_unique_centroids(centroids)
             print("Unique centroids : ", unique_centroids)

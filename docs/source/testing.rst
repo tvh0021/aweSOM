@@ -135,27 +135,22 @@ cluster labels, BMU distances, trained lattices, U-matrices, SCE output files an
      - Baseline
      - ``numba``
      - ``screen`` (default)
-     - ``kdtree``
    * - plasma, 64 x 37 lattice, :math:`2.1\times10^6` points
      - 1.5e5
      - 1.0e6
      - 2.1e6
-     - 1.9e6
    * - BBH 29 x 20, :math:`10^5` points
      - 3.7e5
      - 3.1e6
      - 5.2e6
-     - 1.5e6
    * - BBH 51 x 36, :math:`10^6` points
      - 9.0e4
      - 1.1e6
      - 2.4e6
-     - 1.7e6
    * - BBH 91 x 64, :math:`10^7` points
      - 2.9e4
      - 3.7e5
      - 6.9e5
-     - 1.2e6
 
 .. list-table:: Training and post-processing
    :header-rows: 1
@@ -181,7 +176,7 @@ cluster labels, BMU distances, trained lattices, U-matrices, SCE output files an
      - 0.06 to 0.13 s
      - 71x to 296x
 
-The ``kdtree`` backend wins on the largest lattice (5824 nodes); ``screen`` wins on the others. Labels from
+``screen`` is faster than ``numba`` in every case. Labels from
 ``SOMModel`` agree with the baseline only when the input is scaled at the same precision as the training data: the
 BBH lattices were trained on float32 features scaled in float32, and ``Scaler`` works in float64, so on
 :math:`10^7` points 11,544 labels (0.12%) differ.
