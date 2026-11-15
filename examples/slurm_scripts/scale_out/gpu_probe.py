@@ -25,7 +25,7 @@ def main():
     import cupy as cp
     import numba
     import aweSOM
-    from aweSOM._gpu import GpuSearcher, _pinned
+    from aweSOM._gpu_screen import GpuScreenSearcher as GpuSearcher, _pinned
     from aweSOM.inference import _bmu_kernel
     from aweSOM.stream import peak_rss_bytes, train_batch_stream
     import importlib.util
@@ -45,7 +45,7 @@ def main():
                   commit=commit,
                   cupy=cp.__version__, driver=cp.cuda.runtime.driverGetVersion(),
                   runtime=cp.cuda.runtime.runtimeGetVersion(), checks=[], rates=[], epochs=[],
-                  kernel_b='not implemented; exact float64 kernel has zero fallbacks')
+                  kernel='cuda_screen')
 
     def save():
         record['peak_rss_bytes'] = peak_rss_bytes()
@@ -74,8 +74,7 @@ def main():
             idx, d2 = np.empty_like(ri), np.empty_like(rd)
             search(subset, idx, d2)
             passed = np.array_equal(idx, ri) and bits(d2, rd)
-            record['checks'].append(dict(lattice=name, bitwise=passed, cpu_seconds=cpu_seconds,
-                                          fallbacks=0))
+            record['checks'].append(dict(lattice=name, bitwise=passed, cpu_seconds=cpu_seconds))
             save()
             if not passed:
                 raise AssertionError(f'{name}: CUDA differs from CPU')
@@ -97,7 +96,7 @@ def main():
                     seconds = time.perf_counter() - start
                     record['rates'].append(dict(features=features, lattice=[xdim, ydim],
                         overlap=overlap, rows=len(data), seconds=seconds,
-                        mrows_per_second=len(data) / seconds / 1e6, fallbacks=0))
+                        mrows_per_second=len(data) / seconds / 1e6))
                     save()
                 del search, idx, d2
             del data
@@ -123,7 +122,7 @@ def main():
         opts = dict(xdim=48, ydim=34, epochs=5, chunk=2**18, final_pass='none',
                     prefetch=False, n_threads=threads)
         cpu, _ = train_batch_stream(x[:200_000], bmu='numba', **opts)
-        gpu, stats = train_batch_stream(x[:200_000], bmu='cuda', **opts)
+        gpu, stats = train_batch_stream(x[:200_000], bmu='cuda_screen', **opts)
         record['epochs'] = {k: v for k, v in stats.items() if k in
                             ('epoch_time', 'bmu_time', 'acc_time', 'update_time', 'rows_per_epoch', 'fallbacks')}
         record['training_bitwise'] = bits(cpu, gpu)

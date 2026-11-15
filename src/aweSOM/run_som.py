@@ -157,14 +157,13 @@ def save_cluster_labels(
     unchanged. Other labels keep their dtype.
     """
 
+    from aweSOM.inference import narrow_label_dtype
+
     som_labels = np.asarray(som_labels)
-    if np.issubdtype(som_labels.dtype, np.integer) and som_labels.size:
-        if som_labels.min() >= 0:
-            top = som_labels.max()
-            for dtype in (np.uint8, np.uint16):
-                if top <= np.iinfo(dtype).max:
-                    som_labels = som_labels.astype(dtype)
-                    break
+    if np.issubdtype(som_labels.dtype, np.integer):
+        dtype = narrow_label_dtype(som_labels)
+        if dtype.kind == "u":
+            som_labels = som_labels.astype(dtype)
 
     np.save(
         f"labels.{name_of_dataset}-{xdim}-{ydim}-{alpha_0}-{train}-{batch}{initial}.npy",

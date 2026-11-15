@@ -248,7 +248,8 @@ def inspect(args):
     bytes_per_row = len(records[0]['names'])*(4+8*args.write_scaled)
     deferred = args.statistics == 'later'
     fits = len(args.lattices)*len(args.seeds)
-    bytes_per_row += 4*fits + 12*(fits if deferred else args.seed_workers)
+    labels, rest = label_bytes(args.lattices)
+    bytes_per_row += labels*fits + rest*(fits if deferred else args.seed_workers)
     if not (args.scratch or os.environ.get('SLURM_TMPDIR') or os.environ.get('TMPDIR')):
         threads = args.threads_per_seed or thread_budget(args)['threads_per_seed']
         bytes_per_row += 8 if deferred else max(16,8*min(threads,len(records[0]['names'])))*args.seed_workers
@@ -880,7 +881,21 @@ class ScaledRows:
         return self.transform(self.raw[key])
 
 
-LABEL_FILES = (('labels', 'i4'), ('nodes', 'i4'), ('distances', 'f8'))
+def label_files(nc):
+    """(key, dtype) of the label files: the narrowest dtype that holds every cluster and node ID
+    (uint8 up to 255, uint16 up to 65535; aweSOM.inference.narrow_label_dtype)."""
+    from aweSOM.inference import narrow_label_dtype
+    return (('labels', narrow_label_dtype(nc)), ('nodes', narrow_label_dtype(np.arange(len(nc)))),
+            ('distances', np.dtype('f8')))
+
+
+def label_bytes(lattices):
+    """Bytes per row of one fit's label files (label_files) for the largest of ``lattices``:
+    (labels, nodes + distances). Cluster IDs never exceed the node count, so the node IDs'
+    dtype bounds the labels' too (uint16 for 100x100, where uint8 labels are typical)."""
+    nodes = max(int(a)*int(b) for a, b in (s.split('x') for s in lattices))
+    labels, node, distance = (d.itemsize for _, d in label_files(np.arange(nodes)))
+    return labels, node + distance
 
 
 def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None):
@@ -907,7 +922,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     t0 = time.perf_counter()
     writers, problem = {}, None
     try:
-        for key, dtype in LABEL_FILES:
+        for key, dtype in label_files(nc):
             if rank:
                 made = np.lib.format.open_memmap(part(key, rank), mode='w+', dtype=dtype, shape=(hi - lo,))
                 del made
@@ -937,7 +952,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                     write_seconds=st['write'], close_seconds=time.perf_counter()-tc,
                     pwrite_seconds=sum(wr.pwrite_seconds for wr in writers.values()),
                     fsync_seconds=sum(wr.fsync_seconds for wr in writers.values()),
-                    bytes_written=st['rows'] * sum(np.dtype(d).itemsize for _, d in LABEL_FILES),
+                    bytes_written=st['rows'] * sum(d.itemsize for _, d in label_files(nc)),
                     part_files=bool(rank), wall_seconds=time.perf_counter()-t0, crc32=crcs)
     except Exception:
         for wr in writers.values(): wr.close(sync=False)
@@ -952,7 +967,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     if not rank and size > 1:
         dest = None
         try:
-            for key, _ in LABEL_FILES:  # one final file at a time, parts in rank order
+            for key, _ in label_files(nc):  # one final file at a time, parts in rank order
                 dest = NpyWriter(final(key))
                 for r in every[1:]:
                     first, end, crc = r['crc32'][key]
@@ -964,7 +979,7 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                                            'differ on disk from what it wrote')
                 dest.close(); fsync += dest.fsync_seconds; dest = None
             checked = [r['rank'] for r in every[1:]]
-            for key, _ in LABEL_FILES:
+            for key, _ in label_files(nc):
                 for r in every[1:]: os.remove(part(key, r['rank']))
         except Exception as e:
             if dest is not None: dest.close(sync=False)
@@ -1043,7 +1058,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
                 np.save(out / f'{tag}-umat.npy', lat.umat)
                 clock.finish('clustering')
-                for key, dtype in LABEL_FILES:  # created here; only rank 0 opens them
+                for key, dtype in label_files(nc):  # created here; only rank 0 opens them
                     created = np.lib.format.open_memmap(out / f'{tag}-{key}.npy', mode='w+', dtype=dtype, shape=(len(raw),))
                     del created
                 prepared = ('ok', nc)
@@ -1437,9 +1452,10 @@ def untrainable(names):
     return '; '.join(problems) or None
 
 
-def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True, output_per_row=16):
+def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True, output_per_row=None, ranks=1):
     """Check scratch and output capacity before pooling or training starts."""
     from aweSOM.pool_statistics import scratch_root
+    from aweSOM.distributed import row_range
     scratch = scratch_root(args.scratch,args.out.parent)
     output = args.out.parent.resolve()
     # Distance runs are removed before concurrent feature runs are formed.
@@ -1448,11 +1464,15 @@ def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_ne
     deferred = getattr(args,'statistics','inline') == 'later'
     scratch_bytes = rows*max(16,(8 if itemsize == 4 else 16)*workers)*concurrent
     if deferred: scratch_bytes = rows*8 if full_run and pool_new else 0
-    output_bytes = rows*output_per_row
+    labels, rest = label_bytes(args.lattices)
+    per_row = labels + rest if output_per_row is None else output_per_row
+    # An MPI --fit keeps rank 0's full-size label files and the other ranks' part files until
+    # rank 0 has copied the parts in (label_rows).
+    output_bytes = per_row*(2*rows - row_range(rows, 0, ranks)[1])
     if full_run:
         pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
         fits = len(args.lattices)*len(args.seeds)
-        output_bytes = rows*(pool_bytes+4*fits+12*(fits if deferred else concurrent))
+        output_bytes = rows*(pool_bytes+labels*fits+rest*(fits if deferred else concurrent))
     if on_tigris(args.out, scratch):  # no free-space reads on RIT RC; nothing recorded
         return dict(scratch_bytes=scratch_bytes,output_bytes=output_bytes,shared_filesystem=None)
     scratch_free = shutil.disk_usage(scratch).free  # sysinfo-ok: GP-only branch, skipped on RIT RC
@@ -1489,7 +1509,8 @@ def statistics_only(args):
         setattr(args,key,bundle['settings'][key])
     with h5py.File(source/'pool.h5','r') as h:
         rows,features = h['raw'].shape
-        fit_disk_budget(args,rows,features,h['raw'].dtype.itemsize,output_per_row=4*len(records))
+        fit_disk_budget(args,rows,features,h['raw'].dtype.itemsize,  # copies each fit's labels
+                        output_per_row=sum(np.load(source/f"{r['tag']}-labels.npy",mmap_mode='r').itemsize for r in records))
     for record in records:
         tag = record['tag']
         model = SOMModel.load(source/f'{tag}.h5')
@@ -1613,7 +1634,7 @@ def main(argv=None):
         if not (args.collect or args.pool_only):
             with h5py.File(directory/'pool.h5','r') as h:
                 fit_disk_budget(args,len(h['raw']),h['raw'].shape[1],h['raw'].dtype.itemsize,
-                                full_run=not bool(args.fit),pool_new=False)
+                                full_run=not bool(args.fit),pool_new=False,ranks=1 if comm is None else comm.Get_size())
     else:
         records,quota,disk,mismatches = inspect(args)
         if not args.pool_only:

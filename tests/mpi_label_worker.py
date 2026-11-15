@@ -13,10 +13,15 @@ from pathlib import Path
 
 import numpy as np
 
+from aweSOM.inference import narrow_label_dtype
 from aweSOM.stream import NpyWriter, predict_stream
 
 SHAPE = (8, 6)
 CHUNK = 97
+# File dtypes: the narrowest that holds the clusters (labels % 5) and the node IDs, as the
+# driver writes them.
+DTYPES = {"labels": narrow_label_dtype(np.arange(5)),
+          "nodes": narrow_label_dtype(np.arange(SHAPE[0] * SHAPE[1])), "distances": np.dtype("f8")}
 
 
 def lattice():
@@ -81,7 +86,7 @@ def main(out):
     for name, (make, n, backend) in cases().items():
         paths = {k: out / f"{name}-{k}.npy" for k in ("labels", "nodes", "distances")}
         if rank == 0:
-            for key, dtype in (("labels", "i4"), ("nodes", "i4"), ("distances", "f8")):
+            for key, dtype in DTYPES.items():
                 created = np.lib.format.open_memmap(paths[key], mode="w+", dtype=dtype, shape=(n,))
                 del created
         comm.Barrier()

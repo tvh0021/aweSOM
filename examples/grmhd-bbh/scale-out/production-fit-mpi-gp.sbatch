@@ -11,7 +11,8 @@
 #SBATCH --output=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=thccrg@rit.edu
-# One fit over four gp nodes, one MPI rank per node; rank 0 writes every output.
+# One fit over four gp nodes, one MPI rank per node; every rank labels part of the pool
+# and rank 0 writes the final outputs.
 # --job-name=so-sweep1 with --dependency=singleton: a second seed (and the scale-out
 # kit's sweeps) waits until this job ends.
 set -euo pipefail

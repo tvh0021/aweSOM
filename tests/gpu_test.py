@@ -1,4 +1,4 @@
-"""Hardware checks for exact CUDA arithmetic and training."""
+"""Hardware checks of the CUDA screen against the CPU float64 reference, and training."""
 import numpy as np
 import pytest
 
@@ -9,7 +9,7 @@ try:
 except cp.cuda.runtime.CUDARuntimeError:
     pytest.skip('CUDA driver unavailable', allow_module_level=True)
 
-from aweSOM._gpu import GpuSearcher
+from aweSOM._gpu_screen import GpuScreenSearcher
 from aweSOM.inference import _bmu_kernel
 from aweSOM.stream import train_batch_stream
 
@@ -29,7 +29,7 @@ def test_exact(features, dtype, case):
     elif case == 'subnormal':
         w *= 1e-160
         x = (x.astype(np.float64) * 1e-160).astype(dtype)
-    search = GpuSearcher(w, 37, 1, chunk=113, tile=16)
+    search = GpuScreenSearcher(w, 37, 1, chunk=113, tile=16)
     idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
     ri, rd = np.empty_like(idx), np.empty_like(d2)
     search(x, idx, d2)
@@ -44,5 +44,5 @@ def test_training():
     options = dict(xdim=48, ydim=34, epochs=5, chunk=2**18, final_pass='none',
                    n_threads=8, prefetch=False)
     cpu, _ = train_batch_stream(x, bmu='numba', **options)
-    gpu, _ = train_batch_stream(x, bmu='cuda', **options)
+    gpu, _ = train_batch_stream(x, bmu='cuda_screen', **options)
     np.testing.assert_array_equal(gpu.view(np.uint64), cpu.view(np.uint64))

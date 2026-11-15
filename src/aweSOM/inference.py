@@ -79,6 +79,7 @@ __all__ = [
     "best_match_nodes_kdtree",
     "best_match_nodes_patch",
     "best_match_nodes_screen",
+    "narrow_label_dtype",
     "predict",
     "benchmark",
 ]
@@ -231,7 +232,9 @@ def _screen_kernel(
             e = 2.0 * _U32 * (wmax + np.sqrt(xn2)) * 1.01 + 1e-18
             lo2 = np.sqrt(np.float64(s2[p]) / (1.0 + g)) - e
             hi1 = (np.sqrt(np.float64(s1[p]) / (1.0 - g)) + e) * (1.0 + 1e-12)
-            if lo2 > hi1:  # False for NaN/inf/overflow and near-ties
+            # False for NaN/inf and near-ties. An overflowed runner-up s2 bounds
+            # nothing (lo2 = inf), so it must be finite.
+            if lo2 > hi1 and s2[p] < np.inf:
                 j = j1[p]
                 acc64 = 0.0
                 for f in range(F):
@@ -979,6 +982,21 @@ def best_match_nodes_patch(
     return nodes_idx, dist2
 
 
+def narrow_label_dtype(ids) -> np.dtype:
+    """Smallest of uint8, uint16 and int32 that holds every value of ``ids``.
+
+    uint8 or uint16 needs every id non-negative and at most 255 or 65535;
+    otherwise (also for no ids) the result is int32.
+    """
+    ids = np.asarray(ids)
+    if ids.size and ids.min() >= 0:
+        top = ids.max()
+        for dtype in (np.uint8, np.uint16):
+            if top <= np.iinfo(dtype).max:
+                return np.dtype(dtype)
+    return np.dtype(np.int32)
+
+
 def predict(
     weights: np.ndarray,
     node_cluster: np.ndarray,
@@ -987,7 +1005,6 @@ def predict(
     return_distance: bool = False,
     backend: str = "screen",
     lattice_shape: tuple[int, int] | None = None,
-    hint: np.ndarray | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Assign each point the cluster id of its best-matching node.
 
@@ -1003,9 +1020,6 @@ def predict(
     CPU path on trained lattices of a few thousand nodes or more.
     ``backend="cuda_screen"`` uses a certified float32 CuPy scan with exact
     float64 distances and full-scan fallback for ambiguous rows.
-    ``backend="cuda"`` runs the optional exact float64 CuPy search.
-    ``backend="cuda_prune"`` uses exact box pruning, optionally warm-started
-    with one previous BMU per row in ``hint``.
     ``backend="jax"`` runs :func:`best_match_nodes_jax` with
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
@@ -1021,10 +1035,9 @@ def predict(
         return_distance (bool, optional): Also return the Euclidean BMU distance.
             Defaults to False.
         backend (str, optional): ``"screen"``, ``"numba"``, ``"kdtree"``,
-            ``"patch"``, ``"cuda"``, ``"cuda_screen"``, ``"cuda_prune"`` or ``"jax"``. Defaults to ``"screen"``.
+            ``"patch"``, ``"cuda_screen"`` or ``"jax"``. Defaults to ``"screen"``.
         lattice_shape (tuple[int, int] | None, optional): ``(xdim, ydim)``,
-            required by ``backend="patch"``; optional locality for ``"cuda_prune"``.
-        hint (np.ndarray | None, optional): Previous int32 BMU per row for CUDA pruning.
+            required by ``backend="patch"``.
 
     Returns:
         np.ndarray | tuple[np.ndarray, np.ndarray]: int32 [N] labels, and [N]
@@ -1057,21 +1070,10 @@ def predict(
         nodes_idx, dist2 = best_match_nodes_cuda_screen(
             weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
         )
-    elif backend == "cuda_prune":
-        from ._gpu_prune import best_match_nodes_cuda_prune
-        nodes_idx, dist2 = best_match_nodes_cuda_prune(
-            weights, data, lattice_shape=lattice_shape, hint=hint,
-            chunk=DEFAULT_CHUNK if chunk is None else chunk
-        )
-    elif backend == "cuda":
-        from ._gpu import best_match_nodes_cuda
-        nodes_idx, dist2 = best_match_nodes_cuda(
-            weights, data, chunk=DEFAULT_CHUNK if chunk is None else chunk
-        )
     elif backend == "jax":
         nodes_idx, dist2 = best_match_nodes_jax(weights, data, chunk=chunk)
     else:
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda", "cuda_screen", "cuda_prune" or "jax"')
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda_screen" or "jax"')
     labels = node_cluster[nodes_idx]
     if return_distance:
         return labels, np.sqrt(dist2)

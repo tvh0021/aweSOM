@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from aweSOM import _gpu, _gpu_screen, distributed
+from aweSOM import _gpu_screen, distributed
 from aweSOM.inference import best_match_nodes, best_match_nodes_patch
 from aweSOM.stream import BMUSearcher, NpyWriter, copy_npy_rows, npy_crc32, predict_stream
 
@@ -26,6 +26,7 @@ from production_pool_mpi_test import FakeComm, prepared  # noqa: F401  (module f
 from production_pool_test import pool
 
 HERE = Path(__file__).parent
+ROW_BYTES = sum(d.itemsize for d in worker.DTYPES.values())  # bytes per row of the three label files
 
 
 def bitwise(a, b):
@@ -117,18 +118,18 @@ def test_gpu_device_without_devices(shared_split):
 
 def test_cuda_available(monkeypatch):
     monkeypatch.setitem(sys.modules, "cupy", None)  # not installed
-    assert _gpu.cuda_available() is False
+    assert _gpu_screen.cuda_available() is False
     for count in (0, 2):
         runtime = SimpleNamespace(getDeviceCount=lambda count=count: count)
         monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(cuda=SimpleNamespace(runtime=runtime)))
-        assert _gpu.cuda_available() is (count > 0)
+        assert _gpu_screen.cuda_available() is (count > 0)
 
     def broken():
         raise RuntimeError("cudaErrorNoDevice")
 
     runtime = SimpleNamespace(getDeviceCount=broken)
     monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(cuda=SimpleNamespace(runtime=runtime)))
-    assert _gpu.cuda_available() is False
+    assert _gpu_screen.cuda_available() is False
 
 
 # ------------------------------------------------------------------ NpyWriter
@@ -258,6 +259,22 @@ class StandIn:
         idx[:], d2[:], fb = _gpu_screen._cuda_screen_reference(self.w, x, return_fallbacks=True)
         return fb
 
+    def cluster_map(self, clusters, dtype=np.int32):
+        return np.asarray(clusters).astype(dtype)
+
+    def submit(self, x, out, d2=None, clusters=None):  # synchronous: wait has nothing to do
+        idx, dist = _gpu_screen._cuda_screen_reference(self.w, x)
+        out[:] = idx if clusters is None else clusters[idx]
+        if d2 is not None:
+            d2[:] = dist
+        return 0
+
+    def wait(self, token=None):
+        pass
+
+    def cancel(self):
+        pass
+
 
 def test_bmu_searcher_matches_reference(monkeypatch):
     monkeypatch.setattr(_gpu_screen, "GpuScreenSearcher", StandIn)
@@ -311,7 +328,7 @@ def test_shared_mode_ranks_in_turn(name, size, tmp_path):
     ref_lab, ref_st = worker.label(make(), backend, n_samples=n)
     ref_node, ref_d2 = best_match_nodes(worker.lattice(), worker.data(n))  # every case labels data(n)
     files = {}
-    for key, dtype in (("labels", "i4"), ("nodes", "i4"), ("distances", "f8")):
+    for key, dtype in worker.DTYPES.items():
         created = np.lib.format.open_memmap(tmp_path / f"{key}.npy", mode="w+", dtype=dtype, shape=(n,))
         del created
     for r in range(size):
@@ -324,7 +341,7 @@ def test_shared_mode_ranks_in_turn(name, size, tmp_path):
         local, lst = worker.label(make(), backend, RankComm(r, size), n_samples=n)
         bitwise(local, ref_lab[lst["start"]:lst["stop"]])
     bitwise(np.load(tmp_path / "labels.npy"), ref_lab)
-    bitwise(np.load(tmp_path / "nodes.npy"), ref_node)
+    bitwise(np.load(tmp_path / "nodes.npy"), ref_node.astype(worker.DTYPES["nodes"]))
     bitwise(np.load(tmp_path / "distances.npy"), np.sqrt(ref_d2))
     assert ref_st["start"] == 0 and ref_st["stop"] == n and ref_st["ranks"] == 1
 
@@ -351,7 +368,7 @@ def test_rank_local_outputs(name, size):
             dist.append(mine["out_distance"])
             if not mixed:
                 nodes[lo:hi] = mine["out_node"]
-        bitwise(np.concatenate(labels), ref_lab)
+        bitwise(np.concatenate(labels), ref_lab.astype(np.int32))  # an explicit int32 out
         bitwise(nodes, ref_node)
         bitwise(np.concatenate(dist), np.sqrt(ref_d2))
 
@@ -416,7 +433,7 @@ def test_mpirun_files_equal_single_process(tmp_path, ranks):
         single = {k: tmp_path / f"single-{name}-{k}.npy" for k in ("labels", "nodes", "distances")}
         nodes, d2 = best_match_nodes(worker.lattice(), worker.data(n))
         np.save(single["labels"], lab)
-        np.save(single["nodes"], nodes)
+        np.save(single["nodes"], nodes.astype(worker.DTYPES["nodes"]))
         np.save(single["distances"], np.sqrt(d2))
         for k, path in single.items():
             assert (tmp_path / f"{name}-{k}.npy").read_bytes() == path.read_bytes(), (name, k)
@@ -435,7 +452,7 @@ def single_files(tmp_path, tag, n):
     """np.save of the single-process labels, nodes and distances: today's one-rank bytes."""
     lab, _ = worker.label(worker.data(n), "patch", n_samples=n)
     nodes, d2 = best_match_nodes(worker.lattice(), worker.data(n))
-    ref = {"labels": lab, "nodes": nodes, "distances": np.sqrt(d2)}
+    ref = {"labels": lab, "nodes": nodes.astype(worker.DTYPES["nodes"]), "distances": np.sqrt(d2)}
     paths = {}
     for k, a in ref.items():
         paths[k] = tmp_path / f"np-save-{tag}-{k}.npy"
@@ -475,7 +492,7 @@ def test_mpirun_label_rows_one_writer_per_file(tmp_path, ranks):
         assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, ranks) for r in range(ranks)]
         assert rec["crc_checked_ranks"] == list(range(1, ranks))
         assert [r["part_files"] for r in rec["ranks"]] == [False] + [True] * (ranks - 1)
-        assert rec["assemble_bytes"] == 16 * sum(r["rows"] for r in rec["ranks"][1:])
+        assert rec["assemble_bytes"] == ROW_BYTES * sum(r["rows"] for r in rec["ranks"][1:])
     assert not list(tmp_path.glob("*.part*"))
     for r in report["ranks"]:
         finals = [p for p in r["opened"] if output_guard.is_final(p)]
@@ -539,6 +556,8 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
             sys.modules["cupy"] = SimpleNamespace(cuda=SimpleNamespace(runtime=runtime))
             screen.GpuScreenSearcher = StandIn
             StandIn.devices = []
+        else:  # a CPU-only machine, also on a GPU node
+            sys.modules["cupy"] = None
         if mode == "no-shared-out" and rank == 1:
             def missing(path):
                 raise FileNotFoundError(2, "No such file or directory", str(path))
@@ -612,19 +631,19 @@ def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # no
         if r:  # every other rank opens only its own part files
             assert {Path(p).name for p in opened} == {f"4x3-s42-{k}.part{r}.npy" for k in ("labels", "nodes", "distances")}
     lab, nodes, dist = relabel(res)
-    bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.int32))
-    bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes)
+    bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.uint8))  # narrow: 12 nodes, few clusters
+    bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes.astype(np.uint8))
     bitwise(np.load(res / "4x3-s42-distances.npy"), dist)
     rec = json.loads((res / "4x3-s42.json").read_text())["labelling"]
     n = len(lab)
     assert rec["requested"] == "auto" and rec["backend"] == ("cuda_screen" if mode == "gpu" else "patch")
     assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, size) for r in range(size)]
     assert rec["crc_checked_ranks"] == list(range(1, size))
-    assert rec["assemble_bytes"] == 16 * (n - rec["ranks"][0]["rows"])
+    assert rec["assemble_bytes"] == 10 * (n - rec["ranks"][0]["rows"])  # uint8 + uint8 + float64
     for key in ("assemble_seconds", "assemble_read_seconds", "assemble_write_seconds", "assemble_fsync_seconds"):
         assert rec[key] >= 0
     for r in rec["ranks"]:
-        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 16 * r["rows"]
+        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 10 * r["rows"]
         assert r["pwrite_seconds"] >= 0 and r["fsync_seconds"] >= 0
     devices = [payload for _, payload, _ in results]
     if mode == "gpu":

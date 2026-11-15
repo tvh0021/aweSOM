@@ -83,7 +83,7 @@ import numpy as np
 from numba import njit, prange
 
 from ._batch_core import radius_schedule
-from ._gpu import cuda_available
+from ._gpu_screen import cuda_available
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
@@ -92,6 +92,7 @@ from .inference import (
     _patch_kernel,
     _screen_kernel,
     lattice_patches,
+    narrow_label_dtype,
     predict,
 )
 
@@ -624,8 +625,8 @@ class _BMU:
     original node IDs and reference arithmetic, including the lowest-index tie
     rule.
 
-    ``"cuda_screen"`` certifies a float32 winner or falls back to float64.
-    ``"cuda"`` uses optional CuPy float64 brute force in every epoch.
+    ``"cuda_screen"`` (optional CuPy) certifies a float32 winner or falls
+    back to float64, as ``"screen"`` does on the CPU.
     ``"auto"`` times the screen and patch searches on the first rows of the
     first chunk and keeps the faster one for the pass (both are exact, with
     bitwise-equal results, so the choice only affects speed).
@@ -637,16 +638,10 @@ class _BMU:
                  first_epoch: bool = False, device: Optional[int] = None):
         self.w = np.ascontiguousarray(weights, np.float64)
         self.kind = kind
-        # The CUDA device is passed only when chosen, so stand-in searchers need no new argument.
-        on = {} if device is None else {"device": int(device)}
-        if kind == "cuda_prune":
-            from ._gpu_prune import PruneGpuSearcher
-            self.gpu = PruneGpuSearcher(self.w, (xdim, ydim), **on)
-        if kind == "cuda":
-            from ._gpu import GpuSearcher
-            self.gpu = GpuSearcher(self.w, xdim, ydim, **on)
         if kind == "cuda_screen":
             from ._gpu_screen import GpuScreenSearcher
+            # The device is passed only when chosen, so stand-in searchers need no new argument.
+            on = {} if device is None else {"device": int(device)}
             self.gpu = GpuScreenSearcher(self.w, xdim, ydim, **on)
         self.feature = first_epoch
         if kind in ("screen", "patch", "auto") and (
@@ -663,7 +658,7 @@ class _BMU:
                 self.patches = lattice_patches(self.w, xdim, ydim)
 
     def _run(self, kind: str, block, idx, d2) -> int:
-        if kind in ("cuda", "cuda_screen", "cuda_prune"):
+        if kind == "cuda_screen":
             return self.gpu(block, idx, d2)
         if kind == "screen":
             return int(_screen_kernel(self.w, self.w32, self.wmax, block, idx, d2, SCREEN_TILE))
@@ -692,9 +687,8 @@ class BMUSearcher:
     For repeated small calls (for example labelling the cells of one MPI rank
     at every step), this keeps the backend state: the patch tables, or the
     CUDA weights, compiled kernels and staging buffers on ``device``. Backends
-    ``"patch"`` (needs ``lattice_shape``), ``"screen"``, ``"numba"``,
-    ``"cuda"`` and ``"cuda_screen"`` give bitwise the same nodes (lowest index
-    on ties) and float64 squared distances as
+    ``"patch"`` (needs ``lattice_shape``), ``"screen"``, ``"numba"`` and
+    ``"cuda_screen"`` give bitwise the same nodes (lowest index on ties) and float64 squared distances as
     :func:`aweSOM.inference.best_match_nodes`.
 
     Example:
@@ -883,8 +877,8 @@ def train_batch_stream(
             float64), ``"patch"`` (bounding-ball pruned search over lattice
             patches, :func:`aweSOM.inference.best_match_nodes_patch`; the first
             epoch uses feature-space groups with certified bounds) or ``"numba"``
-            (float64 brute force). Optional ``"cuda"`` and ``"cuda_screen"``
-            use CuPy. All give the exact float64 BMU
+            (float64 brute force). Optional ``"cuda_screen"`` uses CuPy and
+            a CUDA device. All give the exact float64 BMU
             (bitwise-equal labels), so the weights do not depend on the choice.
         sample_fraction: Fraction of the rows used per epoch (fresh stratified
             block sample every epoch; see the module docstring). 1.0 = all rows.
@@ -926,7 +920,8 @@ def train_batch_stream(
         every rank). ``info`` has the keys of :func:`aweSOM.batch.train_batch`
         (``radius``, ``qe``, ``qe_initial``, ``hits``, ``epoch_time``,
         ``chunk``, ``n_samples``) plus ``rows_per_epoch``, ``fallbacks`` (rows
-        that needed the float64 rescan), ``io_wait``, ``bmu_time``,
+        that needed the float64 rescan; always 0 for ``"cuda_screen"``, which
+        keeps no device counter), ``io_wait``, ``bmu_time``,
         ``acc_time``, ``update_time``, ``reduce_time``, ``checkpoint_time``
         (seconds per epoch; io/bmu/acc of this rank), ``final_time``,
         ``n_threads``, ``peak_rss`` (bytes, this rank), ``ranks``, ``rank``,
@@ -937,8 +932,8 @@ def train_batch_stream(
         measured on the next epoch's sample. ``hits`` is empty when
         ``final_pass="none"``.
     """
-    if bmu not in ("auto", "screen", "patch", "numba", "cuda", "cuda_screen"):
-        raise ValueError('bmu must be "auto", "screen", "patch", "numba", "cuda" or "cuda_screen"')
+    if bmu not in ("auto", "screen", "patch", "numba", "cuda_screen"):
+        raise ValueError('bmu must be "auto", "screen", "patch", "numba" or "cuda_screen"')
     if not 0.0 < sample_fraction <= 1.0:
         raise ValueError("sample_fraction must be in (0, 1]")
     if final_pass not in ("full", "sample", "none"):
@@ -1152,8 +1147,7 @@ def _version() -> str:
 # --------------------------------------------------------------------- inference
 
 
-_GPU_BACKENDS = ("cuda", "cuda_screen", "cuda_prune")
-_SEARCH_BACKENDS = ("numba", "screen", "patch", "cuda", "cuda_screen")
+_SEARCH_BACKENDS = ("numba", "screen", "patch", "cuda_screen")
 
 
 def _range_chunks(source, chunk: int, start: int, stop: int) -> Iterator[np.ndarray]:
@@ -1192,7 +1186,6 @@ def predict_stream(
     lattice_shape: Optional[tuple[int, int]] = None,
     prefetch: bool = True,
     n_samples: Optional[int] = None,
-    hint: Optional[np.ndarray] = None,
     out_node: Any = None,
     comm: Any = None,
     device: Optional[int] = None,
@@ -1220,33 +1213,36 @@ def predict_stream(
       is slow on network file systems (see :class:`NpyWriter`), and a
       writable ``numpy.memmap`` there can even overwrite other nodes' rows.
       The call returns once this rank's rows are written; close the writers
-      before anyone reads them. For GPU backends the call is collective (the
-      device choice uses the node communicator).
+      before anyone reads them. For ``"cuda_screen"`` the call is
+      collective (the device choice uses the node communicator).
     - Local blocks, no ``comm``: each rank holds its own rows (for example the
       cells of one AsterX rank) and calls this function, or
       :func:`aweSOM.inference.predict`, on that block. Pass
-      ``device=aweSOM.distributed.gpu_device(comm)`` for a GPU backend when a
-      node has several GPUs.
+      ``device=aweSOM.distributed.gpu_device(comm)`` for ``"cuda_screen"``
+      when a node has several GPUs.
 
     Args:
         weights: ``(nodes, F)`` lattice.
         node_cluster: ``(nodes,)`` cluster id per node (use ``np.arange(nodes)``
             for BMU indices).
         data_source: As in :func:`train_batch_stream` (already scaled).
-        out: Writable ``(N,)`` int32 array-like (``ndarray``, ``memmap``,
-            ``h5py.Dataset``, :class:`NpyWriter`); allocated in memory if
-            None. With ``comm`` also ``(hi - lo,)`` (see above).
+        out: Writable ``(N,)`` integer array-like (``ndarray``, ``memmap``,
+            ``h5py.Dataset``, :class:`NpyWriter`) that holds every cluster
+            id; with ``comm`` also ``(hi - lo,)`` (see above). If None, it is
+            allocated in memory as the smallest of uint8, uint16 and int32
+            that holds every entry of ``node_cluster``
+            (:func:`aweSOM.inference.narrow_label_dtype`): uint8 for up to
+            256 clusters, uint16 for node IDs of up to 65536 nodes.
         out_distance: Optional writable array for the BMU distance, sized like ``out``.
         chunk: Rows per chunk.
-        backend: ``predict`` backend, including optional ``"cuda"``, ``"cuda_screen"`` and ``"cuda_prune"``.
+        backend: ``predict`` backend, including the optional ``"cuda_screen"``.
             Default ``"screen"``; ``"patch"`` is exact too and faster on trained lattices, needs ``lattice_shape``.
         lattice_shape: ``(xdim, ydim)`` for ``backend="patch"``.
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
-        hint: Previous int32 BMU per source row for ``"cuda_prune"``.
-        out_node: Optional writable int32 array for the BMU node index, sized like ``out``.
+        out_node: Optional writable integer array for the BMU node index, sized like ``out``.
         comm: mpi4py communicator: label this rank's row range only (see above).
-        device: CUDA device index for GPU backends. Default: with ``comm``,
+        device: CUDA device index for ``"cuda_screen"``. Default: with ``comm``,
             :func:`aweSOM.distributed.gpu_device` (the node-local rank modulo
             the visible device count); without, the current device.
 
@@ -1255,9 +1251,8 @@ def predict_stream(
         write, start and stop (this rank's rows), rank, ranks and device
         (CUDA index, or None).
     """
-    if backend not in _SEARCH_BACKENDS + ("cuda_prune", "kdtree", "jax"):
-        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda", "cuda_screen", '
-                         '"cuda_prune" or "jax"')
+    if backend not in _SEARCH_BACKENDS + ("kdtree", "jax"):
+        raise ValueError('backend must be "numba", "kdtree", "screen", "patch", "cuda_screen" or "jax"')
     if backend == "patch" and lattice_shape is None:
         raise ValueError('backend="patch" needs lattice_shape=(xdim, ydim)')
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
@@ -1275,11 +1270,13 @@ def predict_stream(
             if a is not None and len(a) not in (source.n, hi - lo):
                 raise ValueError(f"with comm, {name} must hold all {source.n} rows or this rank's {hi - lo}")
     if out is None:
-        out = np.empty(hi - lo, np.int32)
+        out = np.empty(hi - lo, narrow_label_dtype(clusters))
     # Row pos goes to index pos - base: base = lo for an array of this rank's rows only.
-    # (Lengths N and hi - lo agree only when lo = 0, where both bases are 0.)
-    base, base_d, base_n = (0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node))
-    if backend in _GPU_BACKENDS and device is None and comm is not None:
+    # (Lengths N and hi - lo agree only when lo = 0, where both bases are 0.) Without comm
+    # every base is 0, and outputs need no len().
+    bases = (0, 0, 0) if comm is None else tuple(
+        0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node))
+    if backend == "cuda_screen" and device is None and comm is not None:
         from .distributed import gpu_device
 
         device = gpu_device(comm)
@@ -1288,31 +1285,39 @@ def predict_stream(
     if prefetch:
         it = _prefetched(it, stats)
     t_start = time.perf_counter()
-    pos = lo
+    if backend == "cuda_screen":
+        gpu = _BMU(weights, backend, len(clusters), 1, device=device).gpu
+        rows = _label_queued(gpu, clusters, it, (out, out_distance, out_node), lo, bases, stats)
+    else:
+        rows = _label_host(weights, clusters, it, (out, out_distance, out_node), lo, bases, stats,
+                           backend, lattice_shape)
+    stats["seconds"] = time.perf_counter() - t_start
+    stats.update(rows=rows, start=lo, stop=hi, rank=rank, ranks=size,
+                 device=None if device is None else int(device))
+    return out, stats
+
+
+def _label_host(weights, clusters, chunks, outs, pos, bases, stats, backend, lattice_shape) -> int:
+    """Label ``chunks`` with a CPU backend from row ``pos`` on; return the row count."""
+    out, out_distance, out_node = outs
+    base, base_d, base_n = bases
     searcher = None
     if backend in _SEARCH_BACKENDS:
         xdim, ydim = lattice_shape if backend == "patch" else (len(clusters), 1)
-        searcher = _BMU(weights, backend, xdim, ydim, device=device)
-    elif backend == "cuda_prune":
-        from ._gpu_prune import PruneGpuSearcher, _hints
-        on = {} if device is None else {"device": int(device)}
-        searcher = PruneGpuSearcher(weights, lattice_shape, chunk=chunk, **on)
-        hint = _hints(hint, source.n, len(clusters)) if hint is not None else None
+        searcher = _BMU(weights, backend, xdim, ydim)
     else:
         from .inference import best_match_nodes_jax, best_match_nodes_kdtree
 
         search = best_match_nodes_kdtree if backend == "kdtree" else best_match_nodes_jax
-    for c in it:
+    first = pos
+    for c in chunks:
         t0 = time.perf_counter()
         m = c.shape[0]
         if searcher is None:
             idx, d2 = search(weights, c, chunk=m)
         else:
             idx, d2 = np.empty(m, np.int32), np.empty(m, np.float64)
-            if backend == "cuda_prune":
-                searcher(c, idx, d2, None if hint is None else hint[pos : pos + m])
-            else:
-                searcher(c, idx, d2)
+            searcher(c, idx, d2)
         labels = clusters[idx]
         t1 = time.perf_counter()
         out[pos - base : pos - base + m] = labels
@@ -1323,10 +1328,80 @@ def predict_stream(
         pos += m
         stats["compute"] += t1 - t0
         stats["write"] += time.perf_counter() - t1
-    stats["seconds"] = time.perf_counter() - t_start
-    stats.update(rows=pos - lo, start=lo, stop=hi, rank=rank, ranks=size,
-                 device=None if device is None else int(device))
-    return out, stats
+    return pos - first
+
+
+def _label_dtype(out: Any, clusters: np.ndarray) -> np.dtype:
+    """Device label dtype: ``out``'s integer dtype if it holds every cluster id, else int32.
+
+    Writing ``clusters.astype(dt)[idx]`` then equals writing ``clusters[idx]``.
+    """
+    dt = np.dtype(getattr(out, "dtype", np.int32))
+    if dt.kind in "iu" and dt.itemsize <= 4 and np.array_equal(clusters.astype(dt), clusters):
+        return dt
+    return np.dtype(np.int32)
+
+
+def _label_queued(gpu, clusters, chunks, outs, pos, bases, stats) -> int:
+    """Label ``chunks`` on a CUDA searcher with ``submit`` from row ``pos`` on; return the row count.
+
+    Cluster ids are gathered on the device. Chunk ``k`` is written to ``out``
+    while chunk ``k + 1`` runs, so the device does not idle between chunks.
+    An ndarray ``out`` (memmaps included) of the label dtype receives labels
+    straight from the pinned staging buffers, on the same host thread and at
+    the same point between launches as a buffered write, so its write time is
+    counted as compute; other outputs go through two reused host buffers.
+    With ``out_node`` the device returns int32 nodes instead and the host
+    maps them to clusters. Distances leave the device only when
+    ``out_distance`` is given. ``bases`` are the first rows of ``out``,
+    ``out_distance`` and ``out_node`` (see :func:`predict_stream`).
+    """
+    out, out_distance, out_node = outs
+    base, base_d, base_n = bases
+    nodes = out_node is not None
+    dt = np.dtype(np.int32) if nodes else _label_dtype(out, clusters)
+    table = None if nodes else gpu.cluster_map(clusters, dt)
+    direct = table is not None and isinstance(out, np.ndarray) and out.dtype == dt
+    buffers = [None, None]
+    queued = None
+    first = pos
+
+    def emit(token, start, m, labels, d2):
+        t0 = time.perf_counter()
+        gpu.wait(token)
+        t1 = time.perf_counter()
+        if nodes:
+            out_node[start - base_n : start - base_n + m] = labels
+            labels = clusters[labels]
+        if labels is not None:
+            out[start - base : start - base + m] = labels
+        if d2 is not None:
+            out_distance[start - base_d : start - base_d + m] = np.sqrt(d2, out=d2)
+        stats["compute"] += t1 - t0
+        stats["write"] += time.perf_counter() - t1
+
+    try:
+        for k, c in enumerate(chunks):
+            t0 = time.perf_counter()
+            m = c.shape[0]
+            b = buffers[k % 2]
+            if b is None or b[0] < m:
+                b = buffers[k % 2] = (m, None if direct else np.empty(m, dt),
+                                      None if out_distance is None else np.empty(m, np.float64))
+            labels = None if direct else b[1][:m]
+            d2 = None if out_distance is None else b[2][:m]
+            token = gpu.submit(c, out[pos - base : pos - base + m] if direct else labels, d2, table)
+            stats["compute"] += time.perf_counter() - t0
+            if queued is not None:
+                emit(*queued)
+            queued = token, pos, m, labels, d2
+            pos += m
+        if queued is not None:
+            emit(*queued)
+    except BaseException:
+        gpu.cancel()
+        raise
+    return pos - first
 
 
 def stratified_sample(

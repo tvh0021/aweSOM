@@ -51,15 +51,17 @@ After all jobs finish, collect their results with the same training options:
 Collection copies fit artifacts before updating selection metadata. It retains
 source fit files and refuses missing seeds, duplicate fits, and mismatched pool
 or training settings. Collection currently copies label vectors as well, so
-budget four bytes per row per model on the destination filesystem.
+budget one byte per row per model (uint8 labels, up to 255 clusters) on the destination filesystem.
 
 ## Run one fit over four nodes (MPI)
 
 `production-fit-mpi-gp.sbatch` trains one fit on four gp-default nodes, one MPI
 rank per node with 32 threads. Every rank trains on the pool windows it owns.
-Rank 0 alone labels the pool, computes statistics and writes OUT; the other
-ranks write no persistent outputs (only their node-local Numba cache and stdout
-lines in the job log). Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
+Every rank labels its own row range of the pool. The other ranks write
+temporary part files to OUT, which rank 0 copies into the final label files and
+then deletes. Rank 0 alone computes statistics and writes the persistent
+outputs; the other ranks keep only their node-local Numba cache and stdout lines
+in the job log. Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
 (`/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site`
 on GP). The job runs the affinity pre-flight of
 `examples/slurm_scripts/scale_out/common.sh` first and writes it to `$OUT-launch`.
@@ -87,8 +89,9 @@ done
 Wall time: training takes about `EPOCHS * ROWS_PER_EPOCH / (2.0e6 * 0.93 * 4)`
 seconds (one node measured about 2.0e6 rows/s on real data at 40 epochs; four
 nodes at about 0.93 efficiency): 2.2 h for the default 60 epochs of 1e9 rows
-(phases 20 at r_max, 10 tapering, 30 at r_min; `--phases P,T,M` sets others). Rank 0 then
-labels the whole pool on one node, about `POOL_ROWS / 2.0e6` seconds, and inline
+(phases 20 at r_max, 10 tapering, 30 at r_min; `--phases P,T,M` sets others). Every rank then
+labels its own row range of the pool, about `POOL_ROWS / (2.0e6 * 4)` seconds on
+four nodes, and inline
 statistics add about an hour at 1e9 rows. The six-hour limit covers 1e9 rows.
 The fit record carries `ranks`, `rank_hostnames`, `rank_numba_threads` and
 `affinity_restored` (null on a rank where MPI_Init left its CPU set alone).
@@ -183,7 +186,7 @@ was about 1 GB/s writing and 1.5–3.5 GB/s reading.
 Before any 1e10 statistics submission, time a 1e9 `--statistics-only` run
 to check the wall-time request.
 
-Completion copies 40 GB of labels per model at 1e10 rows into the new OUT,
+Completion copies 10 GB of uint8 labels per model at 1e10 rows into the new OUT,
 in addition to small model and JSON files. When OUT and scratch share a
 filesystem, the space guard adds both demands. If SCRATCH is omitted, the
 launcher uses SLURM_TMPDIR, TMPDIR, then the output filesystem.
@@ -215,8 +218,8 @@ Completion restores the saved chunk size and tube thresholds. It reads saved
 weights, labels, nodes and distances and performs no training or BMU search.
 The original pool, deferred model, `fit-results.json`, `pool-state.json`, label
 and U-matrix files must remain available, together with the retained
-`{tag}-nodes.npy` and `{tag}-distances.npy`. Those two files use 120 GB per model
-at 1e10 rows; labels use another 40 GB.
+`{tag}-nodes.npy` and `{tag}-distances.npy`. Those two files use 100 GB per model
+at 1e10 rows (uint16 nodes, float64 distances); uint8 labels use another 10 GB.
 
 Deferred fit JSON has `statistics: "deferred"`. The following fields are null:
 
@@ -252,7 +255,7 @@ to retry statistics. No launcher or completion command deletes them.
 After both statistics jobs finish, collect their completed outputs. A
 still-deferred fit is rejected with a clear `run --statistics-only first` error.
 Collection copies artifacts and creates the frozen models and manifest, so its
-OUT needs another 80 GB for the two label vectors (4 bytes per row each) at this pool size.
+OUT needs another 20 GB for the two label vectors (1 byte per row each) at this pool size.
 
 ```bash
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
