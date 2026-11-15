@@ -57,9 +57,15 @@ budget one byte per row per model (uint8 labels, up to 255 clusters) on the dest
 
 `production-fit-mpi-gp.sbatch` trains one fit on four gp-default nodes, one MPI
 rank per node with 32 threads. Every rank trains on the pool windows it owns.
-Every rank labels its own row range of the pool. The other ranks write
-temporary part files to OUT, which rank 0 copies into the final label files and
-then deletes. Rank 0 alone computes statistics and writes the persistent
+Every rank labels its own row range of the pool and writes its own part file to
+`<tag>-{labels,nodes,distances}.parts/part-RRRR.npy`. Single-rank fits continue
+to write plain `<tag>-{labels,nodes,distances}.npy`. After all ranks sync their
+parts, rank 0 checks the headers and row ranges and publishes
+`<tag>-{labels,nodes,distances}.parts/manifest.json` with no rank-0 copy.
+`aweSOM.open_npy`, SCE, `sheet_stats`, `--statistics-only`, `--collect`, and the
+analysis scripts read `.parts/` directories without stitching. Run
+`python -m aweSOM.npy_parts stitch <path>.parts` when an external tool needs a
+single `.npy` file. Rank 0 alone computes statistics and writes the persistent
 outputs; the other ranks keep only their node-local Numba cache and stdout lines
 in the job log. Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
 (`/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site`

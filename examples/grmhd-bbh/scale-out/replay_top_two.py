@@ -33,8 +33,9 @@ def main(results):
     if names != list(pool.SEVEN_FEATURE_NAMES):
         raise ValueError(f'pool feature names {names} differ from production_pool.SEVEN_FEATURE_NAMES')
     rows = []
+    from aweSOM.npy_parts import open_npy
     for shape in ('91x64', '48x34'):
-        labels = {s: np.load(results/f'{shape}-s{s}-labels.npy') for s in SEEDS}
+        labels = {s: open_npy(results/f'{shape}-s{s}-labels.npy', mmap_mode=None) for s in SEEDS}
         K = {s: int(labels[s].max())+1 for s in SEEDS}
         chi_col = names.index('log_chi_B')
         effects = {s: pool.rank_effects(raw, labels[s], K[s]) for s in SEEDS}

@@ -174,8 +174,9 @@ def stage_labels(args) -> None:
     raw_train = raw_train[:200_000]
 
     # optional cross-check against saved training labels at the same merge cost
-    if args.ref_labels and Path(args.ref_labels).exists():
-        ref = np.load(args.ref_labels, mmap_mode="r")[:200_000]
+    from aweSOM.npy_parts import npy_output_exists, open_npy
+    if args.ref_labels and npy_output_exists(args.ref_labels):
+        ref = open_npy(args.ref_labels, mmap_mode="r")[:200_000]
         mine = model.predict(raw_train, backend="screen")
         agree = float(np.mean(ref == mine))
         log(f"agreement with {Path(args.ref_labels).name} on 2e5 training rows: {agree:.5f}")
@@ -251,9 +252,11 @@ def _plane_coords(xyz: np.ndarray, origin, e1, e2, e3) -> np.ndarray:
 def stage_sample(args) -> None:
     from scipy.spatial import cKDTree
 
+    from aweSOM.npy_parts import open_npy
+
     out = Path(args.out)
     raw = dict(np.load(args.raw_planes))
-    labels = np.load(Path(out) / f"labels_{args.tag}.npy", mmap_mode="r")
+    labels = open_npy(Path(out) / f"labels_{args.tag}.npy", mmap_mode="r")
     with open(Path(out) / f"clusters_{args.tag}.json") as f:
         info = json.load(f)
     sheet = info["sheet_cluster"]

@@ -144,7 +144,7 @@ def main(argv=None):
                          + ("" if proj is None else f" (lattice rows {len(proj)}, training rows {len(X)}; "
                             "pass --n-samples to match the subsample the lattice was trained on)"))
     if args.training_labels is not None:
-        stored = np.load(args.training_labels)
+        stored = aweSOM.open_npy(args.training_labels, mmap_mode=None)
         report["agreement_with_training_labels"] = float(np.mean(stored == lab))
         print(f"labels from the re-assigned lattice agree with {args.training_labels.name}: "
               f"{report['agreement_with_training_labels']:.6f}", flush=True)

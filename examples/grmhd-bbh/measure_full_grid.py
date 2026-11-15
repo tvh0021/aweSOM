@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 import h5py
 import numpy as np
+from aweSOM.npy_parts import open_npy
 from aweSOM.sheet_stats import LevelLattice
 from aweSOM.slab_thickness import ridge_thickness
 
@@ -19,7 +20,7 @@ def main():
     p.add_argument('--grid',required=True); p.add_argument('--labels',required=True)
     p.add_argument('--out',required=True); p.add_argument('--clusters',type=int,nargs='+',required=True)
     args=p.parse_args(); out=Path(args.out); out.mkdir(exist_ok=False)
-    labels=np.load(args.labels,mmap_mode='r'); chunk=1000000; t=time.time()
+    labels=open_npy(args.labels,mmap_mode='r'); chunk=1000000; t=time.time()
     with h5py.File(args.grid) as h:
         ranges={}; bounds={}
         for a in range(0,len(labels),chunk):

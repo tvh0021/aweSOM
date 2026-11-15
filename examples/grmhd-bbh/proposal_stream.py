@@ -20,8 +20,9 @@ def label_statistics(args):
     Medians have bin width 0.001 in feature units; out-of-range values raise.
     This bounds memory independently of the total number of grid rows.
     """
+    from aweSOM.npy_parts import open_npy
     from proposal_figure import DX, FEATURES, grid_clip
-    labels = np.load(args.grid_labels, mmap_mode='r')
+    labels = open_npy(args.grid_labels, mmap_mode='r')
     out = Path(args.out)
     target = out/f'labels_{args.tag}.npy'
     if target.resolve() != Path(args.grid_labels).resolve():

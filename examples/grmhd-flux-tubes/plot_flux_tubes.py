@@ -185,7 +185,8 @@ def main():
         holes = g.attrs["horizon_centres"]
     with h5py.File(args.B, "r") as f:
         B = f["B"][:]
-    labels = np.load(args.labels)
+    from aweSOM.npy_parts import open_npy
+    labels = open_npy(args.labels, mmap_mode=None)
     comp = load_set(f"{args.dir}/components_{args.candidate}.h5")
     top = top10_figure(xyz, holes, comp, f"{args.dir}/fig_real_top10.png",
                        f"LR_flux it 180224: top 10 components of {args.candidate} by tube score")

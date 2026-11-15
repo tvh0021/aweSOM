@@ -27,6 +27,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from aweSOM.npy_parts import open_npy
 from aweSOM.sheet_stats import GridFileSource, level_lattice
 
 
@@ -51,8 +52,8 @@ def main(argv=None):
         t_feat = h["features"][:]
         w_pts = h["weight"][:]
         w_vol = h["weight_volume"][:]
-    t_lab = np.load(args.training_labels)
-    n_lab = int(max(t_lab.max(), np.asarray(src.labels).max()) + 1)
+    t_lab = open_npy(args.training_labels, mmap_mode=None)
+    n_lab = int(max(int(t_lab.max()), int(src.labels.max())) + 1)
 
     report = {"grid": str(args.grid), "labels": str(args.labels), "training_file": str(args.training_file),
               "training_labels": str(args.training_labels), "per_level": {}}

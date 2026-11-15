@@ -104,7 +104,8 @@ def main():
                 print('predicted', a+len(f), flush=True)
             target.flush()
             del target
-    labels = np.load(args.labels, mmap_mode='r')
+    from aweSOM.npy_parts import open_npy
+    labels = open_npy(args.labels, mmap_mode='r')
     with np.load(args.raw) as raw:
         refs, pixel_area = references(raw)
         points = plane_points(raw).reshape(-1, 3)

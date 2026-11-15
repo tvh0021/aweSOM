@@ -133,7 +133,8 @@ def main(argv=None):
     model.metadata["sheet_rule"] = f"mean_log_chi_B>{args.sheet_chi},mean_log_beta_inv<{args.sheet_beta}"
     report = {"sheet_clusters": sheets, "cluster_means": means, "seconds": None}
     if args.check_labels:
-        ref = np.load(args.check_labels)
+        from aweSOM.npy_parts import open_npy
+        ref = open_npy(args.check_labels, mmap_mode=None)
         n = min(len(ref), len(labels))
         report["agreement_with_check_labels"] = float(np.mean(ref[:n] == labels[:n]))
         print(f"[freeze] agreement with {args.check_labels}: {report['agreement_with_check_labels']:.6f}")

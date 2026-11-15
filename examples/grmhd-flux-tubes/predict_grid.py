@@ -96,7 +96,7 @@ def main():
         maps[mc] = node_cluster
         if args.train_labels_pattern:
             suffix = "" if mc == 0.2 else f"-mc{mc:g}"
-            saved = np.load(args.train_labels_pattern.format(suffix=suffix), mmap_mode="r")
+            saved = aweSOM.open_npy(args.train_labels_pattern.format(suffix=suffix), mmap_mode="r")
             agree = float(np.mean(node_cluster[train_nodes] == np.asarray(saved[check_rows])))
             check[f"{mc:g}"] = agree
             print(f"merge_cost {mc:g}: {len(np.unique(node_cluster))} clusters, "

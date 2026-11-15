@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 import aweSOM
+from aweSOM.npy_parts import npy_output_exists
 from aweSOM.sheet_stats import GridFileSource, SheetConfig, sheet_statistics, write_outputs
 
 # categorical slots 1-3 of the reference palette (validated all-pairs for <= 3 series)
@@ -52,8 +53,10 @@ def parse_run(spec):
         raise SystemExit(f"--run needs NAME=GRID.h5[:LABELS.npy], got {spec!r}")
     name, rest = spec.split("=", 1)
     labels = None
-    if ":" in rest and rest.rsplit(":", 1)[1].endswith(".npy"):
-        rest, labels = rest.rsplit(":", 1)
+    if ":" in rest:
+        cand = rest.rsplit(":", 1)[1].rstrip("/\\")
+        if cand.endswith((".npy", ".parts")) or Path(cand).name == "manifest.json":
+            rest, labels = rest.rsplit(":", 1)
     return name, Path(rest), (Path(labels) if labels else None)
 
 
@@ -484,7 +487,7 @@ def main(argv=None):
         src.close()
         if labels is None:
             labels = args.out / f"labels_{name}_{it}.npy"
-            if not (args.reuse and labels.exists()):
+            if not (args.reuse and npy_output_exists(labels)):
                 if model is None:
                     raise SystemExit(f"[{name}] no labels and no --model")
                 print(f"[{name}] predicting labels -> {labels}", flush=True)

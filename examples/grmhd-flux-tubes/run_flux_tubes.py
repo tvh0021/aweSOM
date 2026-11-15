@@ -94,7 +94,7 @@ def main():
         names = [n.decode() for n in g["names"][:]]
     with h5py.File(args.B, "r") as f:
         B = f["B"][:]
-    labels = np.load(args.labels)
+    labels = aweSOM.open_npy(args.labels, mmap_mode=None)
     assert len(labels) == len(xyz) == len(B)
     t_load = time.time() - t0
     print(f"loaded {len(xyz)} rows in {t_load:.0f}s, peak RSS {peak_rss_gb():.2f} GB", flush=True)

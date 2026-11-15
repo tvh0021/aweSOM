@@ -4,6 +4,36 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `aweSOM.npy_parts` adds sharded per-rank `.npy` outputs stored as
+  `<stem>.parts/part-RRRR.npy` with an atomic `manifest.json` completion marker
+  at format `awesom-npy-parts` version 1. `aweSOM` and `aweSOM.stream` re-export
+  `open_npy`, `ShardedNpyArray`, and `stitch_npy`. `open_npy` opens plain `.npy`
+  files and `.parts` directories: `mmap_mode="r"` returns a lazy `np.memmap` or
+  `ShardedNpyArray`, and `mmap_mode=None` loads an `ndarray` in memory.
+  `verify_npy_parts` checks each part's CRC-32 against the manifest, and
+  `stitch_npy` and `python -m aweSOM.npy_parts stitch` assemble a single `.npy`
+  file on demand with CRC checks.
+- `aweSOM.sce`, `aweSOM.make_sce_clusters`, `aweSOM.sheet_stats.GridFileSource`,
+  `aweSOM.pool_statistics`, `examples/grmhd-bbh/production_pool.py` in
+  `--statistics-only` and `--collect` modes, and the GRMHD example scripts now
+  accept sharded `.parts` outputs alongside plain `.npy` files, including mixed
+  single-rank and multi-rank collections.
+
+### Changed
+
+- Multi-rank `production_pool.py::label_rows` writes per-rank
+  `<tag>-{labels,nodes,distances}.parts/part-RRRR.npy` files and publishes
+  `manifest.json` on rank 0 without copying other ranks' payloads through rank
+  0. Single-rank runs still write plain `<tag>-{labels,nodes,distances}.npy`.
+  The fit record's `labelling` dictionary replaces `copy_seconds` and
+  `copy_bytes` with `layout`, `ranks`, `manifest_seconds`, and
+  `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
+  rank count.
+
 ## [1.7.0] - 2026-11-13
 
 This release adds `aweSOM.model`, an opt-in frozen model artifact for
