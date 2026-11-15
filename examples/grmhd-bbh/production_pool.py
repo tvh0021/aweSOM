@@ -470,7 +470,12 @@ def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
         blocks = ((read_slice(distances,a,a+chunk), read_slice(nodes,a,a+chunk)) for a in range(0,n,chunk))
         qs, _, _ = summarize(blocks, node_counts, np.asarray([99.,99.9])/100, directory, chunk)
         q, reject = qs[:-1,0], float(qs[-1,1])
-        if workers > 1 and isinstance(raw,h5py.Dataset) and raw.file.mode == 'r' and isinstance(labels,np.memmap):
+        if workers > 1 and isinstance(raw,h5py.Dataset) and raw.file.mode == 'r':
+            from aweSOM.npy_parts import ShardedNpyArray
+            use_parallel = isinstance(labels,(np.memmap,ShardedNpyArray))
+        else:
+            use_parallel = False
+        if use_parallel:
             from aweSOM.pool_statistics import parallel_features
             summaries = parallel_features(raw,labels,counts,chunk,directory,workers)
         else:
@@ -742,15 +747,20 @@ def group_selection(out, recs, chunk):
     recs are the fit records of one lattice, in seed order, on the same pool rows."""
     import itertools
     from aweSOM import SOMModel
+    from aweSOM.npy_parts import open_npy
     if any(r.get('statistics') == 'deferred' for r in recs):
         raise ValueError('statistics are deferred; run --statistics-only before selection')
     seeds = [r['seed'] for r in recs]
     orders = {r['seed']: list(r['sheet_candidates']['order']) for r in recs}
     chi = {r['seed']: {c['cluster']: c['E_log_chi_B'] for c in r['sheet_candidates']['clusters']} for r in recs}
     sizes = {r['seed']: len(r['cluster_effects']) for r in recs}
-    labels = {r['seed']: np.load(out/f"{r['tag']}-labels.npy", mmap_mode='r') for r in recs}
-    jaccard = {(i, j): jaccard_matrix(labels[i], labels[j], sizes[i], sizes[j], chunk)
-               for i, j in itertools.combinations(seeds, 2)}
+    labels = {r['seed']: open_npy(out/f"{r['tag']}-labels.npy", mmap_mode='r') for r in recs}
+    try:
+        jaccard = {(i, j): jaccard_matrix(labels[i], labels[j], sizes[i], sizes[j], chunk)
+                   for i, j in itertools.combinations(seeds, 2)}
+    finally:
+        for arr in labels.values():
+            if hasattr(arr, 'close'): arr.close()
     picks, audit = select_group(orders, jaccard, chi)
     overlap = seed_overlap(jaccard)
     for r in recs:
@@ -898,37 +908,51 @@ def label_bytes(lattices):
     return labels, node + distance
 
 
-def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None):
-    """Label every pool row into OUT/<tag>-{labels,nodes,distances}.npy (rank 0 has created them).
+def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None, *,
+               seed=None, n_clusters=None, code_commit=None):
+    """Label every pool row: plain ``.npy`` on 1 rank, sharded ``.parts/`` on >1 ranks.
 
-    Rank 0 is the only process that opens these files: it writes its own rows into them. With
-    ``comm`` every other rank r labels its contiguous rows (aweSOM.distributed.row_range) into
-    part files of its own, OUT/<tag>-<key>.part<r>.npy, so no file is ever open on two nodes
-    (a network file system stops buffering writes to a file open on several nodes). After every
-    rank has closed its files, rank 0 copies the parts into place in rank order, checks each
-    copy against the CRC-32 its rank computed while writing, and deletes the parts; a failed
-    check stops every rank and keeps the parts. OUT must be one directory every rank can open
-    (a shared file system): a rank that cannot create its files stops every rank. Returns the
-    per-rank records and the assembly timings (rank 0) or None.
+    With ``size == 1``, rank 0 creates ``OUT/<tag>-{labels,nodes,distances}.npy`` and writes
+    every row through :class:`aweSOM.stream.NpyWriter`. With ``size > 1``, rank 0 creates
+    ``OUT/<tag>-<key>.parts/`` first, every rank ``r`` writes only its contiguous row range
+    (:func:`aweSOM.distributed.row_range`) into ``part-RRRR.npy`` (one writer per inode, so
+    network file systems keep their write cache) and closes with ``fsync``, and after
+    ``comm.allgather`` rank 0 validates part headers/byte lengths and publishes
+    ``manifest.json`` atomically without reading back or copying payload bytes.
     """
-    from aweSOM.stream import NpyWriter, predict_stream, copy_npy_rows
+    import aweSOM
     from aweSOM import distributed
+    from aweSOM.npy_parts import part_filename, write_npy_manifest
+    from aweSOM.stream import NpyWriter, predict_stream
     rank = 0 if comm is None else comm.Get_rank()
     size = 1 if comm is None else comm.Get_size()
     gather = (lambda x: [x]) if comm is None else comm.allgather
-    lo, hi = distributed.row_range(len(raw), rank, size)
-    final = lambda key: out / f'{tag}-{key}.npy'
-    part = lambda key, r: out / f'{tag}-{key}.part{r}.npy'
+    n_total = len(raw)
+    lo, hi = distributed.row_range(n_total, rank, size)
+    files = label_files(nc)
+    parts_dir = lambda key: out / f'{tag}-{key}.parts'
+    target = (lambda key, r: parts_dir(key) / part_filename(r, size)) if size > 1 else (lambda key, r: out / f'{tag}-{key}.npy')
     t0 = time.perf_counter()
+    prep_error = None
+    if size > 1 and not rank:
+        try:
+            for key, _ in files:
+                parts_dir(key).mkdir()
+        except Exception as e:
+            prep_error = f'{node_name()} rank 0: cannot create parts directory: {type(e).__name__}: {e}'
+    if comm is not None:
+        prep_error = comm.bcast(prep_error, root=0)
+    if prep_error:
+        raise RuntimeError(prep_error)
     writers, problem = {}, None
     try:
-        for key, dtype in label_files(nc):
-            if rank:
-                made = np.lib.format.open_memmap(part(key, rank), mode='w+', dtype=dtype, shape=(hi - lo,))
-                del made
-            writers[key] = NpyWriter(part(key, rank) if rank else final(key))
+        for key, dtype in files:
+            path = target(key, rank)
+            made = np.lib.format.open_memmap(path, mode='w+', dtype=dtype, shape=(hi - lo,))
+            del made
+            writers[key] = NpyWriter(path)
     except OSError as e:
-        problem = f'{node_name()} rank {rank}: cannot open {e.filename}: {e.strerror}'
+        problem = f'{node_name()} rank {rank}: cannot open {e.filename or path}: {e.strerror}'
     except Exception as e:  # a malformed or stale .npy header: every rank must still reach gather
         problem = f'{node_name()} rank {rank}: cannot open the label files: {type(e).__name__}: {e}'
     problems = [x for x in gather(problem) if x]
@@ -952,8 +976,8 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
                     write_seconds=st['write'], close_seconds=time.perf_counter()-tc,
                     pwrite_seconds=sum(wr.pwrite_seconds for wr in writers.values()),
                     fsync_seconds=sum(wr.fsync_seconds for wr in writers.values()),
-                    bytes_written=st['rows'] * sum(d.itemsize for _, d in label_files(nc)),
-                    part_files=bool(rank), wall_seconds=time.perf_counter()-t0, crc32=crcs)
+                    bytes_written=st['rows'] * sum(d.itemsize for _, d in files),
+                    part_files=size > 1, wall_seconds=time.perf_counter()-t0, crc32=crcs)
     except Exception:
         for wr in writers.values(): wr.close(sync=False)
         mine = dict(rank=rank, hostname=node_name(), error=traceback.format_exc())
@@ -962,40 +986,48 @@ def label_rows(args, w, nc, shape, raw, transform, out, tag, backend, comm=None)
     if failed:
         raise RuntimeError('labelling failed on rank(s) ' + ', '.join(str(r['rank']) for r in failed)
                            + '\n' + '\n'.join(r['error'] for r in failed))
-    t1 = time.perf_counter(); checked, check_error = [], None
-    copied = dict(read_seconds=0., write_seconds=0., bytes=0); fsync = 0.
-    if not rank and size > 1:
-        dest = None
+    t1 = time.perf_counter(); check_error = None; dir_fsync = None
+    if not rank:
         try:
-            for key, _ in label_files(nc):  # one final file at a time, parts in rank order
-                dest = NpyWriter(final(key))
-                for r in every[1:]:
+            for key, _ in files:
+                for r in every:
                     first, end, crc = r['crc32'][key]
-                    if r['rows'] and (first, end) != (0, r['rows']) or crc is None:
+                    expected_span = (0, r['rows']) if r['rows'] else (None, None)
+                    if (first, end) != expected_span or crc is None:
                         raise RuntimeError(f"rank {r['rank']} wrote {key} rows out of order")
-                    # The copy reads every byte of the part: lost or torn writes fail here.
-                    if copy_npy_rows(part(key, r['rank']), dest, r['start'], stats=copied, rows=r['rows']) != crc:
-                        raise RuntimeError(f"rank {r['rank']} {key} rows [{r['start']}, {r['stop']}) "
-                                           'differ on disk from what it wrote')
-                dest.close(); fsync += dest.fsync_seconds; dest = None
-            checked = [r['rank'] for r in every[1:]]
-            for key, _ in label_files(nc):
-                for r in every[1:]: os.remove(part(key, r['rank']))
+            if size > 1:
+                w_sha = hashlib.sha256(np.ascontiguousarray(w).tobytes()).hexdigest()
+                nc_sha = hashlib.sha256(np.ascontiguousarray(nc).tobytes()).hexdigest()
+                n_clust = int(n_clusters) if n_clusters is not None else (int(np.max(nc)) + 1 if len(nc) else 0)
+                git_rev = code_commit if code_commit is not None else getattr(args, 'code_commit', None)
+                synced_flags = []
+                for key, dtype in files:
+                    part_list = [
+                        dict(rank=r['rank'], file=part_filename(r['rank'], size),
+                             start=r['start'], stop=r['stop'], rows=r['rows'],
+                             bytes=r['rows'] * dtype.itemsize, crc32=int(r['crc32'][key][2]))
+                        for r in every
+                    ]
+                    prov = dict(aweSOM_version=aweSOM.__version__, git_commit=git_rev, tag=str(tag), key=key,
+                                lattice_shape=[int(shape[0]), int(shape[1])],
+                                seed=None if seed is None else int(seed), n_clusters=n_clust,
+                                weights_sha256=w_sha, node_cluster_sha256=nc_sha, backend=backend)
+                    _, synced = write_npy_manifest(parts_dir(key), dtype=dtype, shape=(n_total,),
+                                                   parts=part_list, provenance=prov, sync=True)
+                    synced_flags.append(bool(synced))
+                dir_fsync = all(synced_flags)
         except Exception as e:
-            if dest is not None: dest.close(sync=False)
             hint = (' (OUT must be on a file system every rank can open)'
                     if isinstance(e, FileNotFoundError) else '')
             check_error = f'{type(e).__name__}: {e}{hint}'
-    # Every rank learns the outcome of rank 0's check, so a failed check stops all of them.
+    # Every rank learns the outcome of rank 0's manifest check, so a failed check stops all of them.
     if comm is not None: check_error = comm.bcast(check_error, root=0)
     if check_error:
-        raise RuntimeError('labelling readback check on rank 0 failed: ' + check_error)
+        raise RuntimeError('labelling manifest check on rank 0 failed: ' + check_error)
     if rank: return None
-    seconds = time.perf_counter() - t1
-    return dict(ranks=every, crc_checked_ranks=checked, crc_check_seconds=seconds,
-                assemble_seconds=seconds, assemble_read_seconds=copied['read_seconds'],
-                assemble_write_seconds=copied['write_seconds'], assemble_fsync_seconds=fsync,
-                assemble_bytes=copied['bytes'])
+    seconds = time.perf_counter() - t1 if size > 1 else 0.0
+    return dict(layout='sharded' if size > 1 else 'single', ranks=every,
+                manifest_seconds=seconds, directory_fsync=dir_fsync)
 
 
 def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=None):
@@ -1003,6 +1035,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
     contiguous rows of the pool; rank 0 alone does the rest and returns the record, the
     other ranks return None after labelling."""
     from aweSOM import Lattice, SOMModel, Scaler
+    from aweSOM.npy_parts import open_npy, remove_npy_output
     from aweSOM.stream import train_batch_stream, peak_rss_bytes
     from aweSOM.inference import best_match_nodes_patch
     t = time.perf_counter()
@@ -1058,9 +1091,6 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 nc = lat.assign_cluster_to_lattice(merge_cost=args.merge_cost, target_clusters=args.target_clusters).ravel(order='F').astype(np.int32)
                 np.save(out / f'{tag}-umat.npy', lat.umat)
                 clock.finish('clustering')
-                for key, dtype in label_files(nc):  # created here; only rank 0 opens them
-                    created = np.lib.format.open_memmap(out / f'{tag}-{key}.npy', mode='w+', dtype=dtype, shape=(len(raw),))
-                    del created
                 prepared = ('ok', nc)
             except Exception:
                 prepared = ('error', traceback.format_exc())
@@ -1068,22 +1098,28 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         if prepared[0] == 'error':
             raise RuntimeError(prepared[1] if not rank else 'rank 0 failed before labelling (see its log)')
         nc = prepared[1]
-        labelling = label_rows(args, w, nc, shape, raw, transform, out, tag, label_backend, comm)
+        labelling = label_rows(args, w, nc, shape, raw, transform, out, tag, label_backend, comm,
+                               seed=seed, n_clusters=lat.n_clusters if not rank else None,
+                               code_commit=args.code_commit)
         if rank: return None
         node_path, distance_path = out/f'{tag}-nodes.npy', out/f'{tag}-distances.npy'
-        labels = np.load(out / f'{tag}-labels.npy', mmap_mode='r+')
-        nodes, distances = np.load(node_path, mmap_mode='r+'), np.load(distance_path, mmap_mode='r+')
+        labels = open_npy(out / f'{tag}-labels.npy', mmap_mode='r')
+        nodes, distances = open_npy(node_path, mmap_mode='r'), open_npy(distance_path, mmap_mode='r')
         clock.finish('labelling')
         names = [n.decode() if isinstance(n, bytes) else str(n) for n in h['names'][:]]
         deferred = args.statistics == 'later'
-        if deferred:
-            q, reject = np.full(len(w),np.nan), float('nan')
-            statistics = dict.fromkeys(STATISTIC_FIELDS)
-            statistic_metadata = dict(statistics='deferred')
-        else:
-            q,reject,statistics,statistic_metadata = statistics_fields(
-                args,raw,nodes,distances,labels,len(w),lat.n_clusters,names,scaling['strata'],out,tag)
-            clock.finish('statistics')
+        try:
+            if deferred:
+                q, reject = np.full(len(w),np.nan), float('nan')
+                statistics = dict.fromkeys(STATISTIC_FIELDS)
+                statistic_metadata = dict(statistics='deferred')
+            else:
+                q,reject,statistics,statistic_metadata = statistics_fields(
+                    args,raw,nodes,distances,labels,len(w),lat.n_clusters,names,scaling['strata'],out,tag)
+                clock.finish('statistics')
+        finally:
+            for tmp_arr in (nodes, distances):
+                if hasattr(tmp_arr, 'close'): tmp_arr.close()
         del nodes, distances
         merge_settings = dict(merge_cost_used=lat.merge_cost_used,
                               target_clusters=args.target_clusters, n_clusters=lat.n_clusters)
@@ -1110,11 +1146,16 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         clock.finish('export')
         loaded = SOMModel.load(out / f'{tag}.h5')
         mismatch = parity = 0; scaler_error = 0.
-        for a in range(0,len(raw) if args.verify_labels else min(len(raw),1_000_000),args.chunk):
-            stop = min(a+args.chunk,len(raw) if args.verify_labels else 1_000_000)
-            block = raw[a:stop]
-            mismatch += int(np.count_nonzero(loaded.predict(block,backend='patch') != labels[a:a+len(block)]))
-            scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-transform(block)))))
+        try:
+            for a in range(0,len(raw) if args.verify_labels else min(len(raw),1_000_000),args.chunk):
+                stop = min(a+args.chunk,len(raw) if args.verify_labels else 1_000_000)
+                block = raw[a:stop]
+                mismatch += int(np.count_nonzero(loaded.predict(block,backend='patch') != labels[a:a+len(block)]))
+                scaler_error = max(scaler_error,float(np.max(np.abs(loaded.scaler.transform(block)-transform(block)))))
+            labels.flush()
+        finally:
+            if hasattr(labels, 'close'): labels.close()
+        del labels
         probe = raw[np.unique(np.linspace(0,len(raw)-1,min(8192,len(raw)),dtype=int))]
         parity = int(np.count_nonzero(loaded.predict(probe,backend='patch') != loaded.predict(probe,backend='screen')))
         from aweSOM.inference import best_match_nodes_screen
@@ -1131,8 +1172,7 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
         if mismatch or parity or scaler_error > 1e-4 or bmu_mismatches or not distance_parity or not all(components.values()):
             raise RuntimeError('freeze verification failed')
         if not deferred:
-            node_path.unlink(); distance_path.unlink()
-        labels.flush()
+            remove_npy_output(node_path); remove_npy_output(distance_path)
         clock.finish('verification')
     rec = dict(tag=tag, git_commit=args.code_commit, ranks=1, scratch=None if args.scratch is None else str(args.scratch), lattice_shape=shape, seed=seed, init='sampling', sample_seed=args.sample_seed,
                epochs=args.epochs, radius_phases=args.phases, rows_per_epoch=info['rows_per_epoch'], radius_schedule=info['radius'],
@@ -1304,16 +1344,22 @@ def agreement(a,b,chunk=2**21):
     """Optimal one-to-one cluster relabelling, divided by all pool rows."""
     from scipy.optimize import linear_sum_assignment
     matrix = np.zeros((int(a.max())+1,int(b.max())+1),np.int64)
-    for i in range(0,len(a),chunk): np.add.at(matrix,(a[i:i+chunk],b[i:i+chunk]),1)
+    for i in range(0,len(a),chunk):
+        np.add.at(matrix,(np.asarray(a[i:i+chunk]),np.asarray(b[i:i+chunk])),1)
     x,y = linear_sum_assignment(matrix,maximize=True)
     return float(matrix[x,y].sum()/len(a))
 
 
 def medoid(paths,chunk):
-    arrays = [np.load(p,mmap_mode='r') for p in paths]
-    matrix = np.eye(len(arrays))
-    for i in range(len(arrays)):
-        for j in range(i): matrix[i,j] = matrix[j,i] = agreement(arrays[i],arrays[j],chunk)
+    from aweSOM.npy_parts import open_npy
+    arrays = [open_npy(p,mmap_mode='r') for p in paths]
+    try:
+        matrix = np.eye(len(arrays))
+        for i in range(len(arrays)):
+            for j in range(i): matrix[i,j] = matrix[j,i] = agreement(arrays[i],arrays[j],chunk)
+    finally:
+        for arr in arrays:
+            if hasattr(arr,'close'): arr.close()
     means = (matrix.sum(axis=1)-1)/max(1,len(arrays)-1)
     return int(means.argmax()), dict(pairwise_agreement=matrix,mean_agreement=means,
                                     band=[float(matrix[np.triu_indices(len(arrays),1)].min()),
@@ -1336,8 +1382,8 @@ def parser():
     p.add_argument('--resume',type=Path,help='--fit only: continue from this checkpoint (copied into OUT, left unchanged); same rank count')
     p.add_argument('--reuse-pool',type=Path)
     p.add_argument('--fit',nargs=2,metavar=('LATTICE','SEED'))
-    p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); every rank labels its own rows '
-                   'of the three label files, rank 0 writes every other output; OUT must be on a shared file system')
+    p.add_argument('--mpi',action='store_true',help='require a multi-rank MPI launch (--fit with --reuse-pool only); every rank writes its own part '
+                   'of the three label datasets under <tag>-<key>.parts/, rank 0 writes manifest.json and every other output; OUT must be on a shared file system')
     p.add_argument('--collect',type=Path,nargs='+')
     p.add_argument('--anchor'); p.add_argument('--held-out',nargs='+')
     p.add_argument('--out',type=Path,required=True)
@@ -1455,7 +1501,6 @@ def untrainable(names):
 def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_new=True, output_per_row=None, ranks=1):
     """Check scratch and output capacity before pooling or training starts."""
     from aweSOM.pool_statistics import scratch_root
-    from aweSOM.distributed import row_range
     scratch = scratch_root(args.scratch,args.out.parent)
     output = args.out.parent.resolve()
     # Distance runs are removed before concurrent feature runs are formed.
@@ -1466,9 +1511,9 @@ def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_ne
     if deferred: scratch_bytes = rows*8 if full_run and pool_new else 0
     labels, rest = label_bytes(args.lattices)
     per_row = labels + rest if output_per_row is None else output_per_row
-    # An MPI --fit keeps rank 0's full-size label files and the other ranks' part files until
-    # rank 0 has copied the parts in (label_rows).
-    output_bytes = per_row*(2*rows - row_range(rows, 0, ranks)[1])
+    # Every rank writes only its own contiguous slice (plain .npy on 1 rank, <stem>.parts/ on >1
+    # ranks) with no rank-0 assembly copy, so label output size is per_row * rows for any rank count.
+    output_bytes = per_row*rows
     if full_run:
         pool_bytes = features*(4+8*args.write_scaled) if pool_new else 0
         fits = len(args.lattices)*len(args.seeds)
@@ -1492,6 +1537,7 @@ def fit_disk_budget(args, rows, features, itemsize=4, *, full_run=False, pool_ne
 def statistics_only(args):
     """Complete deferred fits into a fresh OUT without changing the source."""
     from aweSOM import SOMModel
+    from aweSOM.npy_parts import copy_npy_output, open_npy
     from aweSOM.stream import peak_rss_bytes
     started = time.perf_counter()
     if args.out.exists(): raise ValueError('OUT exists; use a fresh output directory')
@@ -1509,8 +1555,13 @@ def statistics_only(args):
         setattr(args,key,bundle['settings'][key])
     with h5py.File(source/'pool.h5','r') as h:
         rows,features = h['raw'].shape
-        fit_disk_budget(args,rows,features,h['raw'].dtype.itemsize,  # copies each fit's labels
-                        output_per_row=sum(np.load(source/f"{r['tag']}-labels.npy",mmap_mode='r').itemsize for r in records))
+        per_row = 0
+        for r in records:
+            arr = open_npy(source/f"{r['tag']}-labels.npy",mmap_mode='r')
+            try: per_row += arr.itemsize
+            finally:
+                if hasattr(arr,'close'): arr.close()
+        fit_disk_budget(args,rows,features,h['raw'].dtype.itemsize,output_per_row=per_row)  # copies each fit's labels
     for record in records:
         tag = record['tag']
         model = SOMModel.load(source/f'{tag}.h5')
@@ -1519,8 +1570,11 @@ def statistics_only(args):
         if json.loads((source/f'{tag}.json').read_text()) != record:
             raise ValueError(f'fit JSON differs from bundle for {tag}')
         for suffix in ('labels','nodes','distances'):
-            array = np.load(source/f'{tag}-{suffix}.npy',mmap_mode='r')
-            if array.shape != (rows,): raise ValueError(f'invalid {suffix} shape for {tag}')
+            array = open_npy(source/f'{tag}-{suffix}.npy',mmap_mode='r')
+            try:
+                if array.shape != (rows,): raise ValueError(f'invalid {suffix} shape for {tag}')
+            finally:
+                if hasattr(array,'close'): array.close()
             del array
     args.out.mkdir()
     os.environ['NUMBA_CACHE_DIR'] = str(args.out/'numba-cache')
@@ -1540,13 +1594,17 @@ def statistics_only(args):
             record = copy.deepcopy(original); tag = record['tag']
             model = SOMModel.load(source/f'{tag}.h5')
             args.chunk = record['chunk']
-            labels = np.load(source/f'{tag}-labels.npy',mmap_mode='r')
-            nodes = np.load(source/f'{tag}-nodes.npy',mmap_mode='r')
-            distances = np.load(source/f'{tag}-distances.npy',mmap_mode='r')
-            clock = PhaseClock(tag)
-            q,reject,fields,metadata = statistics_fields(args,h['raw'],nodes,distances,labels,
-                len(model.weights),record['n_clusters'],model.feature_names,state['scaling']['strata'],out,tag)
-            clock.finish('statistics')
+            labels = open_npy(source/f'{tag}-labels.npy',mmap_mode='r')
+            nodes = open_npy(source/f'{tag}-nodes.npy',mmap_mode='r')
+            distances = open_npy(source/f'{tag}-distances.npy',mmap_mode='r')
+            try:
+                clock = PhaseClock(tag)
+                q,reject,fields,metadata = statistics_fields(args,h['raw'],nodes,distances,labels,
+                    len(model.weights),record['n_clusters'],model.feature_names,state['scaling']['strata'],out,tag)
+                clock.finish('statistics')
+            finally:
+                for arr in (labels,nodes,distances):
+                    if hasattr(arr,'close'): arr.close()
             pending = dict(status='pending',reason='awaiting the other seeds of this lattice')
             model.node_dist_q99,model.reject_distance = q,reject
             model.metadata.pop('statistics',None)
@@ -1557,8 +1615,8 @@ def statistics_only(args):
             if (not np.array_equal(q,loaded.node_dist_q99,equal_nan=True)
                     or reject != loaded.reject_distance or loaded.metadata != model.metadata):
                 raise RuntimeError('statistics model verification failed')
-            for suffix in ('-labels.npy','-umat.npy'):
-                shutil.copyfile(source/f'{tag}{suffix}',out/f'{tag}{suffix}')
+            copy_npy_output(source/f'{tag}-labels.npy',out/f'{tag}-labels.npy')
+            shutil.copyfile(source/f'{tag}-umat.npy',out/f'{tag}-umat.npy')
             record.update(fields,statistics='complete',selected_sheet_clusters=[],
                           sheet_selection_status='pending',selection_audit=pending,seed_overlap={})
             record['phase_timings']['statistics'] = clock.records['statistics']
@@ -1661,6 +1719,7 @@ def main(argv=None):
         os.rename(out,args.out/'results'); return
     collected=[]
     if args.collect:
+        from aweSOM.npy_parts import copy_npy_output
         identity = one_line(state)
         for location in args.collect:
             location = location/'results' if (location/'results').is_dir() else location
@@ -1676,8 +1735,9 @@ def main(argv=None):
                     raise ValueError(f"statistics are deferred for {record['tag']}; run --statistics-only first")
                 if record['tag'] in {r['tag'] for r in collected}: raise ValueError('duplicate collected fit')
                 collected.append(record)
-                for suffix in ('.h5','.json','-labels.npy','-umat.npy'):
+                for suffix in ('.h5','.json','-umat.npy'):
                     shutil.copyfile(location/(record['tag']+suffix),out/(record['tag']+suffix))
+                copy_npy_output(location/f"{record['tag']}-labels.npy",out/f"{record['tag']}-labels.npy")
     fits=[]; choices=[]
     for shape in shapes:
         trio=[r for r in collected if tuple(r['lattice_shape']) == shape]

@@ -36,15 +36,9 @@ def load_driver():
 def label_case(pool, out, tag, n, comm):
     w = worker.lattice()
     nc = np.arange(len(w), dtype=np.int32) % 5
-    rank = 0 if comm is None else comm.Get_rank()
-    if not rank:
-        for key, dtype in pool.label_files(nc):
-            made = np.lib.format.open_memmap(out / f"{tag}-{key}.npy", mode="w+", dtype=dtype, shape=(n,))
-            del made
-    if comm is not None:
-        comm.Barrier()
     return pool.label_rows(SimpleNamespace(chunk=worker.CHUNK), w, nc, worker.SHAPE, worker.data(n),
-                           lambda block: np.asarray(block, "f8"), out, tag, "patch", comm)
+                           lambda block: np.asarray(block, "f8"), out, tag, "patch", comm,
+                           seed=42, n_clusters=5, code_commit="0" * 40)
 
 
 def main(out):

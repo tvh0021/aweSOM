@@ -461,11 +461,11 @@ def single_files(tmp_path, tag, n):
 
 
 def test_label_rows_one_rank_bytes(tmp_path):
-    """One rank (no comm): the final files are np.save's bytes and no part file is made."""
+    """One rank (no comm): the final files are np.save's bytes and no .parts directory is made."""
     pool = rows_worker.load_driver()
     for tag, n in rows_worker.CASES.items():
         rec = rows_worker.label_case(pool, tmp_path, tag, n, None)
-        assert rec["crc_checked_ranks"] == [] and rec["assemble_bytes"] == 0
+        assert rec["layout"] == "single" and rec["manifest_seconds"] == 0.0 and rec["directory_fsync"] is None
         assert [r["part_files"] for r in rec["ranks"]] == [False]
         for k, path in single_files(tmp_path, tag, n).items():
             assert (tmp_path / f"{tag}-{k}.npy").read_bytes() == path.read_bytes(), (tag, k)
@@ -475,9 +475,11 @@ def test_label_rows_one_rank_bytes(tmp_path):
 @pytest.mark.skipif(_mpirun() is None, reason="mpi4py or mpirun not available")
 @pytest.mark.parametrize("ranks", [2, 3])
 def test_mpirun_label_rows_one_writer_per_file(tmp_path, ranks):
-    """The driver's label_rows on real MPI: final files equal one rank's bit for bit (uneven
-    and empty ranges), no two ranks ever hold one output file open, only rank 0 opens a
-    final file, and the parts are gone afterwards."""
+    """The driver's label_rows on real MPI: sharded .parts/ outputs open lazily equal to one
+    rank's bit for bit (uneven and empty ranges), stitch_npy writes single .npy files
+    byte-identical to np.save, and no two ranks ever hold one output file open at once."""
+    from aweSOM.npy_parts import ShardedNpyArray, open_npy, stitch_npy, verify_npy_parts
+
     env = dict(__import__("os").environ, NUMBA_NUM_THREADS="2", OMP_NUM_THREADS="1",
                PYTHONPATH=str(HERE.parent / "src"))
     cmd = [_mpirun(), "-n", str(ranks), "--oversubscribe", sys.executable, "-m", "mpi4py",
@@ -486,24 +488,43 @@ def test_mpirun_label_rows_one_writer_per_file(tmp_path, ranks):
     assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-3000:]
     report = json.loads((tmp_path / "report.json").read_text())
     for tag, n in rows_worker.CASES.items():
-        for k, path in single_files(tmp_path, tag, n).items():
-            assert (tmp_path / f"{tag}-{k}.npy").read_bytes() == path.read_bytes(), (tag, k)
         rec = report["records"][tag]
+        assert rec["layout"] == "sharded" and rec["manifest_seconds"] >= 0
+        assert isinstance(rec["directory_fsync"], bool)
         assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, ranks) for r in range(ranks)]
-        assert rec["crc_checked_ranks"] == list(range(1, ranks))
-        assert [r["part_files"] for r in rec["ranks"]] == [False] + [True] * (ranks - 1)
-        assert rec["assemble_bytes"] == ROW_BYTES * sum(r["rows"] for r in rec["ranks"][1:])
-    assert not list(tmp_path.glob("*.part*"))
+        assert [r["part_files"] for r in rec["ranks"]] == [True] * ranks
+        for k, path in single_files(tmp_path, tag, n).items():
+            assert not (tmp_path / f"{tag}-{k}.npy").exists()
+            pdir = tmp_path / f"{tag}-{k}.parts"
+            assert (pdir / "manifest.json").is_file()
+            sharded = open_npy(tmp_path / f"{tag}-{k}.npy", mmap_mode="r")
+            assert isinstance(sharded, ShardedNpyArray)
+            try:
+                bitwise(np.asarray(sharded), np.load(path))
+            finally:
+                sharded.close()
+            assert verify_npy_parts(pdir)["total_rows"] == n
+            stitch_npy(pdir)
+            assert (tmp_path / f"{tag}-{k}.npy").read_bytes() == path.read_bytes(), (tag, k)
     for r in report["ranks"]:
-        finals = [p for p in r["opened"] if output_guard.is_final(p)]
-        parts = [p for p in r["opened"] if not output_guard.is_final(p)]
+        non_control = [p for p in r["opened"] if not p.endswith("control-labels.npy")]
+        finals = [p for p in non_control if output_guard.is_final(p)]
+        assert not finals
         if r["rank"]:
-            assert not finals and r["caught"] is True
-            assert {Path(p).name for p in parts} == {f"{tag}-{k}.part{r['rank']}.npy" for tag in rows_worker.CASES
-                                                     for k in ("labels", "nodes", "distances")}
+            assert r["caught"] is True
+            assert {f"{Path(p).parent.name}/{Path(p).name}" for p in non_control} == {
+                f"{tag}-{k}.parts/part-{r['rank']:04d}.npy"
+                for tag in rows_worker.CASES
+                for k in ("labels", "nodes", "distances")
+            }
         else:
-            assert finals and all(".part0." not in p for p in parts)
-    print(f"{ranks} mpirun ranks: driver label_rows files byte-identical to one rank, one writer per file")
+            assert {f"{Path(p).parent.name}/{Path(p).name}" for p in non_control} == {
+                f"{tag}-{k}.parts/part-{rk:04d}.npy"
+                for tag in rows_worker.CASES
+                for k in ("labels", "nodes", "distances")
+                for rk in range(ranks)
+            }
+    print(f"{ranks} mpirun ranks: driver label_rows .parts + stitched .npy byte-identical to one rank, one writer per file")
 
 
 # ------------------------------------------------------------- the driver
@@ -544,8 +565,9 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
     """One fake rank of production_pool.main, with every open of an output file during
     label_rows guarded (output_guard). mode: 'cpu', 'gpu' (fake CuPy with two devices and the CPU stand-in
     searcher), 'no-shared-out' (rank 1 cannot open OUT files), 'bad-header' (rank 1 hits a
-    malformed .npy header) or 'bad-crc' (rank 1 corrupts a byte of its labels part after
-    writing it). Sends (status, payload, guarded opens)."""
+    malformed .npy header), 'truncated-part' (rank 1 truncates a byte off its labels part after
+    closing), or 'bad-crc' (rank 1 flips a payload byte of its labels part after closing).
+    Sends (status, payload, guarded opens)."""
     try:
         output_guard.install()
         from aweSOM import distributed as dist, _gpu_screen as screen, stream
@@ -566,12 +588,21 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
             def malformed(path):
                 raise ValueError(f"{path}: malformed .npy header")
             stream.NpyWriter = malformed
-        if mode == "bad-crc" and rank == 1:  # only rank 0 copies the parts: every rank's failure comes from rank 0
+        if mode == "truncated-part" and rank == 1:
+            close = stream.NpyWriter.close
+
+            def truncate_part(self, sync=True):
+                close(self, sync)
+                if self.path.endswith("-labels.parts/part-0001.npy"):
+                    with open(self.path, "r+b") as fh:
+                        fh.truncate(os.fstat(fh.fileno()).st_size - 1)
+            stream.NpyWriter.close = truncate_part
+        if mode == "bad-crc" and rank == 1:
             close = stream.NpyWriter.close
 
             def corrupt(self, sync=True):
                 close(self, sync)
-                if self.path.endswith("-labels.part1.npy"):
+                if self.path.endswith("-distances.parts/part-0001.npy"):
                     with open(self.path, "r+b") as fh:
                         fh.seek(self.offset)
                         byte = fh.read(1)
@@ -618,6 +649,8 @@ def relabel(results, tag="4x3-s42"):
 
 @pytest.mark.parametrize("size,mode", [(2, "cpu"), (3, "cpu"), (2, "gpu"), (3, "gpu")])
 def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # noqa: F811
+    from aweSOM.npy_parts import open_npy, stitch_npy
+
     monkeypatch.setenv("NUMBA_CACHE_DIR", str(prepared.tmp / "cache"))
     out = prepared.tmp / f"label-{mode}-{size}"
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
@@ -625,25 +658,31 @@ def test_driver_ranks_label_their_rows(prepared, monkeypatch, size, mode):  # no
     results = run_driver(size, argv, mode)
     assert all(status == "ok" for status, _, _ in results), results
     res = out / "results"
-    assert not list(res.glob("*.part*"))  # rank 0 deleted the parts after copying them
-    for r, (_, _, opened) in enumerate(results):  # only rank 0 opens a final file
-        assert any(output_guard.is_final(p) for p in opened) == (r == 0)
-        if r:  # every other rank opens only its own part files
-            assert {Path(p).name for p in opened} == {f"4x3-s42-{k}.part{r}.npy" for k in ("labels", "nodes", "distances")}
+    for k in ("labels", "nodes", "distances"):
+        assert not (res / f"4x3-s42-{k}.npy").exists()
+        assert (res / f"4x3-s42-{k}.parts" / "manifest.json").is_file()
+    for r, (_, _, opened) in enumerate(results):
+        assert not any(output_guard.is_final(p) for p in opened)
+        if r:  # every non-zero rank opens only its own part files
+            assert {f"{Path(p).parent.name}/{Path(p).name}" for p in opened} == {
+                f"4x3-s42-{k}.parts/part-{r:04d}.npy" for k in ("labels", "nodes", "distances")
+            }
     lab, nodes, dist = relabel(res)
-    bitwise(np.load(res / "4x3-s42-labels.npy"), lab.astype(np.uint8))  # narrow: 12 nodes, few clusters
-    bitwise(np.load(res / "4x3-s42-nodes.npy"), nodes.astype(np.uint8))
-    bitwise(np.load(res / "4x3-s42-distances.npy"), dist)
+    bitwise(open_npy(res / "4x3-s42-labels.npy", mmap_mode=None), lab.astype(np.uint8))  # narrow: 12 nodes, few clusters
+    bitwise(open_npy(res / "4x3-s42-nodes.npy", mmap_mode=None), nodes.astype(np.uint8))
+    bitwise(open_npy(res / "4x3-s42-distances.npy", mmap_mode=None), dist)
+    for k, expected in (("labels", lab.astype(np.uint8)), ("nodes", nodes.astype(np.uint8)), ("distances", dist)):
+        stitch_npy(res / f"4x3-s42-{k}.parts")
+        ref_path = prepared.tmp / f"ref-{mode}-{size}-{k}.npy"
+        np.save(ref_path, expected)
+        assert (res / f"4x3-s42-{k}.npy").read_bytes() == ref_path.read_bytes()
     rec = json.loads((res / "4x3-s42.json").read_text())["labelling"]
     n = len(lab)
     assert rec["requested"] == "auto" and rec["backend"] == ("cuda_screen" if mode == "gpu" else "patch")
+    assert rec["layout"] == "sharded" and rec["manifest_seconds"] >= 0 and isinstance(rec["directory_fsync"], bool)
     assert [(r["start"], r["stop"]) for r in rec["ranks"]] == [distributed.row_range(n, r, size) for r in range(size)]
-    assert rec["crc_checked_ranks"] == list(range(1, size))
-    assert rec["assemble_bytes"] == 10 * (n - rec["ranks"][0]["rows"])  # uint8 + uint8 + float64
-    for key in ("assemble_seconds", "assemble_read_seconds", "assemble_write_seconds", "assemble_fsync_seconds"):
-        assert rec[key] >= 0
     for r in rec["ranks"]:
-        assert r["part_files"] == (r["rank"] > 0) and r["bytes_written"] == 10 * r["rows"]
+        assert r["part_files"] is True and r["bytes_written"] == 10 * r["rows"]
         assert r["pwrite_seconds"] >= 0 and r["fsync_seconds"] >= 0
     devices = [payload for _, payload, _ in results]
     if mode == "gpu":
@@ -675,17 +714,36 @@ def test_driver_header_error_stops_every_rank(prepared, monkeypatch):  # noqa: F
         assert "rank 1: cannot open the label files: ValueError" in message
 
 
-def test_driver_readback_failure_stops_every_rank(prepared, monkeypatch):  # noqa: F811
+def test_driver_manifest_check_failure_stops_every_rank(prepared, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(prepared.tmp / "cache"))
+    out = prepared.tmp / "label-truncated-part"
+    argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
+            "--mpi", "--statistics", "later"]
+    results = run_driver(2, argv, "truncated-part")
+    assert [status for status, _, _ in results] == ["error", "error"]
+    for _, message, _ in results:
+        assert "labelling manifest check on rank 0 failed" in message
+        assert "part-0001.npy: file is" in message
+    pdir = out / "results.partial" / "4x3-s42-labels.parts"
+    assert (pdir / "part-0001.npy").exists()  # kept for inspection
+    assert not (pdir / "manifest.json").exists()  # completion marker never published
+
+
+def test_corrupted_part_caught_by_verify_and_stitch(prepared, monkeypatch):  # noqa: F811
+    from aweSOM.npy_parts import stitch_npy, verify_npy_parts
+
     monkeypatch.setenv("NUMBA_CACHE_DIR", str(prepared.tmp / "cache"))
     out = prepared.tmp / "label-bad-crc"
     argv = [*prepared.base, "--out", str(out), "--reuse-pool", str(prepared.pool), "--fit", "4x3", "42",
             "--mpi", "--statistics", "later"]
     results = run_driver(2, argv, "bad-crc")
-    assert [status for status, _, _ in results] == ["error", "error"]
-    for _, message, _ in results:
-        assert "labelling readback check on rank 0 failed" in message
-        assert "rank 1 labels rows" in message and "differ on disk from what it wrote" in message
-    assert (out / "results.partial" / "4x3-s42-labels.part1.npy").exists()  # kept for a look
+    assert [status for status, _, _ in results] == ["ok", "ok"], results
+    pdir = out / "results" / "4x3-s42-distances.parts"
+    with pytest.raises(ValueError, match="CRC-32 .* differs from manifest"):
+        verify_npy_parts(pdir)
+    with pytest.raises(ValueError, match="CRC-32 .* differs from manifest"):
+        stitch_npy(pdir)
+    assert not (out / "results" / "4x3-s42-distances.npy").exists()
 
 
 def test_npy_writer_close_failure_does_not_close_twice(tmp_path, monkeypatch):

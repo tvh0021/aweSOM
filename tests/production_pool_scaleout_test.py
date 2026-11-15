@@ -93,22 +93,43 @@ def test_cpu_no_checkpoint_baseline(threads):
 
 
 def test_parallel_statistics_bitwise(tmp_path):
+    from aweSOM.npy_parts import open_npy, write_npy_manifest
+    from aweSOM.stream import npy_crc32
+
     rng = np.random.default_rng(17)
     values = np.round(rng.normal(size=(1003,7)),1).astype('f4')
     values[:5,0] = [-0.,0.,np.nextafter(np.float32(0),np.float32(1)),1.,-1.]
     nodes = rng.integers(0,9,len(values),dtype='i4')
-    np.save(tmp_path/'labels.npy',nodes%3)
+    lab_arr = (nodes % 3).astype('u1')
+    np.save(tmp_path/'labels.npy',lab_arr)
     labels = np.load(tmp_path/'labels.npy',mmap_mode='r')
+
+    pdir = tmp_path/'sharded.parts'; pdir.mkdir()
+    cuts = [0, 411, len(lab_arr)]
+    entries = []
+    for r in range(2):
+        a, b = cuts[r], cuts[r + 1]
+        pf = pdir/f'part-{r:04d}.npy'
+        np.save(pf, lab_arr[a:b])
+        entries.append(dict(rank=r,file=pf.name,start=a,stop=b,rows=b-a,bytes=b-a,crc32=int(npy_crc32(pf,0,b-a))))
+    write_npy_manifest(pdir,dtype=lab_arr.dtype,shape=lab_arr.shape,parts=entries)
+    sharded_labels = open_npy(pdir,mmap_mode='r')
+
     distances = rng.random(len(values))
     with h5py.File(tmp_path/'raw.h5','w') as h:
         h.create_dataset('raw',data=values)
-    with h5py.File(tmp_path/'raw.h5','r') as h:
-        raw = h['raw']
-        serial = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'serial',29,
-                                        names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=1)
-        parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
-                                          names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=2)
-    assert pool.one_line(serial) == pool.one_line(parallel)
+    try:
+        with h5py.File(tmp_path/'raw.h5','r') as h:
+            raw = h['raw']
+            serial = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'serial',29,
+                                            names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=1)
+            parallel = pool.export_statistics(raw,nodes,distances,labels,10,tmp_path,'parallel',29,
+                                              names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=2)
+            sharded_parallel = pool.export_statistics(raw,nodes,distances,sharded_labels,10,tmp_path,'sharded',29,
+                                                      names=pool.SEVEN_FEATURE_NAMES,n_clusters=4,workers=2)
+    finally:
+        sharded_labels.close()
+    assert pool.one_line(serial) == pool.one_line(parallel) == pool.one_line(sharded_parallel)
 
 
 @pytest.mark.parametrize('low',['scratch','output','floor',None])
@@ -162,12 +183,12 @@ def test_fit_disk_budget_figures(tmp_path,monkeypatch,full_run,pool_new,statisti
 
 @pytest.mark.parametrize('lattice,ranks,output_bpr',[
     ('16x15',1,10),('16x16',1,10),('16x17',1,12),('100x100',1,12),('300x300',1,16),
-    ('100x100',2,18),('100x100',4,21),('100x100',8,22.5),('300x300',8,30),
+    ('100x100',2,12),('100x100',4,12),('100x100',8,12),('300x300',8,16),
 ])
 def test_fit_disk_budget_label_files(tmp_path,monkeypatch,lattice,ranks,output_bpr):
     # One --fit: labels + nodes + distances in label_files' dtypes, bounded by the node count
     # (uint8 up to 256 nodes, uint16 up to 65536, else int32), plus 8-byte distances. Over MPI,
-    # rank 0's full files and the other ranks' part files coexist until assembly: x(2 - 1/ranks).
+    # each rank writes only its own slice under <stem>.parts/ with no rank-0 assembly copy.
     monkeypatch.setattr(pool.shutil,'disk_usage',lambda path: SimpleNamespace(free=10**15))
     a = SimpleNamespace(scratch=tmp_path,out=tmp_path/'fresh',threads_per_seed=1,lattices=[lattice],min_free_gb=0)
     assert pool.fit_disk_budget(a,8*10**8,2,ranks=ranks)['output_bytes'] == output_bpr*8*10**8
@@ -277,10 +298,8 @@ def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
                     'reduce_time','checkpoint_time','rank_io_wait','rank_bmu','rank_acc',
                     'rank_pass_time'):
             info.pop(key)
-        # label_rows records these elapsed seconds per rank, and the assembly and CRC check times.
-        for key in ('crc_check_seconds','assemble_seconds','assemble_read_seconds',
-                    'assemble_write_seconds','assemble_fsync_seconds'):
-            record['labelling'].pop(key)
+        # label_rows records these elapsed seconds per rank, and the manifest publication time.
+        record['labelling'].pop('manifest_seconds')
         for rank in record['labelling']['ranks']:
             for key in ('seconds','compute_seconds','io_wait_seconds','write_seconds',
                         'close_seconds','pwrite_seconds','fsync_seconds','wall_seconds'):
@@ -314,3 +333,38 @@ def test_deferred_statistics_matches_inline(tmp_path,monkeypatch):
         assert (deferred/f'3x2-s42-{suffix}.npy').exists()
         assert not (finished/f'3x2-s42-{suffix}.npy').exists()
     assert pool.digest(deferred/'3x2-s42-labels.npy') == pool.digest(finished/'3x2-s42-labels.npy')
+
+
+def test_deferred_statistics_sharded_parts_round_trip(tmp_path, monkeypatch):
+    from production_pool_mpi_test import COMMON, DRIVER, run_ranks
+    from aweSOM.npy_parts import open_npy
+
+    paths = inputs(tmp_path)
+    base = ['--inputs', *map(str, paths), *COMMON]
+    monkeypatch.setenv('NUMBA_CACHE_DIR', str(tmp_path/'cache'))
+    env = dict(os.environ, NUMBA_NUM_THREADS='2', NUMBA_CACHE_DIR=str(tmp_path/'cache'))
+
+    pool_res = subprocess.run([sys.executable, str(DRIVER), *base, '--out', str(tmp_path/'pool'), '--pool-only'],
+                              env=env, capture_output=True, text=True)
+    assert pool_res.returncode == 0, pool_res.stdout + pool_res.stderr
+    pool_dir = tmp_path/'pool/results'
+
+    deferred = tmp_path/'mpi-deferred'
+    run_ranks(2, [*base, '--out', str(deferred), '--reuse-pool', str(pool_dir), '--fit', '4x3', '42',
+                  '--mpi', '--statistics', 'later'], deferred)
+    for k in ('labels', 'nodes', 'distances'):
+        assert (deferred/'results'/f'4x3-s42-{k}.parts/manifest.json').is_file()
+
+    completed = tmp_path/'mpi-completed'
+    done = subprocess.run([sys.executable, str(DRIVER), '--statistics-only', str(deferred/'results'),
+                           '--out', str(completed), '--threads-per-seed', '2', '--min-free-gb', '0'],
+                          env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (completed/'results/4x3-s42-labels.parts/manifest.json').is_file()
+    assert not (completed/'results/4x3-s42-nodes.parts').exists()
+    assert not (completed/'results/4x3-s42-distances.parts').exists()
+    np.testing.assert_array_equal(
+        open_npy(completed/'results/4x3-s42-labels.npy', mmap_mode=None),
+        open_npy(deferred/'results/4x3-s42-labels.npy', mmap_mode=None),
+    )
+

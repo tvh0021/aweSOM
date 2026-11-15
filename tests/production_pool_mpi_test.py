@@ -125,8 +125,10 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     out = prepared.tmp/'mpi2'
     argv = [*prepared.base, '--out', str(out), '--reuse-pool', str(prepared.pool), '--fit', '4x3', '42', '--mpi']
     writes = run_ranks(2, argv, out)
-    # Rank 0 wrote every output; rank 1 wrote only its own part files of its label rows.
-    assert writes[0] and set(writes[1]) == {f"open {out}/results.partial/4x3-s42-{k}.part1.npy" for k in ("labels", "nodes", "distances")}
+    # Rank 0 created the .parts directories and wrote every other output; rank 1 opened only its part-0001.npy files.
+    assert writes[0] and set(writes[1]) == {
+        f"open {out}/results.partial/4x3-s42-{k}.parts/part-0001.npy" for k in ("labels", "nodes", "distances")
+    }
     results = out/'results'
     a = SOMModel.load(results/'4x3-s42.h5').weights
     b = SOMModel.load(prepared.single/'4x3-s42.h5').weights
@@ -136,6 +138,7 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     rec = json.loads((results/'4x3-s42.json').read_text())
     ref = json.loads((prepared.single/'4x3-s42.json').read_text())
     assert rec['ranks'] == 2 and ref['ranks'] == 1
+    assert rec['labelling']['layout'] == 'sharded' and ref['labelling']['layout'] == 'single'
     assert rec['rank_hostnames'] == [os.environ.get('SLURMD_NODENAME') or 'local']*2
     assert rec['rank_numba_threads'] == [1, 1] and rec['affinity_restored'] == [None, None]
     assert not {'rank_hostnames', 'rank_numba_threads', 'affinity_restored'} & set(ref)
@@ -144,10 +147,12 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     assert min(np.array(rec['training_info']['rank_rows']).sum(axis=0)) > 0  # both ranks trained
     # The spawned worker keeps a per-process numba cache in results; MPI ranks use NUMBA_CACHE_DIR.
     names = lambda d: sorted(p.name for p in d.iterdir() if not p.name.startswith('numba-cache-'))
-    assert names(results) == names(prepared.single)
+    assert names(results) == sorted(n.replace('-labels.npy', '-labels.parts') for n in names(prepared.single))
+    assert (results/'4x3-s42-labels.parts/manifest.json').is_file()
+    assert not (results/'4x3-s42-nodes.parts').exists() and not (results/'4x3-s42-distances.parts').exists()
     bundle = json.loads((results/'fit-results.json').read_text())
     assert bundle['models'] == [rec]
-    # The README flow: a second seed on the MPI path, then --collect of both.
+    # The README flow: a second seed on the MPI path, then --collect of both (and mixed 1-rank + 2-rank --collect).
     other = prepared.tmp/'mpi2-s43'
     run_ranks(2, [*prepared.base, '--out', str(other), '--reuse-pool', str(prepared.pool), '--fit', '4x3', '43', '--mpi'], other)
     collected = prepared.tmp/'collected'
@@ -157,6 +162,19 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     assert result.returncode == 0, result.stdout+result.stderr
     manifest = json.loads((collected/'results/freeze-manifest.json').read_text())
     assert [m['ranks'] for m in manifest['models']] == [2, 2] and (collected/'results/frozen-4x3.h5').exists()
+    assert (collected/'results/4x3-s42-labels.parts/manifest.json').is_file()
+
+    # Mixed --collect: 1-rank single .npy fit (seed 42) + 2-rank sharded .parts fit (seed 43).
+    mixed = prepared.tmp/'collected-mixed'
+    mixed_res = subprocess.run([sys.executable, str(DRIVER), *prepared.base, '--lattices', '4x3', '--out', str(mixed),
+                                '--reuse-pool', str(prepared.pool), '--collect', str(prepared.single), str(other/'results')],
+                               env=dict(os.environ, NUMBA_NUM_THREADS='2'), capture_output=True, text=True)
+    assert mixed_res.returncode == 0, mixed_res.stdout+mixed_res.stderr
+    mixed_manifest = json.loads((mixed/'results/freeze-manifest.json').read_text())
+    assert [m['ranks'] for m in mixed_manifest['models']] == [1, 2]
+    assert (mixed/'results/4x3-s42-labels.npy').is_file()
+    assert (mixed/'results/4x3-s43-labels.parts/manifest.json').is_file()
+    assert (mixed/'results/frozen-4x3.h5').exists()
 
 
 def _max_rel(a, b):

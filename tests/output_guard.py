@@ -1,7 +1,7 @@
 """Exclusive opens of label output files, for the multi-rank labelling tests.
 
 :func:`install` wraps ``builtins.open`` and ``os.open`` in this process. Every open
-of a ``*-{labels,nodes,distances}.npy`` or ``*-{...}.part<r>.npy`` file, for
+of a ``*-{labels,nodes,distances}.npy`` or ``*-{...}.parts/part-RRRR.npy`` file, for
 reading or writing, takes a non-blocking ``flock(LOCK_EX)`` on the new descriptor
 and fails if another process holds the file open the same way. No clocks are
 involved: two ranks with one output file open at the same time fail. The lock
@@ -15,7 +15,7 @@ import fcntl
 import os
 import re
 
-OUTPUT = re.compile(r"-(labels|nodes|distances)(\.part\d+)?\.npy$")
+OUTPUT = re.compile(r"-(labels|nodes|distances)(?:\.npy|\.parts/part-\d+\.npy)$")
 opened = []
 active = True
 
@@ -81,6 +81,6 @@ def locking_during(fn):
 
 
 def is_final(path):
-    """A final output file, not a part."""
-    m = OUTPUT.search(path)
-    return m is not None and m.group(2) is None
+    """A single-file .npy output, not a sharded .parts/part-RRRR.npy."""
+    s = os.fsdecode(path)
+    return OUTPUT.search(s) is not None and ".parts/" not in s
