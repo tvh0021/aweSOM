@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.8.0
+Version: 1.9.0
 
 ## 1. Installation
 
@@ -269,7 +269,7 @@ new_labels, bmu_distances = loaded.predict(raw_new_data, return_distance=True)
 
 `predict` scales raw input with the stored `Scaler` and, with
 `return_distance=True`, also returns the Euclidean distance to the best-matching
-node in the scaled space. `backend` is `"screen"` (default) or `"numba"`. Files
+node in the scaled space. `backend` is `"screen"` (default), `"patch"`, or `"numba"`. Files
 record `format_version` 1. Every later 1.x release loads them, and `load` refuses
 a file with a newer version. The text file can be read without HDF5, for example
 from other languages.
@@ -284,6 +284,16 @@ standard deviation.
 ### Choosing a target cluster count
 
 Call `map.assign_cluster_to_lattice(target_clusters=4)` to merge centroids along the greedy U-matrix path until at most four clusters remain. The `target_clusters` setting is an upper bound, because equal merge costs or the default `0.05` `merge_cost_floor` can yield fewer clusters. Target mode requires a `float64` U-matrix and records `map.merge_cost_used` and `map.n_clusters`, so later runs can replay that threshold. Treat the chosen count as a convenience setting for inspection rather than a physical result.
+
+### Inference backends
+
+`aweSOM.inference` provides three CPU best-matching-unit backends that return bitwise-identical `int32` labels and `float64` distances:
+
+- `"screen"` is the default in `SOMModel.predict`, `aweSOM.predict`, `Lattice.predict`, and `Lattice.best_match`. It scans all nodes in `float32` tiles, checks the winner against the `float32` rounding bound in `float64`, and falls back to the ascending `float64` scan on uncertified rows. Since `v1.9.0`, `"screen"` also checks that the `float32` runner-up squared distance is finite before certifying, so large finite `float64` inputs whose runner-up overflows `float32` fall back to `float64`.
+- `"patch"`, added in `v1.9.0`, groups the `(xdim, ydim)` lattice into rectangular patches with `float64` bounding balls and skips patches whose triangle-inequality lower bound exceeds the current best `float64` distance. Call `model.predict(raw_data, backend="patch")` on a `SOMModel`, or `aweSOM.predict(weights, clusters.ravel(order="F"), scaled_data, backend="patch", lattice_shape=(xdim, ydim))` on scaled arrays; `Lattice.predict` and `Lattice.best_match` do not accept `"patch"`.
+- `"numba"` runs the exhaustive ascending `float64` scan over every node in parallel Numba threads.
+
+Keep `"screen"` on small trained maps such as `29x20` with `580` nodes, where a full `float32` tile scan runs about `2.1x` faster than patch bookkeeping. On medium trained maps such as `51x36` with `1,836` nodes or the `64x37` plasma map with `2,368` nodes, `"patch"` and `"screen"` stay within `1.3x` to `1.5x` of each other. Switch to `"patch"` on large smooth trained maps such as `91x64` with `5,824` nodes or `100x100` with `10,000` nodes, where `"patch"` runs `2.8x` faster than `"screen"` and `5.7x` faster than `"numba"` on `100x100` by skipping most patches in exact `float64` arithmetic. Avoid `"patch"` on untrained random weights, where overlapping bounding balls prevent pruning and make `"patch"` `7x` to `8x` slower than `"screen"` while still returning exact results. Across all three backends, exact ties pick the lowest node index, `NaN` candidate distances never win, non-finite or `> 1e15` weights delegate to `"numba"`, and query rows with no finite distance return node `0` and distance `inf`.
 
 ## 4. Basic Usage - SCE
 

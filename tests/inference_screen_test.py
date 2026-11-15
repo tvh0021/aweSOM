@@ -58,3 +58,45 @@ def test_screen_chunks_and_predict():
     assert _same(best_match_nodes_screen(w, x, chunk=97), ref)
     cl = np.arange(64) % 5
     assert np.array_equal(predict(w, cl, x, backend="screen"), predict(w, cl, x, backend="numba"))
+
+
+OVERFLOW = [
+    (
+        np.array([[18373320559154.32, -19118858046266.434], [14490963125571.676, -14263481110883.94]]),
+        np.array([[1.3043817436596711e19, 1.3043817436596711e19]]),
+    ),
+    (
+        np.array([[1e10, 0, -1e9], [-1e10, 0, 1e9]]),
+        np.array(
+            [[np.float32(2**64 - 2**41), np.float32(np.sqrt(3) * 2**52), np.float32(np.sqrt(0.5) * 2**52)]],
+            np.float64,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("k", range(len(OVERFLOW)))
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_screen_overflowed_runner_up_falls_back(k, dtype):
+    w, x = OVERFLOW[k]
+    x = x.astype(dtype)
+    idx, d2, fb = best_match_nodes_screen(w, x, return_fallbacks=True)
+    assert _same((idx, d2), best_match_nodes(w, x))
+    assert fb == 1
+
+
+@pytest.mark.parametrize("F", [1, 4])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_screen_single_node_lattice_falls_back(F, dtype):
+    rng = np.random.default_rng(10 + F)
+    w = rng.normal(size=(1, F))
+    x = rng.normal(size=(20, F))
+    x[0] = w[0]
+    x[1, 0] = np.nan
+    x[2] = np.nan
+    x[3, 0] = np.inf
+    x[4, -1] = -np.inf
+    x = x.astype(dtype)
+    idx, d2, fb = best_match_nodes_screen(w, x, return_fallbacks=True)
+    assert fb == len(x)
+    assert _same((idx, d2), best_match_nodes(w, x))

@@ -31,10 +31,10 @@ feature scaling to a file, so later runs can label raw data without ``pickle``.
 
 ``predict`` scales raw input with the stored ``Scaler`` and, with
 ``return_distance=True``, also returns the Euclidean distance to the best-matching
-node in the scaled space. ``backend`` is ``"screen"`` (default) or ``"numba"``. Files
-record ``format_version`` 1. Every later 1.x release loads them, and ``load`` refuses
-a file with a newer version. The text file can be read without HDF5, for example
-from other languages.
+node in the scaled space. ``backend`` is ``"screen"`` (default), ``"patch"``, or
+``"numba"`` (see :doc:`backends`). Files record ``format_version`` 1. Every later
+1.x release loads them, and ``load`` refuses a file with a newer version. The text
+file can be read without HDF5, for example from other languages.
 
 ``Scaler`` works in float64. If you trained the lattice on float32 data scaled by
 ``rs.manual_scaling``, keep the training mean and two standard deviations in

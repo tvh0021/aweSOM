@@ -231,7 +231,9 @@ def _screen_kernel(
             e = 2.0 * _U32 * (wmax + np.sqrt(xn2)) * 1.01 + 1e-18
             lo2 = np.sqrt(np.float64(s2[p]) / (1.0 + g)) - e
             hi1 = (np.sqrt(np.float64(s1[p]) / (1.0 - g)) + e) * (1.0 + 1e-12)
-            if lo2 > hi1:  # False for NaN/inf/overflow and near-ties
+            # False for NaN/inf and near-ties. An overflowed runner-up s2 bounds
+            # nothing (lo2 = inf), so it must be finite.
+            if lo2 > hi1 and s2[p] < np.inf:
                 j = j1[p]
                 acc64 = 0.0
                 for f in range(F):
@@ -278,6 +280,18 @@ def best_match_nodes_screen(
     :func:`best_match_nodes`, for float64 and float32 input; the bound was
     checked independently for F = 1 to 10. Non-finite or huge (> 1e15)
     weights use :func:`best_match_nodes` directly.
+
+    Tie and non-finite contract (D3):
+        Exact ties pick the lowest node index. The scan skips any node whose
+        squared distance is ``NaN``. A row with no finite distance, including
+        any row with a ``NaN``, ``+inf``, or ``-inf`` coordinate against finite
+        weights, returns node ``0`` and squared distance ``inf``. A tile entry
+        with runner-up ``s2 == inf``, whether from ``float32`` overflow or a
+        single-node lattice, never certifies and falls back to the full
+        ``float64`` reference scan. Non-finite weights or weights with
+        ``max(|w|) > 1e15`` call :func:`best_match_nodes` directly. Node
+        indices and squared distances equal :func:`best_match_nodes` bitwise
+        in every case.
 
     Args:
         weights (np.ndarray): [nodes, F] lattice weights, node index = x + y * xdim.
@@ -635,10 +649,8 @@ def lattice_patches(weights: np.ndarray, xdim: int, ydim: int, side: int | None 
 def default_patch_side(n_nodes: int) -> int:
     """Patch side used when none is given: 4 up to 8000 nodes, 5 above.
 
-    From a sweep of sides 3 to 8 on synthetic 5-feature data
-    (``planning/benchmarks/bench_stream.py``): at 91 x 64 nodes side 4 was
-    fastest (2.4-2.6x the screen on early and trained lattices), at 160 x 100
-    side 5 (2.7-4x).
+    From a sweep of sides 3 to 8 on synthetic five-feature data, side 4 was
+    fastest at 91 x 64 nodes and side 5 was fastest at 160 x 100 nodes.
     """
     return 4 if n_nodes <= 8000 else 5
 
@@ -944,6 +956,18 @@ def best_match_nodes_patch(
     evaluations instead of ``nodes``. Non-finite or huge (> 1e15) weights use
     :func:`best_match_nodes`.
 
+    Tie and non-finite contract (D3):
+        Exact ties within a patch or across patches pick the lowest node index
+        through the lexicographic ``(distance, index)`` comparison, while the
+        pruning bound retains every patch that can hold an equal distance. Any
+        row with a ``NaN``, ``+inf``, or ``-inf`` coordinate produces a
+        non-finite centroid distance and restarts with the full ascending
+        ``float64`` scan, which skips ``NaN`` node distances and returns node
+        ``0`` and squared distance ``inf`` when weights are finite. Non-finite
+        weights or weights with ``max(|w|) > 1e15`` call
+        :func:`best_match_nodes` directly. Node indices and squared distances
+        equal :func:`best_match_nodes` bitwise in every case.
+
     Args:
         weights (np.ndarray): [xdim * ydim, F] lattice weights, node index = x + y * xdim.
         data (np.ndarray): [N, F] float64 or float32 points in the scaled space.
@@ -1004,6 +1028,18 @@ def predict(
     ``precision="highest"`` on the default JAX devices: identical labels where
     the devices support float64, float32 arithmetic (with a warning) where they
     do not.
+
+    Tie and non-finite contract (D3):
+        Exact ties assign ``node_cluster[lowest_idx]`` using the lowest tied
+        node index on ``"screen"``, ``"patch"``, ``"numba"``, and float64
+        ``"jax"`` above subnormal distances; ``"kdtree"`` may resolve ties or
+        one-ulp near-ties to another node. ``"screen"``, ``"patch"``,
+        ``"numba"``, and ``"jax"`` skip nodes with ``NaN`` distances, and any
+        row with no finite distance, including ``NaN``, ``+inf``, or ``-inf``
+        coordinates against finite weights, receives ``node_cluster[0]`` and
+        Euclidean distance ``inf``; ``"kdtree"`` requires finite weights and
+        points. On CPU, ``"screen"``, ``"patch"``, and ``"numba"`` return
+        bitwise-identical ``int32`` labels and ``float64`` Euclidean distances.
 
     Args:
         weights (np.ndarray): [nodes, F] lattice weights.
