@@ -100,6 +100,10 @@ def test_sheet_median():
     assert build.select_sheet_clusters(table,'log_chi_B>1,log_beta_inv<0.5')==[1]
 
 
+def test_default_r_min():
+    assert pool.default_r_min((100,100))==pool.default_r_min((91,64))==pool.default_r_min((48,34))==8
+
+
 def test_end_to_end(tmp_path):
     paths=inputs(tmp_path); a=args(tmp_path,paths)
     env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1',NUMBA_CACHE_DIR=str(tmp_path/'cache'),

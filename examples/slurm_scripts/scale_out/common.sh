@@ -286,7 +286,7 @@ print(f"AFFINITY rank={c.Get_rank()} size={c.Get_size()} host={host} "
   affinity_report "$case" "$f" $((nn * rpn)) "$cpus"
 }
 
-r_min_for() { case $1 in 160x100) echo 8;; *x*) [ "${1%%x*}" -ge 91 ] && echo 8 || echo 5;; esac; }
+r_min_for() { echo 8; }
 
 # Write mpi4py's version, the MPI extension file, MPI4PY_LIBMPI and the MPI library version
 # to $1. Fails if `from mpi4py import MPI` fails, if the binary wheel picked its MPICH
