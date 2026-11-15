@@ -43,7 +43,10 @@ import argparse  # noqa: E402
 import concurrent.futures  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
-import resource  # noqa: E402
+try:
+    import resource  # noqa: E402
+except ImportError:
+    resource = None
 import subprocess  # noqa: E402
 import time  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
@@ -203,7 +206,9 @@ def require_node_names(comm) -> None:
                            "mpiexec -launcher slurm) so each rank knows its node; refusing to count nodes")
 
 
-def peak_rss() -> int:
+def peak_rss() -> int | None:
+    if resource is None:
+        return None
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(r if sys.platform == "darwin" else r * 1024)
 

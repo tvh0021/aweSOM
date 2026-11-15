@@ -119,9 +119,6 @@ class Reducer:
     def bcast_object(self, obj: Any, root: int = 0) -> Any:
         return self.comm.bcast(obj, root=root)
 
-    def barrier(self) -> None:
-        self.comm.Barrier()
-
     def reduce_pass(self, st: dict) -> tuple[dict, dict]:
         """Totals of one :func:`aweSOM.stream._pass` result over all ranks.
 

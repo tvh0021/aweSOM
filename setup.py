@@ -30,6 +30,6 @@ setup(
     ],
     python_requires=">=3.9",
     install_requires=required,
-    extras_require={"cuda": ["cupy-cuda12x"]},
+    extras_require={"gpu": ["jax[cuda12]"], "cuda": ["cupy-cuda12x"]},
     include_package_data=True,
 )

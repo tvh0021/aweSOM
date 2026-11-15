@@ -334,8 +334,10 @@ def cuda_available():
 
 
 def _on_device(cp, device):
-    """Context that makes ``device`` current; a no-op for None (current device)."""
-    return contextlib.nullcontext() if device is None else cp.cuda.Device(device)
+    """Context that makes ``device`` current; a no-op for None or the current device."""
+    if device is None or cp.cuda.runtime.getDevice() == device:
+        return contextlib.nullcontext()
+    return cp.cuda.Device(device)
 
 
 def _pinned(cp, shape, dtype):
@@ -376,7 +378,7 @@ class GpuScreenSearcher:
         if cp.cuda.runtime.getDeviceCount() < 1:
             raise RuntimeError('CUDA BMU search needs a CUDA device')
         self.cp = cp
-        self.device = None if device is None else int(device)
+        self.device = int(cp.cuda.runtime.getDevice() if device is None else device)
         self.nodes, self.features = w.shape
         self.chunk, self.tile, self.block = int(chunk), int(tile), int(block)
         self.rows_per_thread, pad = _layout(self.features)  # the grid covers n rows
@@ -445,8 +447,9 @@ class GpuScreenSearcher:
     def cancel(self):
         """Wait for all device work and drop results that were not written yet."""
         try:
-            for stream in self.streams:
-                stream.synchronize()
+            with _on_device(self.cp, self.device):
+                for stream in self.streams:
+                    stream.synchronize()
         finally:
             for slot in self.slots:
                 slot['pending'] = None
@@ -454,12 +457,13 @@ class GpuScreenSearcher:
     def wait(self, token=None):
         """Write the results of every ``submit`` up to ``token`` (all when None)."""
         try:
-            for i in range(len(self.slots)):  # oldest first: the next slot to reuse
-                k = (self.turn + i) % len(self.slots)
-                slot, stream = self.slots[k], self.streams[k]
-                pending = slot['pending']
-                if pending is not None and (token is None or pending[0] <= token):
-                    self._finish(slot, stream)
+            with _on_device(self.cp, self.device):
+                for i in range(len(self.slots)):  # oldest first: the next slot to reuse
+                    k = (self.turn + i) % len(self.slots)
+                    slot, stream = self.slots[k], self.streams[k]
+                    pending = slot['pending']
+                    if pending is not None and (token is None or pending[0] <= token):
+                        self._finish(slot, stream)
         except BaseException:
             self.cancel()
             raise

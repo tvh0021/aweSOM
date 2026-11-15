@@ -144,6 +144,13 @@ def _as_float(block: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(block)
 
 
+def _check_chunk(c: np.ndarray, n_feat: int) -> None:
+    if c.ndim != 2:
+        raise ValueError("weights and data must be 2D arrays")
+    if c.shape[1] != n_feat:
+        raise ValueError(f"data has {c.shape[1]} features but the lattice has {n_feat}")
+
+
 class _ArraySource:
     """Row-sliceable 2-D source (ndarray, memmap, h5py.Dataset)."""
 
@@ -247,7 +254,9 @@ class _CallableSource:
         pass that reads only chunks holding requested rows and stops after the last."""
         own = getattr(self.fn, "rows", None)
         if callable(own):
-            return np.asarray(own(ix), np.float64)
+            out = np.asarray(own(ix), np.float64)
+            _check_chunk(out, self.n_feat)
+            return out
         order = np.argsort(ix, kind="stable")
         sorted_ix = ix[order]
         out = np.empty((len(ix), self.n_feat), np.float64)
@@ -259,6 +268,7 @@ class _CallableSource:
             hi = np.searchsorted(sorted_ix, offset + m, side="left")
             if hi > pos:
                 block = read()
+                _check_chunk(block, self.n_feat)
                 out[order[pos:hi]] = block[sorted_ix[pos:hi] - offset]
                 pos = hi
             offset += m
@@ -702,6 +712,7 @@ class _BMU:
         return 0
 
     def __call__(self, block: np.ndarray, idx: np.ndarray, d2: np.ndarray) -> int:
+        _check_chunk(block, self.w.shape[1])
         if self.kind == "auto":
             m = min(self.PROBE, block.shape[0])
             times = {}
@@ -748,7 +759,6 @@ class BMUSearcher:
         else:
             xdim, ydim = len(w), 1
         self.backend = backend
-        self.device = device
         self.n_feat = w.shape[1]
         self._bmu = _BMU(
             w,
@@ -757,6 +767,7 @@ class BMUSearcher:
             int(ydim),
             device=device,
         )
+        self.device = getattr(self._bmu.gpu, "device", device) if backend == "cuda_screen" else device
 
     def __call__(self, data: np.ndarray, idx: Optional[np.ndarray] = None,
                  d2: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
@@ -831,6 +842,7 @@ def _pass(
     for c in it:
         if not prefetch:
             stats["io_wait"] += time.perf_counter() - t_read
+        _check_chunk(c, n_feat)
         m = c.shape[0]
         if idx.shape[0] < m:
             idx = np.empty(m, np.int32)
@@ -1352,6 +1364,13 @@ def predict_stream(
     clusters = np.asarray(node_cluster, dtype=np.int32).ravel()
     if len(clusters) != np.shape(weights)[0]:
         raise ValueError("node_cluster must have one entry per node")
+    w = np.ascontiguousarray(weights, np.float64)
+    if w.ndim != 2:
+        raise ValueError("weights and data must be 2D arrays")
+    if not w.shape[0]:
+        raise ValueError("weights must contain at least one node")
+    if not w.shape[1]:
+        raise ValueError("weights must contain at least one feature")
     source = _make_source(data_source, n_samples)
     rank, size = 0, 1
     lo, hi = 0, source.n
@@ -1384,16 +1403,19 @@ def predict_stream(
     t_start = time.perf_counter()
     if backend == "cuda_screen":
         gpu = _BMU(
-            weights,
+            w,
             backend,
             len(clusters),
             1,
             device=device,
         ).gpu
-        rows = _label_queued(gpu, clusters, it, (out, out_distance, out_node), lo, bases, stats)
+        rows = _label_queued(gpu, clusters, it, (out, out_distance, out_node), lo, bases, stats,
+                             w.shape[1])
     if backend != "cuda_screen":
-        rows = _label_host(weights, clusters, it, (out, out_distance, out_node), lo, bases, stats,
+        rows = _label_host(w, clusters, it, (out, out_distance, out_node), lo, bases, stats,
                            backend, lattice_shape)
+    if not rows and source.n_feat is not None and source.n_feat != w.shape[1]:
+        raise ValueError(f"data has {source.n_feat} features but the lattice has {w.shape[1]}")
     stats["seconds"] = time.perf_counter() - t_start
     stats.update(rows=rows, start=lo, stop=hi, rank=rank, ranks=size)
     stats["device"] = None if device is None else int(device)
@@ -1404,9 +1426,11 @@ def _label_host(weights, clusters, chunks, outs, pos, bases, stats, backend, lat
     """Label ``chunks`` with a CPU backend from row ``pos`` on; return the row count."""
     out, out_distance, out_node = outs
     base, base_d, base_n = bases
+    w = np.ascontiguousarray(weights, np.float64)
+    n_feat = w.shape[1]
     if backend in _SEARCH_BACKENDS:
         xdim, ydim = lattice_shape if backend == "patch" else (len(clusters), 1)
-        searcher = _BMU(weights, backend, xdim, ydim)
+        searcher = _BMU(w, backend, xdim, ydim)
 
         def search(c):
             idx, d2 = np.empty(c.shape[0], np.int32), np.empty(c.shape[0], np.float64)
@@ -1416,9 +1440,10 @@ def _label_host(weights, clusters, chunks, outs, pos, bases, stats, backend, lat
         from .inference import best_match_nodes_jax
 
         def search(c):
-            return best_match_nodes_jax(weights, c, chunk=c.shape[0])
+            return best_match_nodes_jax(w, c, chunk=c.shape[0])
     first = pos
     for c in chunks:
+        _check_chunk(c, n_feat)
         t0 = time.perf_counter()
         m = c.shape[0]
         idx, d2 = search(c)
@@ -1446,7 +1471,9 @@ def _label_dtype(out: Any, clusters: np.ndarray) -> np.dtype:
     return np.dtype(np.int32)
 
 
-def _label_queued(gpu, clusters, chunks, outs, pos, bases, stats) -> int:
+def _label_queued(
+    gpu, clusters, chunks, outs, pos, bases, stats, n_feat: Optional[int] = None
+) -> int:
     """Label ``chunks`` on a CUDA searcher with ``submit`` from row ``pos`` on; return the row count.
 
     Cluster ids are gathered on the device. Chunk ``k`` is written to ``out``
@@ -1462,6 +1489,8 @@ def _label_queued(gpu, clusters, chunks, outs, pos, bases, stats) -> int:
     """
     out, out_distance, out_node = outs
     base, base_d, base_n = bases
+    if n_feat is None:
+        n_feat = int(np.shape(gpu.w)[1])
     nodes = out_node is not None
     dt = np.dtype(np.int32) if nodes else _label_dtype(out, clusters)
     table = None if nodes else gpu.cluster_map(clusters, dt)
@@ -1486,6 +1515,7 @@ def _label_queued(gpu, clusters, chunks, outs, pos, bases, stats) -> int:
 
     try:
         for k, c in enumerate(chunks):
+            _check_chunk(c, n_feat)
             t0 = time.perf_counter()
             m = c.shape[0]
             b = buffers[k % 2]

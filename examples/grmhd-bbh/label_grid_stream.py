@@ -7,7 +7,10 @@ give the same nodes (lowest index on ties), so the labels do not depend on it.
 """
 import argparse
 import json
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import time
 from pathlib import Path
 import h5py
@@ -62,6 +65,7 @@ def main():
                     lab=np.full(len(lev),-1,np.int16);lab[use]=np.asarray(m.node_cluster).ravel()[idx];o[sl]=lab
             if a%10000000==0:print(a+len(lev),'seconds',time.time()-t,flush=True)
         for o in outs:o.flush()
-    print(json.dumps({'backend':backend,'seconds':time.time()-t,'peak_GB':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e9}),flush=True)
+    peak_gb = None if resource is None else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9
+    print(json.dumps({'backend':backend,'seconds':time.time()-t,'peak_GB':peak_gb}),flush=True)
 
 if __name__=='__main__':main()

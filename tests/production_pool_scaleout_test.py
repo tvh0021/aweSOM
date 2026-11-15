@@ -11,6 +11,13 @@ import numpy as np
 import pytest
 
 
+def zip_strict(*its):
+    """zip(..., strict=True) for Python 3.9."""
+    lists = [list(it) for it in its]
+    assert len({len(x) for x in lists}) == 1, [len(x) for x in lists]
+    return zip(*lists)
+
+
 def test_raw_scaling_matches_stored(tmp_path):
     paths = inputs(tmp_path); a = args(tmp_path,paths); a.write_scaled = True
     records,quota,*_ = pool.inspect(a); a.out.mkdir()
@@ -26,10 +33,10 @@ def test_raw_scaling_matches_stored(tmp_path):
             assert actual.tobytes() == expected.tobytes()
             assert actual.tobytes() == scaler.transform(unscaled.astype('f8')).tobytes()
         for _ in range(3):
-            for a,b,c in zip(raw(),stored(),plain(),strict=True): equal(a,b,c)
+            for a,b,c in zip_strict(raw(),stored(),plain()): equal(a,b,c)
             ix = np.array([59,0,7,7,21,42])
             equal(raw.rows(ix),stored.rows(ix),plain.rows(ix))
-            for a,b,c in zip(raw.lazy_chunks(),stored.lazy_chunks(),plain.lazy_chunks(),strict=True):
+            for a,b,c in zip_strict(raw.lazy_chunks(),stored.lazy_chunks(),plain.lazy_chunks()):
                 assert a[0] == b[0] == c[0]
                 equal(a[1](),b[1](),c[1]())
                 equal(a[1](),b[1](),c[1]())
@@ -234,7 +241,7 @@ def test_merge_buffer_size_bitwise(tmp_path,monkeypatch,dtype):
         monkeypatch.setattr(statistics,'MERGE_BUFFER_RECORDS',cap)
         blocks = ((values[a:a+29],labels[a:a+29]) for a in range(0,len(values),29))
         results.append(statistics.summarize(blocks,counts,[.25,.5,.75],directory,29))
-    for a,b in zip(*results,strict=True): assert a.tobytes() == b.tobytes()
+    for a,b in zip_strict(*results): assert a.tobytes() == b.tobytes()
 
 
 def test_full_run_checks_scratch_before_pooling(tmp_path,monkeypatch):

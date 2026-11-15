@@ -41,7 +41,6 @@ def main():
     arrays['distances'][:] = rng.random(a.rows)
     for x in arrays.values(): x.flush()
     old.scatter_values(np.array([0], dtype='i4'), np.array([1.]), np.array([0]), np.zeros(1))
-    new.scatter_order(np.array([0], dtype='i4'), np.array([0]), np.zeros(1, dtype=np.intp))
     report = dict(rows=a.rows, features=7, chunk=chunk, cache='F_NOCACHE HDF5 input' if a.uncached else 'OS cache uncontrolled')
     with h5py.File(path) as h:
         if a.uncached:

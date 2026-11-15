@@ -51,8 +51,10 @@ def env(name, default, cast=str):
 
 
 def log(stage, **kw):
+    rss = peak_rss_bytes()
     rec = {"stage": stage, "time": time.strftime("%H:%M:%S"),
-           "threads": numba.get_num_threads(), "peak_rss_gb": peak_rss_bytes() / 1e9, **kw}
+           "threads": numba.get_num_threads(),
+           "peak_rss_gb": None if rss is None else rss / 1e9, **kw}
     print(json.dumps(rec, default=float), flush=True)
 
 

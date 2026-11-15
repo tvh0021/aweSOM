@@ -1,7 +1,8 @@
 #!/bin/bash
 # One fit, one MPI rank per node (production_pool.py --mpi). Every rank trains on the pool
-# windows it owns and labels its own row range of the pool; rank 0 assembles the label
-# files, computes statistics and writes the other outputs in OUT.
+# windows it owns and writes its own label shard under <tag>-<key>.parts/ (read with
+# aweSOM.open_npy, stitch with `python -m aweSOM.npy_parts`); rank 0 publishes the part
+# manifests, computes statistics and writes the other outputs in OUT.
 # The launch is launch_cmd of examples/slurm_scripts/scale_out/common.sh (srun-pmix), after
 # its affinity pre-flight. Pre-flight output: $OUT-launch/probe/affinity-fit.txt.
 set -eo pipefail  # not -u: common.sh's module setup sources the site's lmod scripts

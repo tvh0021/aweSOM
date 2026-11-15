@@ -422,23 +422,6 @@ class EpochSource:
 
 if 'NUMBA_NUM_THREADS' not in os.environ and 'SLURM_CPUS_PER_TASK' in os.environ:
     os.environ['NUMBA_NUM_THREADS'] = os.environ['SLURM_CPUS_PER_TASK']
-from numba import njit
-
-
-@njit(cache=False)
-def scatter_order(keys, positions, order):
-    """Stable counting-sort permutation, with no comparison-sort workspace."""
-    for i in range(len(keys)):
-        k = keys[i]
-        order[positions[k]] = i
-        positions[k] += 1
-
-
-def grouped_order(keys, n_groups):
-    edges = np.r_[0, np.cumsum(np.bincount(keys, minlength=n_groups))]
-    order = np.empty(len(keys), dtype=np.intp)
-    scatter_order(keys, edges[:-1].copy(), order)
-    return order, edges
 
 
 def export_statistics(raw, nodes, distances, labels, n_nodes, out, tag, chunk,
@@ -1784,10 +1767,14 @@ def main(argv=None):
     physics['winsor']='none'
     extraction_commit=attrs.get('git_commit','unknown')
     from aweSOM.stream import peak_rss_bytes
+    parent_rss = peak_rss_bytes()
+    fit_rss = [r['peak_rss_bytes'] for r in fits]
+    concurrent_rss = (None if parent_rss is None or not fit_rss or any(x is None for x in fit_rss)
+                      else parent_rss + execution_plan['seed_workers'] * max(fit_rss))
     manifest=dict(schema_version=1,execution_plan=dict(**execution_plan,auto_threads=auto_threads),feature_names=records[0]['names'],pipeline='v2',
                   end_to_end_wall_seconds=time.perf_counter()-started,
-                  parent_peak_rss_bytes=peak_rss_bytes(),
-                  concurrent_peak_rss_upper_bound_bytes=peak_rss_bytes()+execution_plan['seed_workers']*max(r['peak_rss_bytes'] for r in fits),
+                  parent_peak_rss_bytes=parent_rss,
+                  concurrent_peak_rss_upper_bound_bytes=concurrent_rss,
                   implementation_sha256=digest(Path(__file__)),
                   etk_analysis_commit=extraction_commit if extraction_commit!='unknown' else UNAVAILABLE,
                   current_local_etk_checkout_commit=commit('/Volumes/ExternalNVMe/etk-analysis') if Path('/Volumes/ExternalNVMe/etk-analysis/.git').exists() else UNAVAILABLE,
