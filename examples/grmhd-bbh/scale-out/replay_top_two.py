@@ -3,7 +3,7 @@ pick with the previous first-candidates-only rule in all eight seed groups (4 se
 lattices). Reads the K pool and labels only; writes nothing. The data are 1.6 GB of pool rows
 plus the label files, so this is a script, not a test.
 
-    python replay_top_two.py [K results directory]
+    python replay_top_two.py <results-dir>
 
 Effects are recomputed on all pool rows with production_pool.rank_effects, candidates with
 production_pool.sheet_candidates, and the group decision with production_pool.select_group.
@@ -21,7 +21,6 @@ HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('production_pool', HERE.parent/'production_pool.py')
 pool = importlib.util.module_from_spec(spec); spec.loader.exec_module(pool)
 
-K_RESULTS = Path('/Volumes/ExternalNVMe/awesom-results/cluster/HHR_flux_production_pool_k10_r8_8014/run/results')
 SEEDS = (42, 43, 44)
 GROUPS = ((42, 43), (42, 44), (43, 44), (42, 43, 44))
 
@@ -62,4 +61,6 @@ def main(results):
 
 
 if __name__ == '__main__':
-    main(Path(sys.argv[1]) if len(sys.argv) > 1 else K_RESULTS)
+    if len(sys.argv) != 2:
+        raise SystemExit('usage: python replay_top_two.py <results-dir>')
+    main(Path(sys.argv[1]))

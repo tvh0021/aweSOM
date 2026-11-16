@@ -68,21 +68,22 @@ analysis scripts read `.parts/` directories without stitching. Run
 single `.npy` file. Rank 0 alone computes statistics and writes the persistent
 outputs; the other ranks keep only their node-local Numba cache and stdout lines
 in the job log. Set `MPI_SITE` to the mpi4py 4.1.2 wheel install
-(`/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site`
+(`/path/to/scale_out_mpi_kit/mpi-site`
 on GP). The job runs the affinity pre-flight of
 `examples/slurm_scripts/scale_out/common.sh` first and writes it to `$OUT-launch`.
 Both seeds share the job name `so-sweep1` with `--dependency=singleton`, so the
-second waits for the first. The job runs in, and writes its Slurm log to,
-`/lagoon/trungha/bbh-output/for-awesom-2026-10-28`; keep OUT and the collection
+second waits for the first. Pass a shared-filesystem `WORKDIR` as the job's
+`--chdir` and Slurm log directory; keep OUT and the collection
 under that root too. Submit both seeds, then collect them:
 
 ```bash
 export REPO=/absolute/aweSOM VENV=/absolute/venv POOL=/absolute/pool-output/results
-export MPI_SITE=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/scale_out_mpi_kit/mpi-site
+export MPI_SITE=/path/to/scale_out_mpi_kit/mpi-site
 export INPUT_1=/absolute/first/features.h5 INPUT_2=/absolute/second/features.h5 LATTICE=100x100
-FITS=/lagoon/trungha/bbh-output/for-awesom-2026-10-28/fits-mpi; mkdir -p "$FITS"
+WORKDIR=/absolute/shared/workdir FITS=$WORKDIR/fits-mpi; mkdir -p "$FITS"
 for SEED in 42 43; do
-  SEED=$SEED OUT=$FITS/$LATTICE-s$SEED sbatch "$REPO/examples/grmhd-bbh/scale-out/production-fit-mpi-gp.sbatch"
+  SEED=$SEED OUT=$FITS/$LATTICE-s$SEED sbatch --chdir="$WORKDIR" --output="$WORKDIR/%x-%j.out" \
+    "$REPO/examples/grmhd-bbh/scale-out/production-fit-mpi-gp.sbatch"
 done
 # after both jobs end:
 "$VENV/bin/python" "$REPO/examples/grmhd-bbh/production_pool.py" \
@@ -199,7 +200,7 @@ launcher uses SLURM_TMPDIR, TMPDIR, then the output filesystem.
 Confirm the chosen root's capacity before submission.
 
 ```bash
-export SCRATCH=/absolute/lagoon/job-directory/scratch
+export SCRATCH=/absolute/shared-scratch/job-directory/scratch
 # Leave THREADS unset to use the feature count, or export THREADS explicitly.
 for LATTICE in 100x100; do
   for SEED in 42 43; do

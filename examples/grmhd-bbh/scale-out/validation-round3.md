@@ -67,8 +67,8 @@ Evidence files are `statistics_probe_round3.py`, `statistics-round3-probe.json` 
 Reproduce the probe from this checkout with:
 
 ```bash
-NUMBA_NUM_THREADS=7 .venv/bin/python /Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/driver/statistics_probe_round3.py "$PWD"
-NUMBA_NUM_THREADS=7 .venv/bin/python /Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/driver/statistics_probe_round3.py "$PWD" --new-only
+NUMBA_NUM_THREADS=7 .venv/bin/python /path/to/report-dir/statistics_probe_round3.py "$PWD"
+NUMBA_NUM_THREADS=7 .venv/bin/python /path/to/report-dir/statistics_probe_round3.py "$PWD" --new-only
 ```
 
 These rerun commands overwrite only the Round 3 JSON outputs. Make another named copy before a later investigation if these Round 3 observations must be preserved.

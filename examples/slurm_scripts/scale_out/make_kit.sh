@@ -6,14 +6,15 @@
 #                    and optionally the sdist and its build wheels (MPI_BUILD=source); compute
 #                    nodes have no internet, so probe.sbatch installs mpi4py from these (README, "MPI")
 #   DEST/kit-manifest.json  commit, branch, SHA256 of every package .py file, kit file and wheel
-# Usage: [WHEELS=DIR] make_kit.sh DEST [REVISION]. DEST must not exist. WHEELS (default below)
+# Usage: WHEELS=DIR make_kit.sh DEST [REVISION]. DEST must not exist. WHEELS
 # must hold SHA256SUMS and the cp311 x86_64 manylinux mpi4py wheel; if it holds the sdist
 # mpi4py-*.tar.gz it must also hold a cython wheel. Every file is checked against SHA256SUMS.
 set -eo pipefail
 dest=$1; rev=${2:-HEAD}
-[ -n "$dest" ] || { echo "usage: make_kit.sh DEST [REVISION]" >&2; exit 2; }
+[ -n "$dest" ] || { echo "usage: WHEELS=DIR make_kit.sh DEST [REVISION]" >&2; exit 2; }
 [ ! -e "$dest" ] || { echo "DEST exists: $dest" >&2; exit 2; }
-wheels=${WHEELS:-/Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/mpi/wheels}
+wheels=${WHEELS:-}
+[ -n "$wheels" ] || { echo "set WHEELS to the offline wheels directory" >&2; exit 2; }
 [ -f "$wheels/SHA256SUMS" ] || { echo "WHEELS has no SHA256SUMS: $wheels" >&2; exit 2; }
 ls "$wheels"/mpi4py-*-cp311-cp311-*manylinux*_x86_64*.whl >/dev/null 2>&1 \
   || { echo "WHEELS has no binary mpi4py-*-cp311-*manylinux*_x86_64.whl: $wheels" >&2; exit 2; }

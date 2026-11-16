@@ -8,7 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # Row scaling on one node, 32 threads, both lattices: 1e7 and 1e8 rows (1e9 is
 # rows_1e9.sbatch). Estimated 20 min.
 set -eo pipefail

@@ -78,8 +78,8 @@ At 1e10, 560 GB of local scratch may itself be unavailable. If scratch and OUT s
 The external report directory contains `statistics_probe_round2.py`, `statistics-round2-probe.json`, `statistics-round2-new-only.json`, `local_probe_round2.py` and `local-probe-round2.json`. Round 1 scripts/results were preserved. Reproduce the differential and isolated statistics measurements with:
 
 ```bash
-NUMBA_NUM_THREADS=7 .venv/bin/python /Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/driver/statistics_probe_round2.py "$PWD"
-NUMBA_NUM_THREADS=7 .venv/bin/python /Volumes/ExternalNVMe/awesom-results/planning/2026-11-05/scale-out/driver/statistics_probe_round2.py "$PWD" --new-only
+NUMBA_NUM_THREADS=7 .venv/bin/python /path/to/report-dir/statistics_probe_round2.py "$PWD"
+NUMBA_NUM_THREADS=7 .venv/bin/python /path/to/report-dir/statistics_probe_round2.py "$PWD" --new-only
 ```
 
 No 1e9/1e10 execution or 32-core GP benchmark was attempted because this child cannot access the cluster and the local probe is intentionally 1e7 rows. Scratch throughput/capacity, shared-storage read amplification, Linux aggregate RSS, and real Xeon wall time remain unqualified. No GPU, MPI, stream or checkpoint changes were made because those remain outside this stream's ownership. The review's existing float64 rank-sum rounding above 2**53 was left unchanged as requested; the order statistics and tie policy remain exact, and parallel workers use exactly the same scan arithmetic as serial execution.

@@ -8,7 +8,7 @@
 #SBATCH --time=00:20:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # Where does a rank lose its CPUs in MPI_Init (jobs 8413, 8444)? One node, one srun step per
 # case, each with a 60 s timeout, raw behaviour (no restore except case H). Each case writes
 # probe/bind-<case>.txt (command, full stdout+stderr, exit code); the job log gets one line

@@ -8,7 +8,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # Environment probe of the scale-out kit: sinfo, modules, lscpu, memory, disks, NUMA,
 # mpi4py (installed into $KIT/mpi-site if missing, offline from the binary wheel in
 # $KIT/wheels because compute nodes have no internet or compiler; MPI_BUILD=source compiles

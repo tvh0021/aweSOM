@@ -8,7 +8,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # 1e9 rows on 2 and 4 nodes, one rank per node, 32 threads, both lattices. Submit only
 # when the nodes.sbatch gate passes for every lattice it runs: GATE=<nodes OUT>/summary/gate.json
 # (FORCE=1 skips the check). REF_DIRS = the rows_1e9 OUT dirs (1-node reference
@@ -19,7 +19,7 @@ LATTICES=${LATTICES:-"91x64 160x100"}; N=1e9
 if [ "${FORCE:-0}" != 1 ]; then
   [ -f "$GATE" ] || { echo "set GATE=<nodes OUT>/summary/gate.json (or FORCE=1)" >&2; exit 2; }
   # Every lattice this job runs needs >= 70 % node efficiency at 2 and 4 nodes in the gate.
-  "${VENV:-/lagoon/trungha/bbh-output/for-awesom-2026-10-28/check7-venv}/bin/python" \
+  "${VENV:?set VENV to the Python environment}/bin/python" \
     "${KIT:-$SLURM_SUBMIT_DIR}/summarize.py" --check-gate "$GATE" --lattices $LATTICES \
     || { echo "gate not met for LATTICES=$LATTICES; not running 1e9 (FORCE=1 overrides)" >&2; exit 2; }
 fi

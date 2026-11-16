@@ -8,7 +8,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 set -euo pipefail
 : "${REPO:?set the checkout}"
 exec bash "$REPO/examples/grmhd-bbh/scale-out/production-fit.sh" "$@"

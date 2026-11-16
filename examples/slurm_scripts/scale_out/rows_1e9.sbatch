@@ -8,7 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # 1e9 rows on one node, 32 threads, one lattice per job (LATTICE=91x64 default, or
 # 160x100). Its weights are the parity reference of nodes_1e9.sbatch (REF_DIRS).
 # Estimated 35 min (91x64) and 1.5-2 h (160x100). If the time limit stops it, resubmit

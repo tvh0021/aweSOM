@@ -9,7 +9,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # Thread scaling on one node, SCALE_N rows (default 1e8), one lattice per job
 # (LATTICE=91x64 default, or 160x100): 1 rank x 32, 16, 8 threads, then 2 ranks x 16
 # threads, one rank per socket (MPI). Estimated 30 min (91x64) and 80 min (160x100).

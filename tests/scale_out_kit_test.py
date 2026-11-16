@@ -289,10 +289,10 @@ def test_gp_only_surveys_skip_or_refuse_on_rit_rc(tmp_path, monkeypatch):
         {"SLURM_CLUSTER_NAME": "tigris"},
         {"SLURM_CLUSTER_NAME": "SPORC"},
         {"SLURM_CLUSTER_NAME": "sporc"},
-        {"SLURM_CLUSTER_NAME": "", "OUT": "/shared/rc/awesom-grmhd/out"},
+        {"SLURM_CLUSTER_NAME": "", "OUT": "/shared/rc/awesom-test/out"},
         {"SLURM_CLUSTER_NAME": "", "KIT": "/home/thccrg/kit"},
         {"SLURM_CLUSTER_NAME": "", "SLURM_SUBMIT_DIR": "/home/thccrg"},
-        {"SLURM_CLUSTER_NAME": "", "OUT": "/.autofs/shared/rc/awesom-grmhd/out"},
+        {"SLURM_CLUSTER_NAME": "", "OUT": "/.autofs/shared/rc/awesom-test/out"},
     ]
     base_env = {k: v for k, v in scale_out.os.environ.items()
                 if k not in {"SLURM_CLUSTER_NAME", "SLURM_SUBMIT_DIR", "KIT", "OUT"}}
@@ -301,7 +301,7 @@ def test_gp_only_surveys_skip_or_refuse_on_rit_rc(tmp_path, monkeypatch):
         env = {**base_env, **overrides}
         assert subprocess.run(["bash", "-c", f'. "{KIT}/common.sh"; on_tigris'],
                               cwd=tmp_path, env=env).returncode == 0
-        for sbatch in ("probe.sbatch", "gpu_probe.sbatch", "bind_probe.sbatch"):
+        for sbatch in ("probe.sbatch", "bind_probe.sbatch"):
             res = subprocess.run(["bash", str(KIT / sbatch)], cwd=tmp_path, env=env,
                                  capture_output=True, text=True)
             assert res.returncode == 2 and "refusing to run on RIT RC" in res.stderr

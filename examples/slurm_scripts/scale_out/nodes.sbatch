@@ -8,7 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=thccrg@rit.edu
+#SBATCH --mail-user=you@example.org
 # Node scaling, SCALE_N rows (default 1e8), both lattices: 1, 2 and 4 nodes, one rank
 # per node, 32 threads. Then parity of the 2- and 4-node weights against the 1-node
 # weights (the job fails above 1e-4) and summary/gate.json (>= 70 % node efficiency at
