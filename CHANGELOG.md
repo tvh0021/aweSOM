@@ -25,6 +25,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `aweSOM.stream.predict_stream(..., out=None)` now allocates the smallest of
+  `uint8`, `uint16` and `int32` that holds every entry of `node_cluster`
+  (`aweSOM.inference.narrow_label_dtype`), also in single-process calls; it
+  returned `int32` before. Pass an `int32` `out` array, or cast the result,
+  where signed arithmetic on the labels is needed.
 - Multi-rank `production_pool.py::label_rows` writes per-rank
   `<tag>-{labels,nodes,distances}.parts/part-RRRR.npy` files and publishes
   `manifest.json` on rank 0 without copying other ranks' payloads through rank
