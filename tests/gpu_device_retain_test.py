@@ -27,6 +27,8 @@ def _multi_device_fake_cupy(device_count: int = 2):
     launches = []
     streams = []
 
+    syncs = []
+
     class DeviceCtx:
         def __init__(self, device_id: int):
             self.id = int(device_id)
@@ -57,11 +59,16 @@ def _multi_device_fake_cupy(device_count: int = 2):
             Stream.current = self._prev
 
         def synchronize(self):
-            pass
+            assert state["current"] == self.device
+            syncs.append(state["current"])
 
     class NullStream:
+        def __init__(self):
+            self.device = state["current"]
+
         def synchronize(self):
-            pass
+            assert state["current"] == self.device
+            syncs.append(state["current"])
 
     class DeviceArray:
         def __init__(self, array: np.ndarray, device: int):
@@ -148,6 +155,7 @@ def _multi_device_fake_cupy(device_count: int = 2):
         allocs=allocs,
         launches=launches,
         streams=streams,
+        syncs=syncs,
     )
 
 
@@ -201,6 +209,7 @@ def test_implicit_device_zero_retained_after_switching_to_one(multi_gpu_cupy):
     assert log.uploads and set(log.uploads) == {0}
     assert log.allocs and set(log.allocs) == {0}
     assert log.launches and set(log.launches) == {0}
+    assert log.syncs and set(log.syncs) == {0}
 
 
 def test_implicit_device_inside_context_retained_after_exit(multi_gpu_cupy):
@@ -234,3 +243,58 @@ def test_implicit_device_inside_context_retained_after_exit(multi_gpu_cupy):
     assert set(log.uploads) == {1}
     assert set(log.allocs) == {1}
     assert set(log.launches) == {1}
+    assert log.syncs and set(log.syncs) == {1}
+
+
+def test_cancel_with_pending_work_after_device_switch_clears_pending_and_restores_device(
+    multi_gpu_cupy,
+):
+    cp, log = multi_gpu_cupy
+    rng = np.random.default_rng(13)
+    w = rng.normal(size=(12, 4))
+    # 12 rows with chunk=8 splits into 2 subchunks (8 + 4), leaving both slots pending.
+    x = rng.normal(size=(12, 4)).astype(np.float32)
+    clusters = np.arange(12, dtype=np.int32) % 4
+
+    assert cp.cuda.runtime.getDevice() == 0
+    search = _gpu_screen.GpuScreenSearcher(w, 4, 3, chunk=8)
+    assert search.device == 0
+    table = search.cluster_map(clusters, dtype=np.uint8)
+
+    sentinel_out = np.uint8(251)
+    out = np.full(len(x), sentinel_out, dtype=np.uint8)
+    d2 = np.full(len(x), -1.0, dtype=np.float64)
+    tok = search.submit(x, out, d2, clusters=table)
+    assert len(search.slots) == 2
+    assert all(slot["pending"] is not None for slot in search.slots)
+    assert np.all(out == sentinel_out)
+    assert np.all(d2 == -1.0)
+
+    with cp.cuda.Device(1):
+        assert cp.cuda.runtime.getDevice() == 1
+        syncs_before = len(log.syncs)
+        search.cancel()
+        assert cp.cuda.runtime.getDevice() == 1
+        assert log.syncs[syncs_before:] == [0, 0]
+        assert all(slot["pending"] is None for slot in search.slots)
+        assert np.all(out == sentinel_out)
+        assert np.all(d2 == -1.0)
+
+        # Waiting on the cancelled token is a no-op and still preserves device 1.
+        search.wait(tok)
+        assert cp.cuda.runtime.getDevice() == 1
+        assert np.all(out == sentinel_out)
+
+        # Fresh submission after cancel still executes cleanly on retained device 0.
+        out_after = np.empty(len(x), dtype=np.uint8)
+        d2_after = np.empty(len(x), dtype=np.float64)
+        tok2 = search.submit(x, out_after, d2_after, clusters=table)
+        search.wait(tok2)
+        assert cp.cuda.runtime.getDevice() == 1
+
+    assert cp.cuda.runtime.getDevice() == 0
+    ref_idx, ref_d2 = best_match_nodes(w, x)
+    np.testing.assert_array_equal(out_after, clusters[ref_idx])
+    np.testing.assert_array_equal(d2_after.view(np.uint64), ref_d2.view(np.uint64))
+    assert log.syncs and set(log.syncs) == {0}
+
