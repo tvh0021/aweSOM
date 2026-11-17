@@ -1,8 +1,12 @@
 """Fake mpi4py communicators for tests that run without MPI.
 
 ``FakeComm`` runs real collectives over processes that share a barrier and a
-manager dict. ``NodeComm`` and ``RankComm`` answer the rank and node queries of
-single-process calls. Test modules that use the ``shared_split`` fixture import
+manager dict, and puts every fake rank on one node. ``NodeComm`` and ``RankComm``
+answer the rank and node queries of single-process calls. Processes that reach
+:func:`aweSOM.distributed.node_local_rank` with a fake communicator (the
+``cuda_screen`` device choice) must replace ``distributed._shared_split_type``
+first (``shared_split`` fixture, or ``lambda: "shared"`` in a spawned rank), so
+no fake run imports ``mpi4py.MPI``. Test modules that use the ``shared_split`` fixture import
 it by name.
 """
 from types import SimpleNamespace
@@ -39,6 +43,12 @@ class FakeComm:
     def gather(self, obj, root=0):
         every = self._exchange(obj)
         return every if self.rank == root else None
+
+    def Split_type(self, kind, key=0):
+        """One node: fake rank r is node-local rank r (what gpu_device needs on a GPU host)."""
+        assert kind == "shared", f"replace distributed._shared_split_type first, got {kind!r}"
+        rank = self.rank
+        return SimpleNamespace(Get_rank=lambda: rank, Free=lambda: None)
 
 
 class NodeComm:

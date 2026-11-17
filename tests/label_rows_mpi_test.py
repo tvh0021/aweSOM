@@ -149,14 +149,6 @@ def test_auto_falls_back_to_patch_without_cupy(monkeypatch):
     assert pool.resolve_label_backend("auto") == "patch"
 
 
-class SharedNodeComm(FakeComm):
-    """FakeComm with Split_type: every fake rank is on one node."""
-
-    def Split_type(self, kind, key=0):
-        rank = self.rank
-        return SimpleNamespace(Get_rank=lambda: rank, Free=lambda: None)
-
-
 def driver_rank(conn, rank, size, barrier, slots, argv, mode):
     """One fake rank of production_pool.main, with every open of an output file during
     label_rows guarded (output_guard). mode: 'cpu', 'gpu' (fake CuPy with two devices and the CPU stand-in
@@ -167,7 +159,7 @@ def driver_rank(conn, rank, size, barrier, slots, argv, mode):
     try:
         output_guard.install()
         from aweSOM import distributed as dist, _gpu_screen as screen, stream
-        dist.get_comm = lambda: SharedNodeComm(rank, size, barrier, slots)
+        dist.get_comm = lambda: FakeComm(rank, size, barrier, slots)
         dist._shared_split_type = lambda: "shared"
         if mode == "gpu":
             runtime = SimpleNamespace(getDeviceCount=lambda: 2)

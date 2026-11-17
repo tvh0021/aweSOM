@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from fake_comm import FakeComm
+from fake_cupy import StandIn
 
 DRIVER = ROOT/'examples/grmhd-bbh/production_pool.py'
 COMMON = ['--anchor','1','--held-out','3','--rows-per-snapshot','60','--rows-per-epoch','60',
@@ -24,9 +25,12 @@ class StopFit(Exception):
     pass
 
 
-def rank_main(conn, rank, size, barrier, slots, argv, watch, stop_after=None):
+def rank_main(conn, rank, size, barrier, slots, argv, watch, stop_after=None, fake_gpu=False):
     """One fake rank: main(argv) with get_comm patched; reports writes under ``watch``.
-    ``stop_after``: rank 0 raises StopFit after that many epochs (after the checkpoint)."""
+    ``stop_after``: rank 0 raises StopFit after that many epochs (after the checkpoint).
+    The fake ranks share one node, so on a GPU host --label-backend auto gives cuda_screen and
+    every rank takes device 0, as the single-process run does. ``fake_gpu``: a fake CuPy with
+    one device and the CPU stand-in searcher, so a host without CuPy runs that path too."""
     writes = []
     def audit(event, args):
         writing = event in ('os.mkdir', 'os.rename', 'os.symlink', 'os.link', 'os.remove') or (
@@ -38,6 +42,12 @@ def rank_main(conn, rank, size, barrier, slots, argv, watch, stop_after=None):
     try:
         from aweSOM import distributed
         distributed.get_comm = lambda: FakeComm(rank, size, barrier, slots)
+        distributed._shared_split_type = lambda: 'shared'  # the device choice must not start MPI
+        if fake_gpu:
+            from aweSOM import _gpu_screen
+            runtime = SimpleNamespace(getDeviceCount=lambda: 1)
+            sys.modules['cupy'] = SimpleNamespace(cuda=SimpleNamespace(runtime=runtime))
+            _gpu_screen.GpuScreenSearcher = StandIn
         if stop_after is not None:
             from aweSOM import stream
             train = stream.train_batch_stream
@@ -47,21 +57,21 @@ def rank_main(conn, rank, size, barrier, slots, argv, watch, stop_after=None):
             stream.train_batch_stream = functools.partial(train, callback=stop)
         sys.addaudithook(audit)
         pool.main(argv)
-        conn.send(('ok', writes))
+        conn.send(('ok', (writes, StandIn.devices) if fake_gpu else writes))
     except BaseException:
         conn.send(('error', traceback.format_exc()))
     finally:
         conn.close()
 
 
-def run_ranks(size, argv, watch, stop_after=None):
+def run_ranks(size, argv, watch, stop_after=None, fake_gpu=False):
     ctx = mp.get_context('spawn')
     with ctx.Manager() as manager:
         barrier, slots = ctx.Barrier(size), manager.dict()
         pipes, procs = [], []
         for r in range(size):
             receive, send = ctx.Pipe(duplex=False)
-            p = ctx.Process(target=rank_main, args=(send, r, size, barrier, slots, argv, str(watch), stop_after))
+            p = ctx.Process(target=rank_main, args=(send, r, size, barrier, slots, argv, str(watch), stop_after, fake_gpu))
             p.start(); send.close(); pipes.append(receive); procs.append(p)
         results = [receive.recv() for receive in pipes]
         for p in procs:
@@ -147,6 +157,24 @@ def test_two_fake_ranks_match_single_process(prepared, monkeypatch):
     assert (mixed/'results/4x3-s42-labels.npy').is_file()
     assert (mixed/'results/4x3-s43-labels.parts/manifest.json').is_file()
     assert (mixed/'results/frozen-4x3.h5').exists()
+
+
+def test_two_fake_ranks_on_a_gpu_host(prepared, monkeypatch):
+    """What a GPU host runs by default: --label-backend auto resolves to cuda_screen on every
+    fake rank, each rank takes its device through Split_type, and the weights still match the
+    single-process fit. Runs everywhere through a fake CuPy and the CPU stand-in searcher."""
+    from aweSOM import SOMModel
+    monkeypatch.setenv('NUMBA_CACHE_DIR', str(prepared.tmp/'cache'))
+    out = prepared.tmp/'mpi2-gpu'
+    argv = [*prepared.base, '--out', str(out), '--reuse-pool', str(prepared.pool), '--fit', '4x3', '42', '--mpi']
+    payloads = run_ranks(2, argv, out, fake_gpu=True)
+    assert [devices for _, devices in payloads] == [[0], [0]]  # one searcher per rank, on device 0
+    rec = json.loads((out/'results/4x3-s42.json').read_text())
+    assert rec['labelling']['requested'] == 'auto' and rec['labelling']['backend'] == 'cuda_screen'
+    assert rec['labelling']['layout'] == 'sharded' and [r['device'] for r in rec['labelling']['ranks']] == [0, 0]
+    a = SOMModel.load(out/'results/4x3-s42.h5').weights
+    b = SOMModel.load(prepared.single/'4x3-s42.h5').weights
+    assert _max_rel(a, b) < 1e-4
 
 
 def _max_rel(a, b):
