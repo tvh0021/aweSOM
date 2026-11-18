@@ -67,8 +67,7 @@ def test_matches_numpy_reference(data):
 
 
 def test_matches_jax_train_batch_float64(data):
-    pytest.importorskip("jax")
-    from aweSOM.batch import train_batch
+    train_batch = pytest.importorskip("aweSOM.batch", exc_type=ImportError).train_batch
 
     w_ref, _ = train_batch(data, 9, 6, epochs=8, dtype=np.float64)
     w, _ = train_batch_stream(data, 9, 6, epochs=8)

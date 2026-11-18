@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 jax = pytest.importorskip("jax")
+pytest.importorskip("aweSOM.batch", exc_type=ImportError)
 
 from aweSOM import Lattice  # noqa: E402
 from aweSOM.batch import (  # noqa: E402

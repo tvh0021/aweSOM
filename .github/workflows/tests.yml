@@ -42,4 +42,7 @@ jobs:
         run: pip install -e .
       - name: Run tests
         # The tests read examples/iris/... by relative path, so run them from the checkout root.
+        # macOS runners expose 3 vCPUs, while CPU reference fixtures exercise n_threads=4.
+        env:
+          NUMBA_NUM_THREADS: "4"
         run: python -m pytest -q tests

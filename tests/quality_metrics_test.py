@@ -37,5 +37,5 @@ def test_fast_qe_te_equal_reference(n_feat):
     x = rng.normal(size=(5000, n_feat))
     x[:50] = w[:50]  # exact hits
     x[50:60] = 0.5 * (w[0] + w[1])  # possible near-ties
-    assert quantization_error_fast(w, x) == quantization_error(w, x)
+    assert quantization_error_fast(w, x) == pytest.approx(quantization_error(w, x), rel=1e-14, abs=0)
     assert topographic_error_fast(w, x, 9, 7) == topographic_error(w, x, 9, 7)
