@@ -78,7 +78,9 @@ def test_predict_equals_map_then_assign(trained):
 
 
 def test_train_lattice_batch_fills_lattice_and_umat():
-    pytest.importorskip("aweSOM.batch", exc_type=ImportError)
+    from jax_batch_guard import require_batch_jax
+
+    require_batch_jax()
     data = np.random.default_rng(5).normal(size=(4000, 3))
     som = Lattice(8, 6, 0.3, 100)
     info = som.train_lattice_batch(data, list("xyz"), epochs=5, r_min=2)

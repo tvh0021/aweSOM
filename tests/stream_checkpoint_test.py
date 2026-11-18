@@ -50,12 +50,19 @@ class Chunks:
 
 
 @pytest.fixture(scope="module")
-def gmm200k():
-    x = gmm_bbh7.rows(200_000)
+def rows200k():
+    return gmm_bbh7.rows(200_000)
+
+
+@pytest.fixture(scope="module")
+def gmm200k(rows200k):
     ref = np.load(DEV_REF)
-    if sha(x) != str(ref["rows_sha256"]):
-        pytest.skip("gmm_bbh7 rows differ on this platform (numpy version or CPU); fixture not comparable")
-    return x, ref
+    if sha(rows200k) != str(ref["rows_sha256"]):
+        msg = "gmm_bbh7 rows differ on this platform (numpy version or CPU); fixture not comparable"
+        if os.environ.get("AWESOM_EXACT_FIXTURES") == "1":
+            pytest.fail(msg)
+        pytest.skip(msg)
+    return rows200k, ref
 
 
 @pytest.fixture(scope="module")
@@ -66,9 +73,8 @@ def small():
 # ------------------------------------------------------------------ dev parity
 
 @pytest.fixture(scope="module")
-def dev_parity_array(gmm200k):
-    x, _ = gmm200k
-    return train_batch_stream(x, 48, 34, epochs=5, chunk=2**15, r_min=5, seed=42, final_pass="full")
+def dev_parity_array(rows200k):
+    return train_batch_stream(rows200k, 48, 34, epochs=5, chunk=2**15, r_min=5, seed=42, final_pass="full")
 
 
 def test_dev_parity_fixture_array(gmm200k, dev_parity_array):
@@ -84,11 +90,10 @@ def test_dev_parity_fixture_array(gmm200k, dev_parity_array):
 
 
 @pytest.mark.parametrize("lazy", [False, True])
-def test_dev_parity_fixture_callable(gmm200k, dev_parity_array, lazy):
-    x, _ = gmm200k
+def test_dev_parity_fixture_callable(rows200k, dev_parity_array, lazy):
     w_array, _ = dev_parity_array
-    src = Chunks(x, 2**15, lazy=lazy, n_feat=7)
-    w, _ = train_batch_stream(src, 48, 34, epochs=5, r_min=5, seed=42, final_pass="full", n_samples=len(x))
+    src = Chunks(rows200k, 2**15, lazy=lazy, n_feat=7)
+    w, _ = train_batch_stream(src, 48, 34, epochs=5, r_min=5, seed=42, final_pass="full", n_samples=len(rows200k))
     assert sha(w) == sha(w_array)
 
 

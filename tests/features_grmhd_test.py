@@ -163,14 +163,23 @@ def test_thresholds_from_h5_attrs_and_missing_metadata(tmp_path):
         FeatureThresholds(b2_min=0, s_v=1.0, accuracy=3)
 
 
-@pytest.mark.skipif(not (ETKPLOT / "etkplot").is_dir(), reason="etkplot not available")
-def test_bitwise_equal_to_etkplot_on_random_block():
-    sys.path.insert(0, str(ETKPLOT))
+def _etkplot():
+    raw_env = os.environ.get("AWESOM_ETKPLOT_PATH")
+    path = Path(raw_env) if raw_env is not None else ETKPLOT
+    if raw_env == "" or not (path / "etkplot").is_dir():
+        if raw_env is not None:
+            pytest.fail(f"AWESOM_ETKPLOT_PATH={raw_env!r} does not contain an etkplot package directory")
+        pytest.skip("etkplot not available")
+    sys.path.insert(0, str(path))
     try:
-        from etkplot import features as etkf
-        from etkplot import thresholds as etkt
+        from etkplot import features, thresholds
     finally:
-        sys.path.remove(str(ETKPLOT))
+        sys.path.remove(str(path))
+    return features, thresholds
+
+
+def test_bitwise_equal_to_etkplot_on_random_block():
+    etkf, etkt = _etkplot()
     rng = np.random.default_rng(3)
     shape = (12, 10, 9)
     arrays = {v: rng.lognormal(size=shape) for v in ("smallb2", "P", "rho_b")}
@@ -189,15 +198,23 @@ def test_bitwise_equal_to_etkplot_on_random_block():
     assert np.array_equal(got, want, equal_nan=True)
 
 
-@pytest.mark.skipif(not (ETKPLOT / "etkplot").is_dir(), reason="etkplot not available")
-def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
+def test_optional_sixth_feature_and_frozen_model():
     from aweSOM.features_grmhd import SIX_FEATURE_NAMES
-    sys.path.insert(0, str(ETKPLOT))
-    try:
-        from etkplot import features
-    finally:
-        sys.path.remove(str(ETKPLOT))
+    shape = (9, 9, 9)
+    rng = np.random.default_rng(3)
+    a = {n: rng.uniform(0.1, 2, shape) for n in INPUTS}
+    a['Bx'][4, 4, 4] = a['By'][4, 4, 4] = a['Bz'][4, 4, 4] = 1e-6
+    thr = _thresholds(b2_min=1e-3)
+    actual = compute_features(a, (1, 1, 1), thr, names=SIX_FEATURE_NAMES)
+    assert actual.reshape(*shape, 6)[4, 4, 4, 5] == 0
+    model = type('Model', (), {'feature_names': SIX_FEATURE_NAMES, 'metadata': thr.to_metadata()})()
+    assert FeatureThresholds.from_model(model) == thr
+
+
+def test_optional_sixth_feature_matches_etkplot():
+    from aweSOM.features_grmhd import SIX_FEATURE_NAMES
     from types import SimpleNamespace
+    features, _ = _etkplot()
     shape = (9, 9, 9)
     rng = np.random.default_rng(3)
     a = {n: rng.uniform(0.1, 2, shape) for n in INPUTS}
@@ -210,20 +227,10 @@ def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
         if n in thr.winsor:
             y = np.clip(y, *thr.winsor[n])
         np.testing.assert_array_equal(actual[:, j], y)
-    assert actual.reshape(*shape, 6)[4, 4, 4, 5] == 0
-    model = type('Model', (), {'feature_names': SIX_FEATURE_NAMES, 'metadata': thr.to_metadata()})()
-    assert FeatureThresholds.from_model(model) == thr
 
 
-@pytest.mark.skipif(not (ETKPLOT / "etkplot").is_dir(), reason="etkplot not available")
-def test_v2_smooth_floor_analytic_and_port():
+def test_v2_smooth_floor_analytic_and_zero_field():
     from aweSOM.features_grmhd import SIX_FEATURE_NAMES
-    from types import SimpleNamespace
-    sys.path.insert(0, str(ETKPLOT))
-    try:
-        from etkplot import features
-    finally:
-        sys.path.remove(str(ETKPLOT))
     (x, y, z), dx = _grid()
     a = dict(smallb2=np.ones_like(x), P=np.ones_like(x), rho_b=np.ones_like(x),
              Bx=x, By=np.zeros_like(x), Bz=np.ones_like(x))
@@ -236,8 +243,6 @@ def test_v2_smooth_floor_analytic_and_port():
     chi = np.sqrt(1.5**2+x*x)/norm2**1.5
     np.testing.assert_allclose(got[:,2], np.log10(chi[select].ravel()+EPS), rtol=1e-6)
     np.testing.assert_allclose(got[:,5], (1/np.sqrt(norm2))[select].ravel(), rtol=1e-6)
-    port = features.compute(SIX_FEATURE_NAMES, a, dx, SimpleNamespace(pipeline='v2', b2_min=.5, s_v=1, accuracy=4))
-    np.testing.assert_array_equal(got, np.column_stack([port[n][select].ravel() for n in SIX_FEATURE_NAMES]).astype(np.float32))
     assert FeatureThresholds.from_metadata(thr.to_metadata()).pipeline == 'v2'
     # The exact zero field stays finite, without the legacy 0/0.
     for n in ('Bx','By','Bz'):
@@ -245,3 +250,24 @@ def test_v2_smooth_floor_analytic_and_port():
     zero = compute_features(a, dx, thr, select=select, names=SIX_FEATURE_NAMES)
     np.testing.assert_array_equal(zero[:,2], -3)
     np.testing.assert_array_equal(zero[:,5], 0)
+
+
+def test_v2_smooth_floor_matches_etkplot():
+    from aweSOM.features_grmhd import SIX_FEATURE_NAMES
+    from types import SimpleNamespace
+    features, _ = _etkplot()
+    (x, y, z), dx = _grid()
+    a = dict(smallb2=np.ones_like(x), P=np.ones_like(x), rho_b=np.ones_like(x),
+             Bx=x, By=np.zeros_like(x), Bz=np.ones_like(x))
+    a.update({f'vel[{j}]': x*0 for j in range(3)})
+    thr = FeatureThresholds(b2_min=0.5, s_v=1, pipeline='v2')
+    select = (slice(2,-2),)*3
+    got = compute_features(a, dx, thr, select=select, names=SIX_FEATURE_NAMES)
+    port = features.compute(SIX_FEATURE_NAMES, a, dx, SimpleNamespace(pipeline='v2', b2_min=.5, s_v=1, accuracy=4))
+    np.testing.assert_array_equal(got, np.column_stack([port[n][select].ravel() for n in SIX_FEATURE_NAMES]).astype(np.float32))
+
+
+def test_explicit_invalid_etkplot_path_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(tmp_path / "missing"))
+    with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
+        _etkplot()

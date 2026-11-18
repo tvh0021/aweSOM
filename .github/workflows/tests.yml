@@ -1,7 +1,7 @@
 name: Tests
 on:
   push:
-    branches: [public-release, dev]
+    branches: [public-release, dev, "ci-trial/**"]
   pull_request:
     branches: [public-release, dev]
 
@@ -42,7 +42,62 @@ jobs:
         run: pip install -e .
       - name: Run tests
         # The tests read examples/iris/... by relative path, so run them from the checkout root.
-        # macOS runners expose 3 vCPUs, while CPU reference fixtures exercise n_threads=4.
+        # arm64 macOS runners (macos-latest) have 3 vCPUs (Intel macOS has 4), while CPU reference fixtures use n_threads=4.
         env:
           NUMBA_NUM_THREADS: "4"
         run: python -m pytest -q tests
+
+  wheel:
+    name: wheel (ubuntu-latest, Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and install wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel --no-deps . -w dist
+          pip install dist/*.whl jax jaxlib
+      - name: Import installed package outside checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          import importlib
+          from pathlib import Path
+          import aweSOM
+
+          pkg = Path(aweSOM.__file__).resolve()
+          assert "site-packages" in pkg.parts, f"expected site-packages install, got {pkg}"
+          for mod in (
+              "aweSOM",
+              "aweSOM.amr_adjacency",
+              "aweSOM.batch",
+              "aweSOM.distributed",
+              "aweSOM.features_grmhd",
+              "aweSOM.grmhd_freeze",
+              "aweSOM.inference",
+              "aweSOM.io",
+              "aweSOM.io.blocks",
+              "aweSOM.io.carpet",
+              "aweSOM.io.carpetx",
+              "aweSOM.make_sce_clusters",
+              "aweSOM.model",
+              "aweSOM.npy_parts",
+              "aweSOM.physics_score",
+              "aweSOM.pool_statistics",
+              "aweSOM.postprocess",
+              "aweSOM.run_som",
+              "aweSOM.sce",
+              "aweSOM.sheet_stats",
+              "aweSOM.slab_thickness",
+              "aweSOM.som",
+              "aweSOM.stream",
+              "aweSOM.tubes",
+          ):
+              importlib.import_module(mod)
+          print(aweSOM.__version__)
+          PY

@@ -25,8 +25,9 @@ import textwrap
 import numpy as np
 import pytest
 
-jax = pytest.importorskip("jax")
-pytest.importorskip("aweSOM.batch", exc_type=ImportError)
+from jax_batch_guard import require_batch_jax
+
+jax = require_batch_jax(allow_module_level=True)
 
 from aweSOM import Lattice  # noqa: E402
 from aweSOM.batch import (  # noqa: E402
