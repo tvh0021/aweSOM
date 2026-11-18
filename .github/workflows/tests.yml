@@ -1,7 +1,7 @@
 name: Tests
 on:
   push:
-    branches: [public-release, dev, "ci-trial/**"]
+    branches: [public-release, dev]
   pull_request:
     branches: [public-release, dev]
 
