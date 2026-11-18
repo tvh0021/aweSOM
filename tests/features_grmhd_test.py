@@ -189,10 +189,14 @@ def test_bitwise_equal_to_etkplot_on_random_block():
     assert np.array_equal(got, want, equal_nan=True)
 
 
+@pytest.mark.skipif(not (ETKPLOT / "etkplot").is_dir(), reason="etkplot not available")
 def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
     from aweSOM.features_grmhd import SIX_FEATURE_NAMES
     sys.path.insert(0, str(ETKPLOT))
-    from etkplot import features
+    try:
+        from etkplot import features
+    finally:
+        sys.path.remove(str(ETKPLOT))
     from types import SimpleNamespace
     shape = (9, 9, 9)
     rng = np.random.default_rng(3)
@@ -211,11 +215,15 @@ def test_optional_sixth_feature_matches_etkplot_and_frozen_model():
     assert FeatureThresholds.from_model(model) == thr
 
 
+@pytest.mark.skipif(not (ETKPLOT / "etkplot").is_dir(), reason="etkplot not available")
 def test_v2_smooth_floor_analytic_and_port():
     from aweSOM.features_grmhd import SIX_FEATURE_NAMES
     from types import SimpleNamespace
     sys.path.insert(0, str(ETKPLOT))
-    from etkplot import features
+    try:
+        from etkplot import features
+    finally:
+        sys.path.remove(str(ETKPLOT))
     (x, y, z), dx = _grid()
     a = dict(smallb2=np.ones_like(x), P=np.ones_like(x), rho_b=np.ones_like(x),
              Bx=x, By=np.zeros_like(x), Bz=np.ones_like(x))

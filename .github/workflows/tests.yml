@@ -1,9 +1,9 @@
 name: Tests
 on:
   push:
-    branches: [public-release]
+    branches: [public-release, dev, "ci-trial/**"]
   pull_request:
-    branches: [public-release]
+    branches: [public-release, dev]
 
 jobs:
   pytest:
@@ -26,6 +26,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Regression tests load historical revisions via git show.
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -35,7 +38,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt jax jaxlib -r examples/plasma-turbulence/requirements.txt
       - name: Install aweSOM
-        run: pip install .
+        # production_pool provenance requires the imported package inside the git checkout.
+        run: pip install -e .
       - name: Run tests
         # The tests read examples/iris/... by relative path, so run them from the checkout root.
         run: python -m pytest -q tests
