@@ -1,5 +1,6 @@
 """Tests for aweSOM.features_grmhd: derivatives, the five features, thresholds and their metadata."""
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -166,15 +167,34 @@ def test_thresholds_from_h5_attrs_and_missing_metadata(tmp_path):
 def _etkplot():
     raw_env = os.environ.get("AWESOM_ETKPLOT_PATH")
     path = Path(raw_env) if raw_env is not None else ETKPLOT
-    if raw_env == "" or not (path / "etkplot").is_dir():
+    pkg_dir = path / "etkplot"
+    if raw_env == "" or not pkg_dir.is_dir():
         if raw_env is not None:
             pytest.fail(f"AWESOM_ETKPLOT_PATH={raw_env!r} does not contain an etkplot package directory")
         pytest.skip("etkplot not available")
     sys.path.insert(0, str(path))
     try:
         from etkplot import features, thresholds
+    except ImportError as exc:
+        if raw_env is not None:
+            pytest.fail(
+                f"AWESOM_ETKPLOT_PATH={raw_env!r} failed to import etkplot.features and etkplot.thresholds: {exc}"
+            )
+        raise
     finally:
         sys.path.remove(str(path))
+    expected_root = pkg_dir.resolve()
+    for name, mod in (("etkplot.features", features), ("etkplot.thresholds", thresholds)):
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file or not Path(mod_file).resolve().is_relative_to(expected_root):
+            source = (
+                f"AWESOM_ETKPLOT_PATH={raw_env!r}"
+                if raw_env is not None
+                else f"etkplot path {str(path)!r} (AWESOM_ETKPLOT_PATH unset)"
+            )
+            pytest.fail(
+                f"{source} did not resolve {name} under {str(expected_root)!r} (got {mod_file!r})"
+            )
     return features, thresholds
 
 
@@ -270,4 +290,55 @@ def test_v2_smooth_floor_matches_etkplot():
 def test_explicit_invalid_etkplot_path_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(tmp_path / "missing"))
     with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
+        _etkplot()
+
+
+def test_explicit_incomplete_etkplot_path_does_not_fall_back(monkeypatch, tmp_path):
+    other = tmp_path / "other"
+    other_pkg = other / "etkplot"
+    other_pkg.mkdir(parents=True)
+    (other_pkg / "features.py").write_text("# stub\n")
+    (other_pkg / "thresholds.py").write_text("# stub\n")
+
+    saved = {k: v for k, v in sys.modules.items() if k == "etkplot" or k.startswith("etkplot.")}
+
+    def _clear_etkplot_modules():
+        for key in [k for k in sys.modules if k == "etkplot" or k.startswith("etkplot.")]:
+            del sys.modules[key]
+        importlib.invalidate_caches()
+
+    try:
+        # Empty etkplot/ directory with no fallback on sys.path (or with any installed fallback).
+        empty = tmp_path / "empty"
+        (empty / "etkplot").mkdir(parents=True)
+        _clear_etkplot_modules()
+        monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(empty))
+        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
+            _etkplot()
+
+        # Empty etkplot/ directory with another regular etkplot package on sys.path.
+        (other_pkg / "__init__.py").write_text("")
+        monkeypatch.syspath_prepend(str(other))
+        _clear_etkplot_modules()
+        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
+            _etkplot()
+
+        # Incomplete etkplot/ (features.py only) with another namespace etkplot providing thresholds.py.
+        (other_pkg / "__init__.py").unlink()
+        partial = tmp_path / "partial"
+        (partial / "etkplot").mkdir(parents=True)
+        (partial / "etkplot" / "features.py").write_text("# stub\n")
+        _clear_etkplot_modules()
+        monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(partial))
+        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
+            _etkplot()
+    finally:
+        _clear_etkplot_modules()
+        sys.modules.update(saved)
+
+
+def test_unset_etkplot_path_skips_when_checkout_absent(monkeypatch, tmp_path):
+    monkeypatch.delenv("AWESOM_ETKPLOT_PATH", raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "ETKPLOT", tmp_path / "missing")
+    with pytest.raises(pytest.skip.Exception, match="etkplot not available"):
         _etkplot()
