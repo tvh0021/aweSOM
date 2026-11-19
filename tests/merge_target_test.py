@@ -109,3 +109,28 @@ def test_flat_umatrix_target_mode():
         assert not np.any(np.isnan(assigned))
         assert 1 <= lat.n_clusters == len(np.unique(assigned)) <= 2
         assert np.isfinite(lat.merge_cost_used) and lat.merge_cost_used >= 0.05
+
+
+def test_plot_heat_keeps_merge_cost_used():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    lat = synthetic()
+    lat.data_array = lat.lattice
+    lat.labels = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            lat.plot_heat(lat.umat, merge=True, merge_cost=0.001)
+        assert not hasattr(lat, "merge_cost_used")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            lat.assign_cluster_to_lattice(target_clusters=3)
+            cost = lat.merge_cost_used
+            assert cost != 0.001
+            lat.plot_heat(lat.umat, merge=True, merge_cost=0.001)
+        assert lat.merge_cost_used == cost
+        model = SOMModel.from_lattice(lat, scaled_training_data=lat.lattice)
+        assert float(model.metadata["merge_cost_used"]) == cost
+    finally:
+        plt.close("all")

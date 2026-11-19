@@ -1474,8 +1474,17 @@ class Lattice:
             # find the centroid for each node on the map
             centroids = self.compute_centroids(explicit)
             if merge:
-                # find the unique centroids for the nodes on the map
-                centroids = self.merge_similar_centroids(centroids, merge_cost)
+                # find the unique centroids for the nodes on the map; keep the
+                # merge_cost_used of the cluster assignment, if there is one
+                had_cost = hasattr(self, "merge_cost_used")
+                prior_cost = getattr(self, "merge_cost_used", None)
+                try:
+                    centroids = self.merge_similar_centroids(centroids, merge_cost)
+                finally:
+                    if had_cost:
+                        self.merge_cost_used = prior_cost
+                    elif hasattr(self, "merge_cost_used"):
+                        del self.merge_cost_used
 
             unique_centroids = self.get_unique_centroids(centroids)
             print("Unique centroids : ", unique_centroids)

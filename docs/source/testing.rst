@@ -39,6 +39,7 @@ points, or 0.12%.
 ``merge_target_test.py`` checks target-count cluster merging, threshold replay with ``merge_cost_used``, the ``float64`` U-matrix requirement, and frozen model metadata round-trips.
 ``inference_patch_test.py`` checks ``best_match_nodes_patch`` and ``aweSOM.predict(..., backend="patch")`` for bitwise agreement with ``best_match_nodes`` across smooth and random lattices, patch sizes, exact ties, and non-finite inputs, while ``model_test.py`` and ``inference_test.py`` also check ``SOMModel.predict(..., backend="patch")`` and the shared tie and non-finite contract.
 ``inference_screen_test.py`` checks ``best_match_nodes_screen`` against ``best_match_nodes`` across exact ties, non-finite inputs, single-node lattices, and ``float32`` runner-up overflow fallback.
+``stream_test.py``, ``stream_input_check_test.py``, ``stream_checkpoint_test.py``, ``npy_writer_test.py``, ``quality_metrics_test.py``, and ``narrow_label_dtype_test.py`` check ``aweSOM.stream`` training and prediction, radius phases, parity against the committed ``82dee49`` fixture (strict when ``AWESOM_EXACT_FIXTURES=1`` is set), checkpoint and resume parity, ``NpyWriter`` and ``copy_npy_rows`` CRC integrity, ``float64`` quantization and topographic error paths, and ``narrow_label_dtype`` byte parity with ``v1.4.0`` label files.
 
 Performance tests
 -----------------

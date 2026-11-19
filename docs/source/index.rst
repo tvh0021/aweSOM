@@ -33,7 +33,7 @@ See the :doc:`notebook <notebooks/iris>` for an example application on the class
 `Joonas Nättilä <https://natj.github.io>`_ - University of Helsinki,
 and `Jordy Davelaar <https://jordydavelaar.com>`_ - Princeton University.
 
-Current version: 1.9.0
+Current version: 1.10.0
 
 .. [![status](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1/status.svg)](https://joss.theoj.org/papers/b6995d7573124b56e82ec6b875f3b5d1)
 
@@ -48,6 +48,7 @@ Current version: 1.9.0
    notebooks/iris
    model
    backends
+   streaming
    faqs
    modules
 

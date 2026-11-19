@@ -58,6 +58,15 @@ aweSOM.model
    :show-inheritance:
 
 
+aweSOM.stream
+-------------
+
+.. automodule:: aweSOM.stream
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
 aweSOM.run_som
 --------------
 
