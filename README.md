@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.9.0
+Version: 1.10.0
 
 ## 1. Installation
 
@@ -294,6 +294,14 @@ Call `map.assign_cluster_to_lattice(target_clusters=4)` to merge centroids along
 - `"numba"` runs the exhaustive ascending `float64` scan over every node in parallel Numba threads.
 
 Keep `"screen"` on small trained maps such as `29x20` with `580` nodes, where a full `float32` tile scan runs about `2.1x` faster than patch bookkeeping. On medium trained maps such as `51x36` with `1,836` nodes or the `64x37` plasma map with `2,368` nodes, `"patch"` and `"screen"` stay within `1.3x` to `1.5x` of each other. Switch to `"patch"` on large smooth trained maps such as `91x64` with `5,824` nodes or `100x100` with `10,000` nodes, where `"patch"` runs `2.8x` faster than `"screen"` and `5.7x` faster than `"numba"` on `100x100` by skipping most patches in exact `float64` arithmetic. Avoid `"patch"` on untrained random weights, where overlapping bounding balls prevent pruning and make `"patch"` `7x` to `8x` slower than `"screen"` while still returning exact results. Across all three backends, exact ties pick the lowest node index, `NaN` candidate distances never win, non-finite or `> 1e15` weights delegate to `"numba"`, and query rows with no finite distance return node `0` and distance `inf`.
+
+### CPU streaming for large datasets
+
+`aweSOM.stream` trains and labels maps chunk by chunk on the CPU for datasets that do not fit in memory. Batch training is a separate algorithm and does not replace the online `Lattice.train_lattice` trainer.
+
+- `train_batch_stream(data_source, xdim, ydim, epochs=60, ...)` reads row-sliceable 2D arrays (`ndarray`, `numpy.memmap`, `h5py.Dataset`, or `NpyReader`) or zero-argument chunk callables. Library defaults are `epochs=60` with radius phases `(20, 10, 30)` from `radius_phases` and `radius_schedule`, `r_min=8` (clamped to `min(r_min, r_max)`), `bmu="auto"` (probing up to 16,384 rows of the first chunk per pass), and `final_pass="full"`. All options after `epochs` are keyword-only, and `phases=(P, T, M)` overrides the phase lengths. Pass `checkpoint="run.npz"` and `resume=True` to write `aweSOM.stream.checkpoint/1` files after each epoch and resume bit for bit in a single process (`read_checkpoint` inspects them).
+- `predict_stream(weights, node_cluster, data_source, ...)` labels streamed sources using `"screen"` (default), `"patch"` (with `lattice_shape=(xdim, ydim)`), or `"numba"`. For callable sources, pass `n_samples` and set `fn.n_feat` (or `fn.n_features`) on the callable to skip the counting pass (`n_features` is a `train_batch_stream`-only keyword). When `out=None`, it allocates an in-memory array in the smallest of `uint8`, `uint16`, and `int32` that holds every entry of `node_cluster` via `aweSOM.inference.narrow_label_dtype`. Pass `out_node` and `out_distance` to record BMU node indices and `float64` Euclidean distances alongside cluster labels, and use `NpyWriter`, `npy_crc32`, and `copy_npy_rows` for direct `.npy` writes with CRC-32 checks.
+- Exact `float64` quantization error and topographic error functions (`quantization_error`, `topographic_error`, `quantization_error_fast`, and `topographic_error_fast`) live in `aweSOM._batch_core`. See `docs/source/streaming.rst` for full examples and the source protocol.
 
 ## 4. Basic Usage - SCE
 

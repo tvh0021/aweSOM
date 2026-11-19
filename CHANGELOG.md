@@ -35,11 +35,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with any other epoch count keep the previous radii; calls with `epochs=60`
   and no `phases`, including `radius_schedule(60, ...)`, moved from
   (30, 15, 15) to (20, 10, 30).
-- `aweSOM.stream.predict_stream(..., out=None)` now allocates the smallest of
-  `uint8`, `uint16` and `int32` that holds every entry of `node_cluster`
-  (`aweSOM.inference.narrow_label_dtype`), also in single-process calls; it
-  returned `int32` before. Pass an `int32` `out` array, or cast the result,
-  where signed arithmetic on the labels is needed.
 - Multi-rank `production_pool.py::label_rows` writes per-rank
   `<tag>-{labels,nodes,distances}.parts/part-RRRR.npy` files and publishes
   `manifest.json` on rank 0 without copying other ranks' payloads through rank
@@ -49,7 +44,69 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
   rank count.
 
-## [1.9.0] - 2026-11-14
+## [1.10.0] - 2026-11-18
+
+This release adds CPU streaming batch training and inference in `aweSOM.stream`
+with checkpointing, resume, and `out_node` output, exports `narrow_label_dtype`
+in `aweSOM.inference`, adds exact `float64` quality metrics in
+`aweSOM._batch_core`, and fixes `Lattice.plot_heat` preserving
+`merge_cost_used`.
+
+**Online training outputs, `Lattice.predict`, `aweSOM.predict`, and
+`SOMModel.predict` labels and distances, and saved `run_som` label files match
+`v1.9.0` bit for bit. Existing pickled lattices and `format_version` 1
+`SOMModel` files load and predict as before. No shipped default changes in this
+release.**
+
+### Added
+
+- `aweSOM.stream` for out-of-core CPU batch SOM training and streaming
+  inference, exporting `train_batch_stream`, `predict_stream`, `BMUSearcher`,
+  `NpyReader`, `NpyWriter`, `copy_npy_rows`, `npy_crc32`, `read_checkpoint`,
+  `radius_phases`, `radius_schedule`, `neighbourhood_update`,
+  `stratified_sample`, and `peak_rss_bytes`.
+- `train_batch_stream` library defaults of `epochs=60` with radius phases
+  `(20, 10, 30)`, keyword-only arguments after `epochs` including `phases`,
+  `r_min=8`, `bmu="auto"`, and `final_pass="full"`. Other epoch counts without
+  explicit `phases` use the proportion split of `radius_phases` and
+  `radius_schedule`. Checkpoints write format `aweSOM.stream.checkpoint/1`
+  after every epoch and resume bit for bit in single-process runs.
+- `predict_stream` with CPU backends `"screen"` (default), `"patch"` (with
+  `lattice_shape=(xdim, ydim)`), and `"numba"`, narrow default label allocation
+  when `out=None`, optional `out_node` and `out_distance` writers, and
+  `NpyWriter` / `copy_npy_rows` with zlib CRC-32 checks.
+- `narrow_label_dtype` in `aweSOM.inference` (`__all__`), selecting `uint8` for
+  non-negative IDs up to 255, `uint16` up to 65,535, and `int32` otherwise
+  (including empty arrays and negative IDs). `run_som.save_cluster_labels` now
+  delegates integer narrowing to `narrow_label_dtype` while keeping `v1.4.0`
+  label files byte-identical across integer, float, and boolean inputs.
+- `aweSOM._batch_core` with `radius_phases`, `radius_schedule`,
+  `neighbourhood_matrix`, `quantization_error`, `topographic_error`,
+  `quantization_error_fast`, and `topographic_error_fast`.
+- Tests in `tests/stream_test.py`, `tests/stream_input_check_test.py`,
+  `tests/stream_checkpoint_test.py`, `tests/npy_writer_test.py`,
+  `tests/quality_metrics_test.py`, and `tests/narrow_label_dtype_test.py`, plus
+  fixtures `tests/fixtures/gmm_bbh7.npz` and
+  `tests/fixtures/stream_dev_82dee49_gmm_bbh7_200k_48x34.npz`.
+
+### Fixed
+
+- `Lattice.plot_heat(..., merge=True)` now saves and restores
+  `self.merge_cost_used` around its temporary `merge_similar_centroids` call,
+  and deletes the attribute again if it did not exist before plotting, covered
+  by `test_plot_heat_keeps_merge_cost_used` in `tests/merge_target_test.py`.
+- Updated the `1.9.0` heading date in `CHANGELOG.md` from `2026-11-14` to
+  `2026-11-15` to match the local date of the `v1.9.0` GitHub release after the
+  midnight rollover.
+
+### Documentation
+
+- Added `docs/source/streaming.rst` and linked it from `docs/source/index.rst`,
+  added `aweSOM.stream` to `docs/source/modules.rst`, added `"CPU streaming for
+  large datasets"` to `README.md`, and updated `docs/source/testing.rst` and
+  `BENCHMARKS.md`.
+
+## [1.9.0] - 2026-11-15
 
 This release adds exact `float64` patch-pruning inference to `aweSOM.inference`
 and `SOMModel.predict`, documents and tests the tie-breaking and non-finite BMU
@@ -544,6 +601,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.10.0]: https://github.com/tvh0021/aweSOM/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/tvh0021/aweSOM/compare/v1.6.0...v1.7.0

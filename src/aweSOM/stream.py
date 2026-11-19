@@ -339,7 +339,7 @@ class NpyWriter:
     a file must not be open for writing on two nodes at once: a network file
     system then stops buffering writes (CephFS turns every write into a
     synchronous write to the storage servers, 11x slower when measured on
-    one of RIT's clusters).
+    a cluster).
 
     For several nodes, let each rank write its own part file inside
     ``<stem>.parts/`` and publish ``manifest.json`` with
