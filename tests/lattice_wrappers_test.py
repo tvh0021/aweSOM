@@ -96,8 +96,10 @@ def test_train_lattice_batch_fills_lattice_and_umat():
 def test_train_lattice_batch_default_epochs_and_phases():
     import inspect
 
-    pytest.importorskip("jax")
+    from jax_batch_guard import require_batch_jax
+
     assert inspect.signature(Lattice.train_lattice_batch).parameters["epochs"].default == 60
+    require_batch_jax()
     data = np.random.default_rng(6).normal(size=(500, 3))
     som = Lattice(6, 5, 0.3, 100)
     info = som.train_lattice_batch(data, list("xyz"), epochs=5, phases=(1, 2, 2), r_min=2)
