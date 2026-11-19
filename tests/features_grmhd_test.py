@@ -1,8 +1,11 @@
 """Tests for aweSOM.features_grmhd: derivatives, the five features, thresholds and their metadata."""
 
 import importlib
+import importlib.machinery
 import os
+import site
 import sys
+import sysconfig
 from pathlib import Path
 
 import h5py
@@ -293,6 +296,51 @@ def test_explicit_invalid_etkplot_path_fails(monkeypatch, tmp_path):
         _etkplot()
 
 
+def _stdlib_sys_path() -> list[str]:
+    excluded = {
+        Path(p).resolve()
+        for p in (
+            *getattr(site, "getsitepackages", lambda: ())(),
+            getattr(site, "getusersitepackages", lambda: None)(),
+            sysconfig.get_path("purelib"),
+            sysconfig.get_path("platlib"),
+        )
+        if p
+    }
+    stdlib_dirs = {
+        Path(p).resolve()
+        for p in (
+            sysconfig.get_path("stdlib"),
+            Path(os.__file__).parent if getattr(os, "__file__", None) else None,
+        )
+        if p
+    }
+    base_prefixes = {
+        Path(p).resolve()
+        for p in (sys.base_prefix, sys.base_exec_prefix)
+        if p
+    }
+    stdlib_zip = f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    zip_parents = {sd.parent for sd in stdlib_dirs} | base_prefixes
+    keep = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        resolved = Path(entry).resolve()
+        if any(part in ("site-packages", "dist-packages") for part in resolved.parts):
+            continue
+        if any(resolved == ex or resolved.is_relative_to(ex) for ex in excluded):
+            continue
+        if (
+            resolved in stdlib_dirs
+            or (resolved.name == "lib-dynload" and any(resolved.is_relative_to(bp) for bp in base_prefixes))
+            or (resolved.name == "DLLs" and resolved.parent in base_prefixes)
+            or (resolved.name == stdlib_zip and resolved.parent in zip_parents)
+        ):
+            keep.append(entry)
+    return keep
+
+
 def test_explicit_incomplete_etkplot_path_does_not_fall_back(monkeypatch, tmp_path):
     other = tmp_path / "other"
     other_pkg = other / "etkplot"
@@ -300,7 +348,8 @@ def test_explicit_incomplete_etkplot_path_does_not_fall_back(monkeypatch, tmp_pa
     (other_pkg / "features.py").write_text("# stub\n")
     (other_pkg / "thresholds.py").write_text("# stub\n")
 
-    saved = {k: v for k, v in sys.modules.items() if k == "etkplot" or k.startswith("etkplot.")}
+    saved_modules = dict(sys.modules)
+    saved_path_importer_cache = set(sys.path_importer_cache)
 
     def _clear_etkplot_modules():
         for key in [k for k in sys.modules if k == "etkplot" or k.startswith("etkplot.")]:
@@ -308,33 +357,71 @@ def test_explicit_incomplete_etkplot_path_does_not_fall_back(monkeypatch, tmp_pa
         importlib.invalidate_caches()
 
     try:
-        # Empty etkplot/ directory with no fallback on sys.path (or with any installed fallback).
-        empty = tmp_path / "empty"
-        (empty / "etkplot").mkdir(parents=True)
-        _clear_etkplot_modules()
-        monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(empty))
-        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
-            _etkplot()
+        base_sys_path = _stdlib_sys_path()
+        allowed_meta_path = [
+            finder
+            for finder in sys.meta_path
+            if finder
+            in (
+                importlib.machinery.BuiltinImporter,
+                importlib.machinery.FrozenImporter,
+                importlib.machinery.PathFinder,
+            )
+        ]
 
-        # Empty etkplot/ directory with another regular etkplot package on sys.path.
-        (other_pkg / "__init__.py").write_text("")
-        monkeypatch.syspath_prepend(str(other))
-        _clear_etkplot_modules()
-        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
-            _etkplot()
+        with monkeypatch.context() as mp:
+            mp.setattr(sys, "meta_path", allowed_meta_path)
 
-        # Incomplete etkplot/ (features.py only) with another namespace etkplot providing thresholds.py.
-        (other_pkg / "__init__.py").unlink()
-        partial = tmp_path / "partial"
-        (partial / "etkplot").mkdir(parents=True)
-        (partial / "etkplot" / "features.py").write_text("# stub\n")
-        _clear_etkplot_modules()
-        monkeypatch.setenv("AWESOM_ETKPLOT_PATH", str(partial))
-        with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH"):
-            _etkplot()
+            # Empty etkplot/ directory with no fallback on sys.path.
+            empty = tmp_path / "empty"
+            (empty / "etkplot").mkdir(parents=True)
+            mp.setattr(sys, "path", list(base_sys_path))
+            _clear_etkplot_modules()
+            mp.setenv("AWESOM_ETKPLOT_PATH", str(empty))
+            with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH") as exc_info:
+                _etkplot()
+            assert "failed to import" in str(exc_info.value)
+            assert "etkplot.features" not in sys.modules
+
+            # Empty etkplot/ directory with another regular etkplot package on sys.path.
+            (other_pkg / "__init__.py").write_text("")
+            mp.setattr(sys, "path", [str(other), *base_sys_path])
+            _clear_etkplot_modules()
+            with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH") as exc_info:
+                _etkplot()
+            assert "did not resolve etkplot.features" in str(exc_info.value)
+            assert Path(sys.modules["etkplot.features"].__file__).resolve() == (other_pkg / "features.py").resolve()
+
+            # Incomplete etkplot/ (features.py only) with another namespace etkplot providing thresholds.py.
+            (other_pkg / "__init__.py").unlink()
+            partial = tmp_path / "partial"
+            (partial / "etkplot").mkdir(parents=True)
+            (partial / "etkplot" / "features.py").write_text("# stub\n")
+            mp.setattr(sys, "path", [str(other), *base_sys_path])
+            _clear_etkplot_modules()
+            mp.setenv("AWESOM_ETKPLOT_PATH", str(partial))
+            with pytest.raises(pytest.fail.Exception, match="AWESOM_ETKPLOT_PATH") as exc_info:
+                _etkplot()
+            assert "did not resolve etkplot.thresholds" in str(exc_info.value)
+            assert (
+                Path(sys.modules["etkplot.features"].__file__).resolve()
+                == (partial / "etkplot" / "features.py").resolve()
+            )
+            assert (
+                Path(sys.modules["etkplot.thresholds"].__file__).resolve()
+                == (other_pkg / "thresholds.py").resolve()
+            )
     finally:
-        _clear_etkplot_modules()
-        sys.modules.update(saved)
+        for key in list(sys.modules):
+            if key not in saved_modules:
+                del sys.modules[key]
+        for key, mod in saved_modules.items():
+            if sys.modules.get(key) is not mod:
+                sys.modules[key] = mod
+        for key in list(sys.path_importer_cache):
+            if key not in saved_path_importer_cache:
+                del sys.path_importer_cache[key]
+        importlib.invalidate_caches()
 
 
 def test_unset_etkplot_path_skips_when_checkout_absent(monkeypatch, tmp_path):
