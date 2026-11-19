@@ -62,7 +62,7 @@ Example:
     >>> import numpy as np
     >>> from aweSOM.stream import train_batch_stream
     >>> x = np.load("features_f32.npy", mmap_mode="r")      # (N, F) float32
-    >>> weights, info = train_batch_stream(x, 91, 64, epochs=40, sample_fraction=0.01)
+    >>> weights, info = train_batch_stream(x, 91, 64, sample_fraction=0.01)
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ import os
 import sys
 import time
 import zlib
-from typing import Any, Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
 import numba
 import numpy as np
@@ -85,7 +85,7 @@ try:
 except ImportError:
     resource = None
 
-from ._batch_core import radius_schedule
+from ._batch_core import radius_phases, radius_schedule
 from .inference import (
     SCREEN_TILE,
     _bmu_kernel,
@@ -119,6 +119,7 @@ __all__ = [
     "train_batch_stream",
     "read_checkpoint",
     "predict_stream",
+    "radius_phases",
     "stratified_sample",
     "neighbourhood_update",
     "peak_rss_bytes",
@@ -897,7 +898,8 @@ def train_batch_stream(
     data_source: Any,
     xdim: int,
     ydim: int,
-    epochs: int = 40,
+    epochs: int = 60,
+    phases: Optional[Sequence[int]] = None,
     chunk: int = DEFAULT_CHUNK,
     r_max: Optional[float] = None,
     r_min: float = 8,
@@ -922,9 +924,9 @@ def train_batch_stream(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Train a SOM lattice with the batch map, streaming the data chunk by chunk.
 
-    The defaults ``epochs=40``, ``r_min=8``, ``bmu="auto"`` and
-    ``final_pass="full"`` are library defaults. Application drivers set their
-    own schedule and parameters.
+    The defaults ``epochs=60`` (radius phases 20, 10 and 30), ``r_min=8``,
+    ``bmu="auto"`` and ``final_pass="full"`` are library defaults. Application
+    drivers set their own schedule and parameters.
 
     ``train_batch_stream`` takes no ``device`` argument. With
     ``bmu="cuda_screen"``, each rank trains on its current CUDA device.
@@ -937,6 +939,10 @@ def train_batch_stream(
             every aweSOM trainer).
         xdim, ydim: Lattice dimensions; node ``i`` sits at ``(i % xdim, i // xdim)``.
         epochs: Number of batch epochs.
+        phases: Optional ``(P, T, M)`` radius phases summing to ``epochs``:
+            ``P`` epochs at ``r_max``, ``T`` tapering, ``M`` at ``r_min``
+            (:func:`radius_phases`). Default: ``(20, 10, 30)`` at 60 epochs,
+            otherwise the split of :func:`aweSOM._batch_core.radius_schedule`.
         chunk: Rows read and processed at once (array sources). Memory is about
             ``2 * chunk * F * itemsize + chunk * 12`` bytes for data, prefetch
             and BMU buffers, plus ``groups * nodes * (F + 1) * 8`` bytes of
@@ -980,8 +986,8 @@ def train_batch_stream(
             the sampling seed, the callable's ``calls`` counter (if it has one)
             and the git commit (:func:`read_checkpoint` reads it).
         resume: With ``checkpoint`` present on disk, continue after its last
-            epoch (every rank reads it). Data, lattice, epochs, radii and
-            sampling must match; the result is bitwise equal to an
+            epoch (every rank reads it). Data, lattice, epochs, radii (and so
+            the phases) and sampling must match; the result is bitwise equal to an
             uninterrupted run with the same rank count.
         comm: mpi4py communicator (:func:`aweSOM.distributed.get_comm`) for a
             run with one rank per node. Rank 0 draws the initial lattice and
@@ -994,7 +1000,8 @@ def train_batch_stream(
 
     Returns:
         ``(weights, info)``; ``weights`` float64 ``(xdim * ydim, F)`` (equal on
-        every rank). ``info`` has the keys ``radius`` (per epoch), ``qe``
+        every rank). ``info`` has the keys ``radius`` (per epoch),
+        ``radius_phases`` (the ``(P, T, M)`` used), ``qe``
         (after each epoch), ``qe_initial``, ``hits`` (rows per node of the
         final weights), ``epoch_time``, ``chunk``, ``n_samples``,
         ``rows_per_epoch``, ``fallbacks`` (rows that needed the float64
@@ -1044,7 +1051,8 @@ def train_batch_stream(
 
         if r_max is None:
             r_max = max(xdim, ydim) + 1
-        radii = radius_schedule(epochs, r_max, min(r_min, r_max))
+        phases = radius_phases(epochs, phases)
+        radii = radius_schedule(epochs, r_max, min(r_min, r_max), phases)
         s_seed = seed if sample_seed is None else sample_seed
 
         def epoch_rng(e: int):
@@ -1075,7 +1083,7 @@ def train_batch_stream(
                 if meta.get(k) != v:
                     raise ValueError(f"checkpoint has {k}={meta.get(k)!r}, this run {v!r}")
             if not np.array_equal(arrays["radius"], radii):
-                raise ValueError("checkpoint radius schedule differs (r_max, r_min or epochs)")
+                raise ValueError("checkpoint radius schedule differs (r_max, r_min, epochs or phases)")
             start = int(meta["epoch"])
             w = np.array(arrays["weights"], np.float64)
             for k in keys:
@@ -1201,6 +1209,7 @@ def train_batch_stream(
 
     info = {
         "radius": radii,
+        "radius_phases": phases,
         "qe": qe_after,
         "qe_initial": qe_initial,
         "hits": hits,

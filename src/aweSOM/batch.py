@@ -71,7 +71,7 @@ Measured on Apple M1 Max, CPU (JAX 0.12.0.1, float32, N = 2,000,000, F = 6,
 
 Example:
     >>> from aweSOM.batch import train_batch, quantization_error
-    >>> weights, info = train_batch(data, 64, 37, epochs=40)
+    >>> weights, info = train_batch(data, 64, 37)
     >>> qe = quantization_error(weights, data)
 """
 
@@ -94,6 +94,7 @@ from ._batch_core import (  # noqa: F401  (re-exported)
     neighbourhood_matrix,
     quantization_error,
     quantization_error_fast,
+    radius_phases,
     radius_schedule,
     topographic_error,
     topographic_error_fast,
@@ -117,6 +118,7 @@ if not hasattr(jax, "enable_x64") or not hasattr(jax, "shard_map"):
     )
 
 __all__ = [
+    "radius_phases",
     "radius_schedule",
     "neighbourhood_matrix",
     "train_batch",
@@ -237,7 +239,8 @@ def train_batch(
     data: np.ndarray,
     xdim: int,
     ydim: int,
-    epochs: int = 40,
+    epochs: int = 60,
+    phases: Optional[Sequence[int]] = None,
     r_max: Optional[float] = None,
     r_min: float = 8,
     chunk: int = 65536,
@@ -272,7 +275,11 @@ def train_batch(
             (``jax.process_count() > 1``) the process-local rows.
         xdim: Lattice x dimension.
         ydim: Lattice y dimension.
-        epochs: Number of batch epochs.
+        epochs: Number of batch epochs (default 60).
+        phases: Optional ``(P, T, M)`` radius phases summing to ``epochs``:
+            ``P`` epochs at ``r_max``, ``T`` tapering, ``M`` at ``r_min``
+            (:func:`radius_phases`). Default: ``(20, 10, 30)`` at 60 epochs,
+            otherwise the split of :func:`radius_schedule`.
         r_max: Initial radius. Defaults to ``max(xdim, ydim) + 1`` as in
             ``Lattice.fast_som``.
         r_min: Final radius; clamped to ``r_max``.
@@ -297,7 +304,8 @@ def train_batch(
 
     Returns:
         A tuple ``(weights, info)``. ``weights`` is float64 ``(xdim * ydim, F)``.
-        ``info`` has keys ``radius`` (per epoch), ``qe`` (mean quantization error
+        ``info`` has keys ``radius`` (per epoch), ``radius_phases`` (the
+        ``(P, T, M)`` used), ``qe`` (mean quantization error
         after each epoch; ``qe[e]`` is measured during the pass of epoch e + 1,
         the last one by an extra pass), ``qe_initial`` (of the initial lattice),
         ``hits`` (BMU counts of the returned weights), ``epoch_time`` (seconds
@@ -348,7 +356,8 @@ def train_batch(
 
     if r_max is None:
         r_max = max(xdim, ydim) + 1
-    radii = radius_schedule(epochs, r_max, min(r_min, r_max))
+    phases = radius_phases(epochs, phases)
+    radii = radius_schedule(epochs, r_max, min(r_min, r_max), phases)
 
     qe_after = np.zeros(epochs)
     times = np.zeros(epochs)
@@ -396,6 +405,7 @@ def train_batch(
 
     info = {
         "radius": radii,
+        "radius_phases": phases,
         "qe": qe_after,
         "qe_initial": qe_initial,
         "hits": hits,

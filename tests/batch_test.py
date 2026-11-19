@@ -106,6 +106,15 @@ def test_neighbourhood_matrix_matches_gamma(radius):
         np.testing.assert_allclose(h[c], expected, rtol=1e-6, atol=0)
 
 
+def test_train_batch_default_and_explicit_phases(data):
+    _, info = train_batch(data[:500], 6, 5, r_min=2)
+    assert info["radius_phases"] == (20, 10, 30) and info["radius"].shape == (60,)
+    assert info["radius"].tobytes() == radius_schedule(60, 7, 2, phases=(20, 10, 30)).tobytes()
+    _, info = train_batch(data[:500], 6, 5, epochs=5, phases=(1, 2, 2), r_min=2)
+    assert info["radius_phases"] == (1, 2, 2)
+    assert info["radius"].tolist() == [7, 7 - 5 / 3, 7 - 10 / 3, 2, 2]
+
+
 def test_neighbourhood_matrix_radius_zero_is_identity():
     np.testing.assert_array_equal(neighbourhood_matrix(5, 4, 0), np.eye(20))
 

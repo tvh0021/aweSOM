@@ -605,7 +605,7 @@ class Lattice:
         data: np.ndarray,
         features_names: list[str],
         labels: np.ndarray = None,
-        epochs: int = 40,
+        epochs: int = 60,
         **kwargs,
     ):
         """Train the lattice with the JAX batch map (``aweSOM.batch.train_batch``).
@@ -619,8 +619,8 @@ class Lattice:
                 data (np.ndarray): [N, F] training data (process-local rows in a multi-process run).
                 features_names (list[str]): A list of feature names.
                 labels (np.ndarray, optional): Ground-truth labels. Defaults to None.
-                epochs (int, optional): Number of batch epochs. Defaults to 40.
-                **kwargs: Passed to ``train_batch`` (r_max, r_min, chunk, seed, init, mesh, devices, precision, dtype, verbose, callback).
+                epochs (int, optional): Number of batch epochs. Defaults to 60 (radius phases 20, 10 and 30).
+                **kwargs: Passed to ``train_batch`` (phases, r_max, r_min, chunk, seed, init, mesh, devices, precision, dtype, verbose, callback).
 
         Returns:
                 dict: the ``info`` dictionary returned by ``train_batch``.

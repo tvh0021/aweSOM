@@ -2,6 +2,7 @@
 except for the comparison with aweSOM.batch.train_batch, which is skipped without it."""
 
 import importlib.util
+import math
 import sys
 
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 
 import aweSOM.stream as stream
 from aweSOM._batch_core import neighbourhood_matrix, quantization_error, radius_schedule
+from aweSOM.stream import radius_phases
 from aweSOM.inference import best_match_nodes, predict
 from aweSOM.stream import (
     NpyReader,
@@ -511,3 +513,101 @@ def test_stream_imports_without_resource(monkeypatch):
     spec.loader.exec_module(fresh)
     assert fresh.resource is None
     assert fresh.peak_rss_bytes() is None
+
+
+# ------------------------------------------------------------------ radius phases
+
+
+def _old_radius_schedule(epochs, r_max, r_min):
+    """radius_schedule at 00e8551, before the phases argument (the phases=None reference)."""
+    if epochs < 1:
+        raise ValueError(f"epochs must be >= 1, got {epochs}")
+    n_max = math.ceil(epochs / 2)
+    n_lin = min(math.ceil(epochs / 4), epochs - n_max)
+    n_min = epochs - n_max - n_lin
+    linear = np.linspace(r_max, r_min, n_lin + 2)[1:-1]
+    return np.concatenate([np.full(n_max, float(r_max)), linear, np.full(n_min, float(r_min))])
+
+
+def test_radius_schedule_default_60_is_20_10_30():
+    assert radius_phases(60) == (20, 10, 30)
+    r = radius_schedule(60, 101, 8)
+    ref = np.concatenate([np.full(20, 101.0), np.linspace(101, 8, 12)[1:-1], np.full(30, 8.0)])
+    assert r.dtype == np.float64 and r.tobytes() == ref.tobytes()
+    assert radius_schedule(60, 101, 8, phases=(20, 10, 30)).tobytes() == ref.tobytes()
+    assert ((r[20:30] < 101) & (r[20:30] > 8)).all()
+
+
+@pytest.mark.parametrize("epochs", [1, 2, 3, 4, 5, 7, 9, 11, 13, 40, 41, 59, 61, 99])
+@pytest.mark.parametrize("r_max, r_min", [(101, 8), (92.0, 8.0), (6, 2), (7.5, 7.5), (65, 8.0)])
+def test_radius_schedule_without_phases_matches_old(epochs, r_max, r_min):
+    r = radius_schedule(epochs, r_max, r_min)
+    ref = _old_radius_schedule(epochs, r_max, r_min)
+    assert r.dtype == ref.dtype and r.tobytes() == ref.tobytes()
+    n_max = math.ceil(epochs / 2)
+    n_lin = min(math.ceil(epochs / 4), epochs - n_max)
+    assert radius_phases(epochs) == (n_max, n_lin, epochs - n_max - n_lin)
+
+
+def test_radius_schedule_explicit_phases():
+    assert radius_schedule(5, 6, 2, phases=(1, 2, 2)).tolist() == [6, 6 - 4 / 3, 6 - 8 / 3, 2, 2]
+    assert radius_schedule(3, 6, 2, phases=[0, 0, 3]).tolist() == [2, 2, 2]
+    assert radius_schedule(3, 6, 2, phases=[3, 0, 0]).tolist() == [6, 6, 6]
+    assert radius_schedule(3, 6, 2, phases=np.array([0, 3, 0])).tolist() == [5, 4, 3]
+    # explicit phases equal to the default split give the default radii
+    for e in (40, 61):
+        assert radius_schedule(e, 50, 8, phases=radius_phases(e)).tobytes() == radius_schedule(e, 50, 8).tobytes()
+    assert radius_schedule(60, 50, 8, phases=(30, 15, 15)).tobytes() == _old_radius_schedule(60, 50, 8).tobytes()
+    p = radius_phases(4, np.array([1, 2, 1]))
+    assert p == (1, 2, 1) and all(type(v) is int for v in p)
+
+
+@pytest.mark.parametrize(
+    "epochs, phases",
+    [(60, (20, 10, 31)), (40, (20, 10, 30)), (60, (20, 40)), (60, (20, 10, 10, 20)), (60, (-1, 31, 30)),
+     (60, (20.0, 10, 30)), (60, (20.5, 9.5, 30)), (60, "abc"), (60, 60), (60, ()), (0, (0, 0, 0))],
+)
+def test_radius_phases_rejects_bad_phases(epochs, phases):
+    with pytest.raises(ValueError):
+        radius_phases(epochs, phases)
+    with pytest.raises(ValueError):
+        radius_schedule(epochs, 10, 2, phases=phases)
+
+
+def test_train_batch_stream_default_is_60_epochs_20_10_30():
+    x = three_gaussians(300, seed=1)
+    _, info = train_batch_stream(x, 6, 5, chunk=128, r_min=2, final_pass="none")
+    r = info["radius"]
+    assert info["radius_phases"] == (20, 10, 30) and len(r) == 60 == len(info["qe"])
+    assert (r[:20] == 7).all() and (r[30:] == 2).all() and ((r[20:30] < 7) & (r[20:30] > 2)).all()
+    assert r.tobytes() == radius_schedule(60, 7, 2, phases=(20, 10, 30)).tobytes()
+    _, info = train_batch_stream(x, 6, 5, epochs=40, chunk=128, r_min=2, final_pass="none")
+    assert info["radius_phases"] == (20, 10, 10)
+    assert info["radius"].tobytes() == _old_radius_schedule(40, 7, 2).tobytes()
+
+
+def test_train_batch_stream_resume_checks_phases(tmp_path):
+    class Stop(Exception):
+        pass
+
+    def stop_after(epoch):
+        def cb(e, w):
+            if e == epoch:
+                raise Stop
+
+        return cb
+
+    x = three_gaussians(400, seed=2)
+    kw = dict(epochs=5, phases=(1, 2, 2), chunk=64, r_max=6, r_min=2, final_pass="none")
+    w_ref, i_ref = train_batch_stream(x, 6, 5, **kw)
+    ck = str(tmp_path / "ck.npz")
+    with pytest.raises(Stop):
+        train_batch_stream(x, 6, 5, checkpoint=ck, resume=True, callback=stop_after(1), **kw)
+    w, info = train_batch_stream(x, 6, 5, checkpoint=ck, resume=True, **kw)
+    assert info["resumed_from"] == 2 and info["radius_phases"] == (1, 2, 2)
+    assert w.tobytes() == w_ref.tobytes()
+    assert info["radius"].tobytes() == i_ref["radius"].tobytes()
+    # a checkpoint written with other phases is refused, also by the default split
+    for phases in ((2, 1, 2), None):
+        with pytest.raises(ValueError, match="radius"):
+            train_batch_stream(x, 6, 5, checkpoint=ck, resume=True, **dict(kw, phases=phases))

@@ -18,7 +18,6 @@ spatial check, which this driver does not run.
 """
 from __future__ import annotations
 
-import contextlib
 import copy
 import functools
 import argparse
@@ -1058,12 +1057,11 @@ def fit(args, shape, seed, scaling, out, comm=None, restored=None, pool_file=Non
                 checkpoint_args['checkpoint'] = args.resume.resolve()
             if comm is not None: comm.Barrier()
             checkpoint_args['resume'] = True
-        with explicit_radii(resolve_phases(args)):
-            w, info = train_batch_stream(source, *shape, epochs=args.epochs, chunk=args.chunk,
-                                        bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
-                                        r_min=args.r_min if args.r_min is not None else default_r_min(shape),
-                                        final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
-                                        comm=comm, **checkpoint_args)
+        w, info = train_batch_stream(source, *shape, epochs=args.epochs, phases=resolve_phases(args), chunk=args.chunk,
+                                    bmu=args.bmu, seed=seed, groups=args.groups, r_max=args.r_max,
+                                    r_min=args.r_min if args.r_min is not None else default_r_min(shape),
+                                    final_pass='none', n_samples=args.rows_per_epoch or len(raw), verbose=True,
+                                    comm=comm, **checkpoint_args)
         rank = 0 if comm is None else comm.Get_rank()
         if comm is not None:
             import numba
@@ -1405,47 +1403,20 @@ APPROVED = dict(rows_per_snapshot=10_000_000, rows_per_epoch=20_000_000, lattice
                 seeds=[42,43], epochs=60, phases=[20,10,30], chunk=2**21, sample_seed=42, groups=64, merge_cost=.05,
                 target_clusters=10, r_max=None, r_min=8., bz_weight=2., pol_weight=2.,
                 tube_bz=.7, tube_beta=0.)
-# Radius phases (P, T, M) for 60 epochs, chosen by the user on 2026-11-10 after the epoch study
-# (tested (20,10,31)). Before that the default was 40 epochs split by radius_schedule: (20,10,10).
-DEFAULT_PHASES = [20, 10, 30]
+# Radius phases (P, T, M) for 60 epochs, (20,10,30), chosen by the user on 2026-11-10 after the epoch
+# study (tested (20,10,31)); aweSOM's train_batch_stream uses them by default at 60 epochs. Before that
+# the default was 40 epochs split by radius_schedule: (20,10,10).
 
 
 def resolve_phases(args):
-    """Set and return ``args.phases``: DEFAULT_PHASES at 60 epochs, else radius_schedule's split."""
-    if args.phases is None:
-        e = args.epochs
-        half = -(-e // 2)
-        taper = min(-(-e // 4), e - half)
-        args.phases = list(DEFAULT_PHASES) if e == sum(DEFAULT_PHASES) else [half, taper, e - half - taper]
-    if len(args.phases) != 3 or min(args.phases) < 0 or sum(args.phases) != args.epochs:
-        raise ValueError(f'--phases {args.phases} must be three counts summing to --epochs {args.epochs}')
-    return args.phases
-
-
-def phase_schedule(phases, epochs, r_max, r_min):
-    """Radii: P at r_max, T on the interior of linspace(r_max, r_min, T + 2), M at r_min.
-
-    Same construction as aweSOM's radius_schedule, with explicit phase lengths; takes its
-    arguments after ``phases`` so the trainer can call it in radius_schedule's place."""
-    p, t, m = phases
-    if epochs != p + t + m: raise ValueError(f'phases {phases} do not sum to {epochs} epochs')
-    return np.concatenate([np.full(p, float(r_max)), np.linspace(r_max, r_min, t + 2)[1:-1], np.full(m, float(r_min))])
-
-
-@contextlib.contextmanager
-def explicit_radii(phases):
-    """Train with ``phases`` inside this block.
-
-    train_batch_stream takes no explicit radii: it calls aweSOM.stream.radius_schedule(epochs,
-    r_max, min(r_min, r_max)) for training and for the --resume check, so both see these radii;
-    info['radius'] records them."""
-    import aweSOM.stream as stream_module
-    library_schedule = stream_module.radius_schedule
-    stream_module.radius_schedule = functools.partial(phase_schedule, phases)
+    """Set and return ``args.phases``: aweSOM.stream.radius_phases, (20,10,30) at 60 epochs, else
+    radius_schedule's split."""
+    from aweSOM.stream import radius_phases
     try:
-        yield
-    finally:
-        stream_module.radius_schedule = library_schedule
+        args.phases = list(radius_phases(args.epochs, args.phases))
+    except ValueError:
+        raise ValueError(f'--phases {args.phases} must be three counts summing to --epochs {args.epochs}') from None
+    return args.phases
 # The approved training snapshots, in pool order, and the reserved snapshots. Relocating these
 # files is operational; a different selection, count or order is a different training set.
 APPROVED_SNAPSHOTS = dict(snapshots=['94208','98304'], anchor='94208', held_out=['405504'])
