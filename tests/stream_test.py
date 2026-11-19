@@ -611,3 +611,24 @@ def test_train_batch_stream_resume_checks_phases(tmp_path):
     for phases in ((2, 1, 2), None):
         with pytest.raises(ValueError, match="radius"):
             train_batch_stream(x, 6, 5, checkpoint=ck, resume=True, **dict(kw, phases=phases))
+
+
+def test_train_batch_stream_resume_60_epochs_old_split(tmp_path):
+    """A 60-epoch checkpoint with the old (30, 15, 15) split is refused by default, resumes with it."""
+    x = three_gaussians(200, seed=3)
+    kw = dict(chunk=64, r_max=6, r_min=2, final_pass="none")
+    ck = str(tmp_path / "ck.npz")
+    _, info = train_batch_stream(x, 5, 4, epochs=60, phases=(30, 15, 15), checkpoint=ck, **kw)
+    assert info["radius"].tobytes() == _old_radius_schedule(60, 6, 2).tobytes()
+    with pytest.raises(ValueError, match="radius"):
+        train_batch_stream(x, 5, 4, checkpoint=ck, resume=True, **kw)
+    _, info = train_batch_stream(x, 5, 4, epochs=60, phases=(30, 15, 15), checkpoint=ck, resume=True, **kw)
+    assert info["resumed_from"] == 60 and info["radius_phases"] == (30, 15, 15)
+
+
+def test_train_batch_stream_options_after_epochs_are_keyword_only():
+    x = three_gaussians(50, seed=4)
+    with pytest.raises(TypeError):
+        train_batch_stream(x, 3, 2, 2, (1, 1, 0))
+    with pytest.raises(TypeError):
+        train_batch_stream(x, 3, 2, 2, 64)

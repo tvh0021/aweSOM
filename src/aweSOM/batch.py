@@ -240,6 +240,7 @@ def train_batch(
     xdim: int,
     ydim: int,
     epochs: int = 60,
+    *,
     phases: Optional[Sequence[int]] = None,
     r_max: Optional[float] = None,
     r_min: float = 8,
@@ -275,7 +276,8 @@ def train_batch(
             (``jax.process_count() > 1``) the process-local rows.
         xdim: Lattice x dimension.
         ydim: Lattice y dimension.
-        epochs: Number of batch epochs (default 60).
+        epochs: Number of batch epochs (default 60). Later arguments are
+            keyword-only.
         phases: Optional ``(P, T, M)`` radius phases summing to ``epochs``:
             ``P`` epochs at ``r_max``, ``T`` tapering, ``M`` at ``r_min``
             (:func:`radius_phases`). Default: ``(20, 10, 30)`` at 60 epochs,

@@ -6,7 +6,7 @@ dataset, or a callable that yields chunks. Only one chunk, one more being
 prefetched and the per-node accumulators are in memory, so the disk limits N,
 not RAM.
 
-The radius follows :func:`aweSOM._batch_core.radius_schedule`. Each epoch
+The radius follows :func:`radius_schedule`. Each epoch
 applies the batch update ``w_i = sum_c h(c, i) S_c / sum_c h(c, i) n_c``,
 where ``h`` is a Gaussian of the Chebyshev lattice distance with
 ``sigma = radius / 3``, cut to zero beyond the radius. Nodes with no hit in
@@ -120,6 +120,7 @@ __all__ = [
     "read_checkpoint",
     "predict_stream",
     "radius_phases",
+    "radius_schedule",
     "stratified_sample",
     "neighbourhood_update",
     "peak_rss_bytes",
@@ -899,6 +900,7 @@ def train_batch_stream(
     xdim: int,
     ydim: int,
     epochs: int = 60,
+    *,
     phases: Optional[Sequence[int]] = None,
     chunk: int = DEFAULT_CHUNK,
     r_max: Optional[float] = None,
@@ -928,6 +930,8 @@ def train_batch_stream(
     ``bmu="auto"`` and ``final_pass="full"`` are library defaults. Application
     drivers set their own schedule and parameters.
 
+    Arguments after ``epochs`` are keyword-only.
+
     ``train_batch_stream`` takes no ``device`` argument. With
     ``bmu="cuda_screen"``, each rank trains on its current CUDA device.
 
@@ -942,7 +946,7 @@ def train_batch_stream(
         phases: Optional ``(P, T, M)`` radius phases summing to ``epochs``:
             ``P`` epochs at ``r_max``, ``T`` tapering, ``M`` at ``r_min``
             (:func:`radius_phases`). Default: ``(20, 10, 30)`` at 60 epochs,
-            otherwise the split of :func:`aweSOM._batch_core.radius_schedule`.
+            otherwise the split of :func:`radius_schedule`.
         chunk: Rows read and processed at once (array sources). Memory is about
             ``2 * chunk * F * itemsize + chunk * 12`` bytes for data, prefetch
             and BMU buffers, plus ``groups * nodes * (F + 1) * 8`` bytes of

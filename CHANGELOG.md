@@ -25,12 +25,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `aweSOM.stream.train_batch_stream` and `aweSOM.batch.train_batch` default to
-  60 epochs with radius phases (20, 10, 30): 20 at `r_max`, 10 tapering, 30 at
-  `r_min`. A new `phases=(P, T, M)` argument sets the phases, `radius_phases`
-  resolves them and `info["radius_phases"]` records them. Calls with any other
-  epoch count keep the previous radii; calls with `epochs=60` and no `phases`
-  moved from (30, 15, 15) to (20, 10, 30).
+- `aweSOM.stream.train_batch_stream`, `aweSOM.batch.train_batch` and
+  `Lattice.train_lattice_batch` default to 60 epochs with radius phases
+  (20, 10, 30): 20 at `r_max`, 10 tapering, 30 at `r_min`. A new
+  `phases=(P, T, M)` argument sets the phases, also on `radius_schedule`;
+  `radius_phases`, exported from `aweSOM.stream` and `aweSOM.batch`, resolves
+  them, and `info["radius_phases"]` records them. Optional arguments after
+  `epochs` in `train_batch_stream` and `train_batch` are keyword-only. Calls
+  with any other epoch count keep the previous radii; calls with `epochs=60`
+  and no `phases`, including `radius_schedule(60, ...)`, moved from
+  (30, 15, 15) to (20, 10, 30).
 - `aweSOM.stream.predict_stream(..., out=None)` now allocates the smallest of
   `uint8`, `uint16` and `int32` that holds every entry of `node_cluster`
   (`aweSOM.inference.narrow_label_dtype`), also in single-process calls; it

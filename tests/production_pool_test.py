@@ -223,7 +223,7 @@ def test_radius_phases():
 @pytest.mark.parametrize('extra',[[],['--epochs','40'],['--epochs','61','--phases','20,10,31'],['--phases','30,15,15']]
                          +[['--epochs',str(e)] for e in [1,2,3,5,7,59,61,80]])
 @pytest.mark.parametrize('r_max,r_min',[(101,8.),(92.,8.),(5,5.),(6,2.)])
-def test_driver_radii_unchanged(tmp_path,extra,r_max,r_min):
+def test_driver_radii_unchanged(extra,r_max,r_min):
     """The phases and radii the driver trains with equal the pre-library-phases values bit for bit."""
     from aweSOM._batch_core import radius_schedule
     a=pool.parser().parse_args(['--out','o',*extra])
