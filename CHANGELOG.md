@@ -43,6 +43,22 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `copy_bytes` with `layout`, `ranks`, `manifest_seconds`, and
   `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
   rank count.
+- Cleanup of the v1.10.0 code: removed dead private code, unused imports and
+  commented-out sketches, and pruned redundant tests. The JOSS
+  `draft-pdf.yml` workflow now runs only on manual `workflow_dispatch`.
+
+### Fixed
+
+- The `make_sce_clusters.py` command line no longer crashes when it ranks 1 to
+  49 Gsum entries; it now smooths the curve with `gsum_derivative`, which
+  gives the same result as before for 50 or more entries.
+- `setup.py` reads `README.md` and `requirements.txt` as UTF-8 next to the
+  script, so builds no longer fail on systems with a non-UTF-8 default
+  encoding, and it skips blank and comment lines in `requirements.txt`.
+- `test_jax_gpu_available` now checks the GPU branch of `aweSOM.sce` under a
+  mocked backend instead of issuing a warning; both backend tests load a
+  separate copy of the module so they no longer change the shared one.
+  `test_train_lattice` now checks the learning rate it meant to check.
 
 ## [1.10.0] - 2026-11-18
 

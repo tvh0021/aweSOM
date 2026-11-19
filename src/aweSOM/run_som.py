@@ -4,7 +4,6 @@ import h5py as h5
 import sys
 import argparse
 
-from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 
 import pickle
@@ -281,8 +280,6 @@ if __name__ == "__main__":
     alpha_0 = args.alpha
     train = args.train
     batch = args.batch
-    pretrained = args.pretrained
-    lattice_path = args.lattice_path
     threshold = args.threshold
 
     name_of_dataset = file_name.split("_")[2].split(".h5")[
@@ -319,14 +316,8 @@ if __name__ == "__main__":
     )
 
     # normalize data
-    scale_method = "manual"
-    if scale_method == "manual":
-        data_transformed = manual_scaling(x)
-    else:
-        scaler = MinMaxScaler()
-        data_transformed = scaler.fit_transform(x)
-        scale_method = "MinMaxScaler"
-    print(f"Data scaled with {scale_method}", flush=True)
+    data_transformed = manual_scaling(x)
+    print("Data scaled with manual", flush=True)
 
     # initialize SOM lattice
     som = Lattice(

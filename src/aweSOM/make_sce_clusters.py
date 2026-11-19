@@ -605,20 +605,9 @@ if __name__ == "__main__":
 
         print("Done copying files")
 
-    # apply a Savitzky-Golay filter to smooth the gsum values
-    smooth_fraction = 10
-    order = 4
-    smoothed_map = gsum_values.copy()
+    # smooth the gsum values with a Savitzky-Golay filter and take the relative derivative
     print("Applying Savitzky-Golay filter")
-    smoothed_map = savgol_filter(
-        smoothed_map, len(gsum_values) // smooth_fraction, order, deriv=0
-    )
-
-    # compute the derivative of the gsum values to find the drop
-    gsum_deriv = (
-        savgol_filter(smoothed_map, len(gsum_values) // smooth_fraction, order, deriv=1)
-        / smoothed_map
-    )
+    gsum_deriv = gsum_derivative(gsum_values, smooth_fraction=10, order=4)
 
     # iterate through the derivative and find the local minima
     threshold = args.threshold

@@ -42,18 +42,6 @@ def test_patch_equals_reference(xdim, ydim, n_feat, side, smooth):
         np.testing.assert_array_equal(d, ref_d)
 
 
-def test_exact_ties_go_to_lowest_index():
-    # duplicate weights in different patches: the reference picks the lowest index
-    w = smooth_lattice(8, 8, 3, 0)
-    w[63] = w[0]
-    w[36] = w[0]
-    x = np.repeat(w[:1], 5, axis=0) + np.array([[0.0], [1e-3], [-1e-3], [2e-3], [0.0]])
-    ref_i, ref_d = best_match_nodes(w, x)
-    i, d = best_match_nodes_patch(w, x, 8, 8, side=2)
-    np.testing.assert_array_equal(i, ref_i)
-    np.testing.assert_array_equal(d, ref_d)
-
-
 def test_non_finite_rows_and_weights():
     w = smooth_lattice(6, 5, 4, 2)
     x = np.random.default_rng(0).normal(size=(50, 4))

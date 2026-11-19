@@ -6,7 +6,6 @@ import shutil
 import subprocess
 
 from aweSOM.sce import *
-import sce_adapted as sce_adapted
 from aweSOM.make_sce_clusters import make_file_name
 
 

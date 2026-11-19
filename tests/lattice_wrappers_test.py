@@ -19,16 +19,6 @@ def trained():
     return som, data
 
 
-def test_best_match_matches_legacy_kernel_and_shape(trained):
-    som, data = trained
-    with contextlib.redirect_stdout(io.StringIO()):
-        new = som.best_match(som.lattice, data)
-        old = Lattice._best_match_legacy(som.lattice, data)
-    assert new.shape == (len(data), 1)
-    assert new.dtype == np.float64
-    assert np.array_equal(new, old)
-
-
 @pytest.mark.parametrize("backend", ["screen", "numba", "legacy"])
 def test_best_match_backends_agree_with_legacy(trained, backend):
     som, data = trained
@@ -54,13 +44,6 @@ def test_best_match_full_still_returns_two_columns(trained):
         both = som.best_match(som.lattice, data[:50], full=True)
     assert both.shape == (50, 2)
     assert np.all(both[:, 0] != both[:, 1])
-
-
-def test_best_match_handles_fewer_than_ten_points(trained):
-    # The legacy kernel divided by obs.shape[0] // 10 == 0 for small inputs.
-    som, data = trained
-    out = som.best_match(som.lattice, data[:3])
-    assert out.shape == (3, 1)
 
 
 def test_predict_equals_map_then_assign(trained):

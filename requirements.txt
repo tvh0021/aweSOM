@@ -1,6 +1,4 @@
 h5py
-# jax
-# jaxlib
 matplotlib
 numba>=0.60
 numpy

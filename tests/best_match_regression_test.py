@@ -88,7 +88,7 @@ def test_non_finite_lattice_nodes_are_never_selected():
     w[4, 0] = np.nan
     w[9, 1] = np.inf
     x = rng.normal(size=(200, 3))
-    screen, numba, legacy = _three(w, x)
+    screen, numba, _ = _three(w, x)
     assert np.array_equal(screen, numba)
     assert not np.isin(screen, [4, 9]).any()
     finite = np.isfinite(w).all(axis=1)

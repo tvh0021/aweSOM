@@ -157,7 +157,7 @@ def test_stratified_blocks_cover_every_stratum():
     np.testing.assert_array_equal(strata, np.arange(50))
 
 
-def test_sample_fraction(data):
+def test_sample_fraction():
     x = three_gaussians(40_000, seed=5)
     w_f, i_f = train_batch_stream(x, 8, 6, epochs=10, sample_fraction=0.25, sample_block=50)
     assert np.all(np.abs(i_f["rows_per_epoch"] - 10_000) <= 50)

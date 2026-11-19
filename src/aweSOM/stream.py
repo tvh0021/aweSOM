@@ -87,6 +87,7 @@ except ImportError:
 
 from ._batch_core import radius_phases, radius_schedule
 from .inference import (
+    DEFAULT_CHUNK,
     SCREEN_TILE,
     _bmu_kernel,
     _feature_patch_kernel,
@@ -95,7 +96,6 @@ from .inference import (
     _screen_kernel,
     lattice_patches,
     narrow_label_dtype,
-    predict,
 )
 
 from .npy_parts import (
@@ -128,7 +128,6 @@ __all__ = [
     "write_npy_manifest",
 ]
 
-DEFAULT_CHUNK = 2**20
 DEFAULT_GROUPS = 64
 
 
@@ -277,6 +276,12 @@ class _CallableSource:
         return out
 
 
+def _npy_header(fh):
+    version = np.lib.format.read_magic(fh)
+    read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
+    return read(fh)
+
+
 class NpyReader:
     """Read rows of a 2-D C-order ``.npy`` file with plain file reads (no memory map).
 
@@ -292,11 +297,7 @@ class NpyReader:
 
         self.path = str(path)
         with open(self.path, "rb") as fh:
-            version = np.lib.format.read_magic(fh)
-            if version == (1, 0):
-                shape, fortran, dtype = np.lib.format.read_array_header_1_0(fh)
-            else:
-                shape, fortran, dtype = np.lib.format.read_array_header_2_0(fh)
+            shape, fortran, dtype = _npy_header(fh)
             self.offset = fh.tell()
         if fortran or len(shape) != 2:
             raise ValueError("NpyReader needs a 2-D C-order array")
@@ -357,11 +358,7 @@ class NpyWriter:
     def __init__(self, path: str):
         self.path = str(path)
         with open(self.path, "rb") as fh:
-            version = np.lib.format.read_magic(fh)
-            if version == (1, 0):
-                shape, fortran, dtype = np.lib.format.read_array_header_1_0(fh)
-            else:
-                shape, fortran, dtype = np.lib.format.read_array_header_2_0(fh)
+            shape, fortran, dtype = _npy_header(fh)
             self.offset = fh.tell()
         if fortran or len(shape) < 1:
             raise ValueError("NpyWriter needs a C-order array with at least one dimension")
@@ -426,12 +423,6 @@ def npy_crc32(path: str, start: int, stop: int, block: int = 2**24) -> int:
         crc = zlib.crc32(np.ascontiguousarray(arr[a:min(a + block, int(stop))]), crc)
     del arr
     return crc
-
-
-def _npy_header(fh):
-    version = np.lib.format.read_magic(fh)
-    read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
-    return read(fh)
 
 
 def copy_npy_rows(part_path: str, writer: "NpyWriter", start: int, block: int = 2**24,
@@ -1122,11 +1113,13 @@ def train_batch_stream(
         commit = _git_commit() if (checkpoint is not None and root) else ""
 
         def save(e: int) -> None:
+            from . import __version__
+
             calls = getattr(fn, "calls", None) if fn is not None else None
             meta = dict(format=CHECKPOINT_FORMAT, epoch=e + 1, **expect)
             meta.update(sample_seed=int(s_seed), sample_block=int(sample_block), seed=int(seed), bmu=bmu, bmu_kind=bmu_kinds, qe_initial=qe_initial,
                         calls=None if calls is None else int(calls), ranks=size,
-                        rank_records=rank_rec, git_commit=commit, version=_version())
+                        rank_records=rank_rec, git_commit=commit, version=__version__)
             arrays = dict(weights=w, radius=radii, qe=qe_after, rows_per_epoch=rows,
                           fallbacks=fallbacks, **rec)
             _write_checkpoint(checkpoint, arrays, meta)
@@ -1232,12 +1225,6 @@ def train_batch_stream(
         **rec,
     }
     return w, info
-
-
-def _version() -> str:
-    from . import __version__
-
-    return __version__
 
 
 # --------------------------------------------------------------------- inference
