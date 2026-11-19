@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import functools
 import math
+import operator
+from typing import Optional, Sequence
 
 import numpy as np
 from numba import njit, prange
 
 __all__ = [
+    "radius_phases",
     "radius_schedule",
     "neighbourhood_matrix",
     "quantization_error",
@@ -22,37 +25,82 @@ __all__ = [
     "topographic_error_fast",
 ]
 
-def radius_schedule(epochs: int, r_max: float, r_min: float) -> np.ndarray:
+# Default phases for 60 epochs: 20 at r_max, 10 tapering, 30 at r_min.
+_PHASES_60 = (20, 10, 30)
+
+
+def radius_phases(
+    epochs: int, phases: Optional[Sequence[int]] = None
+) -> tuple[int, int, int]:
+    """Phase lengths ``(P, T, M)`` of the radius schedule.
+
+    ``P`` epochs at ``r_max``, ``T`` tapering, ``M`` at ``r_min``. Without
+    ``phases``, 60 epochs give ``(20, 10, 30)``. Any other count gives
+    ``P = ceil(epochs / 2)``, ``T = min(ceil(epochs / 4), epochs - P)`` and
+    ``M`` the remainder, so 40 epochs give ``(20, 10, 10)``.
+
+    Args:
+        epochs: Number of epochs (>= 1).
+        phases: Optional explicit ``(P, T, M)``: three non-negative integers
+            that sum to ``epochs``.
+
+    Returns:
+        ``(P, T, M)`` as a tuple of ints.
+
+    Raises:
+        ValueError: If ``epochs < 1`` or ``phases`` is not three non-negative
+            integers summing to ``epochs``.
+    """
+    if epochs < 1:
+        raise ValueError(f"epochs must be >= 1, got {epochs}")
+    if phases is None:
+        if epochs == sum(_PHASES_60):
+            return _PHASES_60
+        n_max = math.ceil(epochs / 2)
+        n_lin = min(math.ceil(epochs / 4), epochs - n_max)
+        return (n_max, n_lin, epochs - n_max - n_lin)
+    try:
+        p = tuple(operator.index(v) for v in phases)
+    except TypeError:
+        p = ()
+    if len(p) != 3 or min(p) < 0 or sum(p) != epochs:
+        raise ValueError(
+            f"phases must be three non-negative integers summing to epochs={epochs}, got {phases!r}"
+        )
+    return p
+
+
+def radius_schedule(
+    epochs: int, r_max: float, r_min: float, phases: Optional[Sequence[int]] = None
+) -> np.ndarray:
     """Neighbourhood radius for each epoch.
 
-    The schedule has the same proportions as the online trainer: ``r_max`` for
-    the first half, a linear decrease over the next quarter, ``r_min`` for the
-    rest.
+    The schedule has three phases ``(P, T, M)`` from :func:`radius_phases`:
+    ``P`` epochs at ``r_max``, ``T`` epochs of linear decrease, ``M`` epochs at
+    ``r_min``. The linear phase takes the interior points of an evenly spaced
+    grid from ``r_max`` to ``r_min`` (both endpoints excluded).
 
-    Rounding: the constant phase lasts ``ceil(epochs / 2)`` epochs and the linear
-    phase ``min(ceil(epochs / 4), epochs - ceil(epochs / 2))`` epochs; the final
-    phase takes the remainder. The linear phase takes the interior points of an
-    evenly spaced grid from ``r_max`` to ``r_min`` (both endpoints excluded), so
-    with 40 epochs there are exactly 20 epochs at ``r_max``, 10 strictly between,
-    and 10 at ``r_min``. Radii are not rounded to integers;
-    :func:`neighbourhood_matrix` accepts fractional radii.
+    Without ``phases``, 60 epochs give 20 at ``r_max``, 10 strictly between and
+    30 at ``r_min``. Any other count keeps the proportions of the online
+    trainer: ``ceil(epochs / 2)`` epochs at ``r_max``,
+    ``min(ceil(epochs / 4), epochs - ceil(epochs / 2))`` tapering and the
+    remainder at ``r_min``, so 40 epochs give 20, 10 and 10. Radii are not
+    rounded to integers; :func:`neighbourhood_matrix` accepts fractional radii.
 
     Args:
         epochs: Number of epochs (>= 1).
         r_max: Initial radius.
         r_min: Final radius.
+        phases: Optional explicit ``(P, T, M)`` summing to ``epochs``.
 
     Returns:
         Float64 array of shape ``(epochs,)``.
 
     Raises:
-        ValueError: If ``epochs < 1``.
+        ValueError: If ``epochs < 1`` or ``phases`` is invalid
+            (see :func:`radius_phases`).
     """
-    if epochs < 1:
-        raise ValueError(f"epochs must be >= 1, got {epochs}")
-    n_max = math.ceil(epochs / 2)
-    n_lin = min(math.ceil(epochs / 4), epochs - n_max)
-    n_min = epochs - n_max - n_lin
+    n_max, n_lin, n_min = radius_phases(epochs, phases)
     linear = np.linspace(r_max, r_min, n_lin + 2)[1:-1]
     return np.concatenate(
         [np.full(n_max, float(r_max)), linear, np.full(n_min, float(r_min))]

@@ -183,13 +183,29 @@ def test_diagnostic_reasons(tmp_path,monkeypatch):
     assert reasons(['--epochs','60','--phases','20,10,30'])==[]
 
 
+def _old_resolve_phases(epochs, phases=None):
+    """production_pool.resolve_phases at 00e8551 (before the library took phases)."""
+    if phases is None:
+        half = -(-epochs // 2)
+        taper = min(-(-epochs // 4), epochs - half)
+        phases = [20, 10, 30] if epochs == 60 else [half, taper, epochs - half - taper]
+    return phases
+
+
+def _old_phase_schedule(phases, epochs, r_max, r_min):
+    """production_pool.phase_schedule at 00e8551: the radii the driver patched into the trainer."""
+    p, t, m = phases
+    assert epochs == p + t + m
+    return np.concatenate([np.full(p, float(r_max)), np.linspace(r_max, r_min, t + 2)[1:-1], np.full(m, float(r_min))])
+
+
 def test_radius_phases():
     from aweSOM._batch_core import radius_schedule
     parse=lambda *extra: pool.parser().parse_args(['--out','o',*extra])
     r_max,r_min=92.,8.
     # default: 60 epochs = 20 at r_max, 10 strictly between in equal decreasing steps, 30 at r_min
     a=parse(); assert a.epochs==60 and pool.resolve_phases(a)==[20,10,30]
-    s=pool.phase_schedule(a.phases,a.epochs,r_max,r_min)
+    s=radius_schedule(a.epochs,r_max,r_min,a.phases)
     assert len(s)==60 and (s[:20]==r_max).all() and (s[30:]==r_min).all()
     taper=s[20:30]
     assert ((taper<r_max)&(taper>r_min)).all()
@@ -199,31 +215,38 @@ def test_radius_phases():
     assert np.array_equal(s,study[:60])
     # another count without --phases keeps radius_schedule's split: 40 -> (20,10,10)
     a=parse('--epochs','40'); assert pool.resolve_phases(a)==[20,10,10]
-    for e in [1,2,3,5,7,40,59,61,80]:
-        a=parse('--epochs',str(e))
-        assert np.array_equal(pool.phase_schedule(pool.resolve_phases(a),e,r_max,r_min),radius_schedule(e,r_max,r_min)),e
     a=parse('--epochs','61','--phases','20,10,31'); assert pool.resolve_phases(a)==[20,10,31]
     for extra in (['--epochs','40','--phases','20,10,30'],['--phases','20,10,31'],['--phases','20,40']):
         with pytest.raises(ValueError): pool.resolve_phases(parse(*extra))
 
 
-def test_explicit_radii_reach_trainer(tmp_path):
-    import aweSOM.stream as stream
+@pytest.mark.parametrize('extra',[[],['--epochs','40'],['--epochs','61','--phases','20,10,31'],['--phases','30,15,15']]
+                         +[['--epochs',str(e)] for e in [1,2,3,5,7,59,61,80]])
+@pytest.mark.parametrize('r_max,r_min',[(101,8.),(92.,8.),(5,5.),(6,2.)])
+def test_driver_radii_unchanged(extra,r_max,r_min):
+    """The phases and radii the driver trains with equal the pre-library-phases values bit for bit."""
+    from aweSOM._batch_core import radius_schedule
+    a=pool.parser().parse_args(['--out','o',*extra])
+    old_phases=_old_resolve_phases(a.epochs,a.phases)
+    phases=pool.resolve_phases(a)
+    assert phases==old_phases and type(phases) is list
+    old=_old_phase_schedule(old_phases,a.epochs,r_max,min(r_min,r_max))
+    assert radius_schedule(a.epochs,r_max,min(r_min,r_max),phases).tobytes()==old.tobytes()
+
+
+def test_driver_phases_reach_trainer(tmp_path):
     from aweSOM.stream import train_batch_stream
     data=np.random.default_rng(0).normal(size=(300,3))
-    library=stream.radius_schedule
-    with pool.explicit_radii([1,2,2]):
-        _,info=train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
-                                  checkpoint=str(tmp_path/'c.npz'))
-    assert stream.radius_schedule is library
-    assert np.array_equal(info['radius'],[6,6-4/3,6-8/3,2,2])
+    a=pool.parser().parse_args(['--out','o','--epochs','5','--phases','1,2,2'])
+    kw=dict(epochs=a.epochs,chunk=64,r_max=6,r_min=2,final_pass='none',checkpoint=str(tmp_path/'c.npz'))
+    _,info=train_batch_stream(data,6,5,phases=pool.resolve_phases(a),**kw)
+    assert info['radius'].tobytes()==_old_phase_schedule([1,2,2],5,6,2).tobytes()
+    assert np.array_equal(info['radius'],[6,6-4/3,6-8/3,2,2]) and info['radius_phases']==(1,2,2)
     # --resume checks the checkpoint against the same explicit radii
-    with pool.explicit_radii([1,2,2]):
-        train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
-                           checkpoint=str(tmp_path/'c.npz'),resume=True)
+    _,info=train_batch_stream(data,6,5,phases=a.phases,resume=True,**kw)
+    assert info['resumed_from']==5
     with pytest.raises(ValueError,match='radius'):
-        train_batch_stream(data,6,5,epochs=5,chunk=64,r_max=6,r_min=2,final_pass='none',
-                           checkpoint=str(tmp_path/'c.npz'),resume=True)
+        train_batch_stream(data,6,5,resume=True,**kw)
 
 
 def test_defaults_are_the_2026_11_11_decision(tmp_path):

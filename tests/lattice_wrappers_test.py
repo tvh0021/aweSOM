@@ -91,3 +91,15 @@ def test_train_lattice_batch_fills_lattice_and_umat():
     with contextlib.redirect_stdout(io.StringIO()):
         labels = som.predict(data, merge_cost=0.2)
     assert labels.shape == (4000,)
+
+
+def test_train_lattice_batch_default_epochs_and_phases():
+    import inspect
+
+    pytest.importorskip("jax")
+    assert inspect.signature(Lattice.train_lattice_batch).parameters["epochs"].default == 60
+    data = np.random.default_rng(6).normal(size=(500, 3))
+    som = Lattice(6, 5, 0.3, 100)
+    info = som.train_lattice_batch(data, list("xyz"), epochs=5, phases=(1, 2, 2), r_min=2)
+    assert info["radius_phases"] == (1, 2, 2) and som.epoch == 5
+    assert info["radius"].tolist() == [7, 7 - 5 / 3, 7 - 10 / 3, 2, 2]

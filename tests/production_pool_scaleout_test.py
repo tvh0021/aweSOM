@@ -375,3 +375,38 @@ def test_deferred_statistics_sharded_parts_round_trip(tmp_path, monkeypatch):
         open_npy(deferred/'results/4x3-s42-labels.npy', mmap_mode=None),
     )
 
+
+
+class _Trained(Exception):
+    pass
+
+
+@pytest.mark.parametrize('phases,radii',[(None,[4.,2.5]),([0,1,1],[2.5,1.]),([2,0,0],[4.,4.])])
+def test_fit_passes_phases_to_trainer(tmp_path,monkeypatch,phases,radii):
+    """fit() hands the resolved --phases to train_batch_stream; the radii are the pre-change ones."""
+    import functools
+    from aweSOM import stream
+    from production_pool_test import _old_phase_schedule
+    paths = inputs(tmp_path); a = args(tmp_path,paths)
+    a.threads_per_seed = 1; a.code_commit = '0'*40; a.r_min = 1.; a.phases = phases
+    records,quota,*_ = pool.inspect(a)
+    a.anchor_attrs = records[0]['attrs']
+    a.out.mkdir(); scaling = pool.pool(a,records,quota,a.out)
+    state = dict(records=records,quota=quota,disk={},mismatches=[],scaling=scaling,
+                 settings={key:getattr(a,key) for key in pool.APPROVED},anchor=a.anchor,held_out=a.held_out)
+    location = tmp_path/'fit'; location.mkdir()
+    (location/'pool.h5').symlink_to(a.out/'pool.h5')
+    pool.dump(location/'pool-state.json',state)
+    seen = {}
+    real = stream.train_batch_stream
+    @functools.wraps(real)
+    def spy(*positional,**kw):
+        seen.update(kw,info=real(*positional,**kw)[1])
+        raise _Trained
+    monkeypatch.setattr(stream,'train_batch_stream',spy)
+    with pytest.raises(_Trained): pool.fit(a,(3,2),42,scaling,location)
+    expected = [1,1,0] if phases is None else phases
+    assert seen['phases'] == a.phases == expected
+    assert seen['info']['radius_phases'] == tuple(expected)
+    old = _old_phase_schedule(expected,2,4,1.)
+    assert seen['info']['radius'].tobytes() == old.tobytes() == np.array(radii).tobytes()
