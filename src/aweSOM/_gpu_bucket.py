@@ -89,6 +89,7 @@ OPTIONS = ('--fmad=false', '--ftz=false', '--std=c++11')
 LEAF = 64  # nodes per feature-space group
 MAX_GROUPS = 1024  # the bucket scan runs in one block of 1024 threads
 MAX_FEATURES = 10  # register arrays of ROWS x F floats per thread
+MIN_COMPUTE_MAJOR = 7  # __match_any_sync (bucket_hist, bucket_scatter) needs compute capability 7.0
 PILOT_ROWS = 2**15
 RARE = 8  # buckets with fewer pilot rows screen the whole lattice
 COST_EXCLUDED = 1.4  # cost of one excluded group, in candidate nodes
@@ -120,10 +121,20 @@ def build_groups(w):
     ``order[p]`` starts with p, then sorts the other groups by ``|c_p - c_q| - R_q``.
     ``csize[p, K]`` is the number of nodes in the first K groups of that order.
     """
+    return order_groups(split_groups(w))
+
+
+def split_groups(w):
+    """Members, centroids and certified radii of the groups (linear in the nodes)."""
     with np.errstate(invalid="ignore", over="ignore"):
         _, perm, offs, centT, rad, _ = _feature_patches(w, leaf_size=LEAF)
-    cent = np.ascontiguousarray(centT.T)
-    P = len(offs) - 1
+    return dict(P=len(offs) - 1, cent=np.ascontiguousarray(centT.T), rad=rad, perm=np.asarray(perm, np.int64),
+                offs=np.asarray(offs, np.int64))
+
+
+def order_groups(parts):
+    """Add each seed group's order to :func:`split_groups` output (P x P arrays)."""
+    P, cent, rad, perm, offs = parts["P"], parts["cent"], parts["rad"], parts["perm"], parts["offs"]
     sizes = np.diff(offs)
     with np.errstate(invalid="ignore", over="ignore"):  # non-finite lattices: modelled, never searched
         cc = np.sqrt(((cent[:, None, :] - cent[None, :, :]) ** 2).sum(-1))
@@ -134,8 +145,7 @@ def build_groups(w):
     pos[np.arange(P)[:, None], order] = np.arange(P)[None, :]
     csize = np.concatenate([np.zeros((P, 1), np.int64), np.cumsum(sizes[order], axis=1)], axis=1)
     # _feature_patches sorts each group's members, so perm[offs[q]:offs[q + 1]] is ascending.
-    return dict(P=P, cent=cent, rad=rad, perm=np.asarray(perm, np.int64), offs=np.asarray(offs, np.int64),
-                sizes=sizes, order=order, pos=pos, csize=csize)
+    return dict(P=P, cent=cent, rad=rad, perm=perm, offs=offs, sizes=sizes, order=order, pos=pos, csize=csize)
 
 
 def screen_scalars(w, grp):
@@ -241,7 +251,7 @@ def pack(w, grp, sc, K, rare):
     i32 = lambda a: np.ascontiguousarray(a, np.int32)  # noqa: E731
     return dict(P=P, F=F, c32=c32, cw=cw, cid=i32(np.resize(cid, max(1, len(cid)))),
                 cand_lo=i32(cand_lo), cand_hi=i32(cand_hi), ex32=ex32, ex_lo=i32(ex_lo), ex_hi=i32(ex_hi),
-                K=K, rare=rare, cand_len=per_bucket + rare * nodes)
+                rare32=i32(rare), K=K, rare=rare, cand_len=per_bucket + rare * nodes)
 
 
 # ----------------------------------------------------------------------------- bit-exact CPU models
@@ -725,8 +735,8 @@ def _source(F):
     __device__ void bpass(const double* w, const T* x, const int* perm, const int* bucket_off,
                           const int* tile_off, const float* cw, const int* cid, const int* cand_lo,
                           const int* cand_hi, const float* ex32, const int* ex_lo, const int* ex_hi, int* idx,
-                          double* d2, int* fb_rows, int* counters, int P, int ct, double wmax, double cmax,
-                          float g1, int safe, double eta, double one_m_eps) {
+                          double* d2, int* fb_rows, int* counters, const int* rare, int P, int ct, double wmax,
+                          double cmax, float g1, int safe, double eta, double one_m_eps) {
         extern __shared__ float4 smem[];
         __shared__ int s_p, s_cnt, s_cnt1, s_base;
         const double inf = inf_d();
@@ -888,6 +898,7 @@ def _source(F):
         if (threadIdx.x == 0) {
             s_base = s_cnt ? atomicAdd(&counters[0], s_cnt) : 0;
             if (s_cnt1) atomicAdd(&counters[1], s_cnt1);
+            if (s_cnt && rare[p]) atomicAdd(&counters[3], s_cnt);  // fallback rows of whole-lattice buckets
         }
         __syncthreads();
         #pragma unroll
@@ -898,10 +909,10 @@ def _source(F):
     #define BPASS_SIG(T) (const double* w, const T* x, const int* perm, const int* bucket_off, \
         const int* tile_off, const float* cw, const int* cid, const int* cand_lo, const int* cand_hi, \
         const float* ex32, const int* ex_lo, const int* ex_hi, int* idx, double* d2, int* fb_rows, \
-        int* counters, int P, int ct, double wmax, double cmax, float g1, int safe, double eta, \
-        double one_m_eps)
+        int* counters, const int* rare, int P, int ct, double wmax, double cmax, float g1, int safe, \
+        double eta, double one_m_eps)
     #define BPASS_CALL(T) bpass<T>(w, x, perm, bucket_off, tile_off, cw, cid, cand_lo, cand_hi, ex32, \
-        ex_lo, ex_hi, idx, d2, fb_rows, counters, P, ct, wmax, cmax, g1, safe, eta, one_m_eps)
+        ex_lo, ex_hi, idx, d2, fb_rows, counters, rare, P, ct, wmax, cmax, g1, safe, eta, one_m_eps)
     extern "C" __global__ void bpass_f32 BPASS_SIG(float) { BPASS_CALL(float); }
     extern "C" __global__ void bpass_f64 BPASS_SIG(double) { BPASS_CALL(double); }
 
@@ -1121,7 +1132,7 @@ class Unsupported(ValueError):
 
 # Sums of BucketEngine.stats over every engine of this process (benchmarks read this after a run).
 TOTALS = dict(engines=0, setup_seconds=0.0, builds=0, rows=0, fallback_rows=0, top_two_failed=0,
-              rare_rows=0)
+              rare_rows=0, rare_fallback_rows=0)
 
 
 def reset_totals():
@@ -1141,7 +1152,9 @@ class _Scratch:
         self.perm = cp.empty(cap, np.int32)
         self.fb_rows = cp.empty(cap, np.int32)
         self.list2 = cp.empty(cap, np.int32)
-        self.zbuf = cp.empty(4 + P, np.int32)  # counters[0:4] (zeroed by the seed kernel), counts[4:]
+        # counters[0:4] (zeroed by the seed kernel): fallback rows, of which top-two failures, rows
+        # left uncertified by fb_screen, fallback rows of whole-lattice buckets; then counts[4:].
+        self.zbuf = cp.empty(4 + P, np.int32)
         self.bucket_off = cp.empty(P + 1, np.int32)
         self.tile_off = cp.empty(P + 1, np.int32)
         self.cursor = cp.empty(P, np.int32)
@@ -1159,7 +1172,9 @@ class BucketEngine:
     """Bucketed search of one lattice on one device, owned by a ``GpuScreenSearcher``.
 
     ``dense(x_dev, idx_dev, d2_dev, n, stream, f64)`` launches the dense kernel; the pilot uses it for
-    exact distances. Tables are built at the first :meth:`search` from that chunk's rows, and replaced
+    exact distances. It must not refer to the searcher, or the pair would wait for the cyclic
+    collector with all their device buffers. Devices below compute capability
+    ``MIN_COMPUTE_MAJOR`` keep the dense kernel (the searcher checks). Tables are built at the first :meth:`search` from that chunk's rows, and replaced
     only after every stream that used them has finished (see ``RETUNE_*``). ``stats`` (seconds and row
     counts) is for benchmarks; ``setup_seconds`` includes grouping, compilation, every build and
     rebuild, and is also added to :data:`TOTALS`.
@@ -1167,13 +1182,24 @@ class BucketEngine:
 
     def __init__(self, cp, w, w_dev, dense, pinned, shared_limit):
         t0 = time.perf_counter()
+        # w_dev must hold these weights. The engine keeps its own read-only copy for grouping and
+        # for packing at every (re)build, so later changes to the caller's array cannot reach them.
+        w = np.array(w, np.float64, order="C", copy=True)
+        w.setflags(write=False)
         self.cp, self.w, self.w_dev, self.dense, self.pinned = cp, w, w_dev, dense, pinned
         self.nodes, self.F = w.shape
-        self.grp = build_groups(w)
+        # Every split leaves at most LEAF nodes per group, so P >= ceil(nodes / LEAF): reject what
+        # cannot fit before grouping, and again with the actual P before the P x P ordering.
+        if self.nodes > LEAF * MAX_GROUPS or self._too_big(-(-self.nodes // LEAF), shared_limit):
+            raise Unsupported("lattice has too many groups for the bucketed search")
+        parts = split_groups(w)
+        if self._too_big(parts["P"], shared_limit):
+            raise Unsupported("lattice has too many groups for the bucketed search")
+        self.grp = order_groups(parts)
         self.P = self.grp["P"]
         self.sc = screen_scalars(w, self.grp)
         self.shared = shared_bytes(self.F, self.P)
-        if self.P > MAX_GROUPS or not self.sc["safe"] or max(self.shared.values()) > shared_limit:
+        if not self.sc["safe"]:
             raise Unsupported("lattice not supported by the bucketed search")
         safe, wmax = screen_parameters(w)
         self.fb_args = (np.int32(self.nodes), np.float64(wmax), np.int32(safe))
@@ -1192,9 +1218,12 @@ class BucketEngine:
         self.since = 0  # chunks searched since the last build
         self.scratches = weakref.WeakSet()
         self.stats = dict(setup_seconds=0.0, builds=0, rows=0, fallback_rows=0, top_two_failed=0, rare_rows=0,
-                          pilot_rows=0)
+                          rare_fallback_rows=0, pilot_rows=0)
         TOTALS["engines"] += 1
         self._setup(time.perf_counter() - t0)
+
+    def _too_big(self, P, shared_limit):
+        return P > MAX_GROUPS or max(shared_bytes(self.F, P).values()) > shared_limit
 
     def _setup(self, seconds):
         self.stats["setup_seconds"] += seconds
@@ -1254,7 +1283,7 @@ class BucketEngine:
         self.t = None
         with self.home:
             self.t = {k: self.cp.asarray(T[k]) for k in ("c32", "cw", "cid", "cand_lo", "cand_hi", "ex32",
-                                                          "ex_lo", "ex_hi")}
+                                                          "ex_lo", "ex_hi", "rare32")}
         self.home.synchronize()  # the searches run on streams that do not order against home
         self.rare, self.K = rare, K
         self.gen += 1
@@ -1296,7 +1325,8 @@ class BucketEngine:
         # sum over buckets of ceil(count / rb) <= ceil(n / rb) + P tiles; extra blocks exit at once.
         k["bpass_" + sfx](((n + rb - 1) // rb + self.P,), (BLOCK,),
                           (self.w_dev, x, s.perm, s.bucket_off, s.tile_off, t["cw"], t["cid"], t["cand_lo"],
-                           t["cand_hi"], t["ex32"], t["ex_lo"], t["ex_hi"], idx, d2, s.fb_rows, s.zbuf) + self.scal,
+                           t["cand_hi"], t["ex32"], t["ex_lo"], t["ex_hi"], idx, d2, s.fb_rows, s.zbuf,
+                           t["rare32"]) + self.scal,
                           shared_mem=self.shared["bpass"], stream=stream)
         k["fb_screen_" + sfx]((FB_GRID,), (FB_BLOCK,),
                               (self.w_dev, x, s.fb_rows, s.zbuf[0:1], idx, d2, s.list2, s.zbuf[2:3]) + self.fb_args,
@@ -1315,12 +1345,14 @@ class BucketEngine:
         records, s.records = s.records, []
         for n, gen, sample, i in records:
             st = s.buffers[i][1]
-            fb = int(st[0])
+            fb, both = int(st[0]), int(st[3])  # both: fallback rows of whole-lattice buckets
             rare = int(st[4:][self.rare].sum()) if gen == self.gen else 0
-            for key, v in (("rows", n), ("fallback_rows", fb), ("top_two_failed", int(st[1])), ("rare_rows", rare)):
+            for key, v in (("rows", n), ("fallback_rows", fb), ("top_two_failed", int(st[1])), ("rare_rows", rare),
+                           ("rare_fallback_rows", both)):
                 self.stats[key] += v
                 TOTALS[key] += v
-            if (sample is not None and gen == self.gen and fb + rare > RETUNE_FRACTION * n
+            # Rows that were both are counted once.
+            if (sample is not None and gen == self.gen and fb + rare - both > RETUNE_FRACTION * n
                     and self.stats["builds"] < RETUNE_MAX and len(self.pending) < 8):
                 self.pending.append(sample)
 

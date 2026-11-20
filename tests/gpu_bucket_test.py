@@ -17,12 +17,14 @@ Three layers:
 
 The kernel source itself runs on the CPU in ``gpu_bucket_host_test``.
 """
+import gc
 import hashlib
 import sys
+import weakref
 
 import numpy as np
 import pytest
-from gpu_pipeline_test import NullStream, Stream, _fake_cupy, _run
+from gpu_pipeline_test import Device, NullStream, Stream, _fake_cupy, _run
 
 from aweSOM import _gpu_bucket as B
 from aweSOM import _gpu_screen, stream
@@ -225,6 +227,17 @@ def test_tune_k_prefers_short_lists():
 
 
 # ----------------------------------------------------------------------------- fake CuPy
+class _Pointer:
+    """A device argument as a kernel holds it: the memory at launch (``.a``), and a weak reference
+    to its allocation, which must still be alive when the kernel runs."""
+
+    def __init__(self, device):
+        self.a = device.a
+        while device.base is not None:
+            device = device.base
+        self.alive = weakref.ref(device)
+
+
 def _fake_bucket_kernels(model_launches):
     """CPU models of the bucket kernels, run when their stream is synchronized (fake CuPy)."""
 
@@ -265,7 +278,7 @@ def _fake_bucket_kernels(model_launches):
         return op
 
     def bpass(args, stream):
-        (w, x, perm, boff, toff, cw, cid, clo, chi, ex32, elo, ehi, idx, d2, fb_rows, counters,
+        (w, x, perm, boff, toff, cw, cid, clo, chi, ex32, elo, ehi, idx, d2, fb_rows, counters, rare,
          P, ct, wmax, cmax, g1, safe, eta, one_m_eps) = args
 
         def op():
@@ -285,6 +298,7 @@ def _fake_bucket_kernels(model_launches):
             fb_rows.a[c0:c0 + len(bad)] = bad[::-1]  # list order is arbitrary on the device too
             counters.a[0] += len(bad)
             counters.a[1] += int((code == 1).sum())
+            counters.a[3] += int((~ok & (rare.a[bk] != 0)).sum())
         return op
 
     def fb_screen(args, stream):
@@ -327,24 +341,40 @@ def _fake_bucket_kernels(model_launches):
 
         def launch(grid, block, args, shared_mem, stream):
             model_launches.append(name)
-            _run(stream, build(args, stream))  # on a slot or pilot stream, never the null stream
+            args = tuple(_Pointer(a) if isinstance(a, Device) else a for a in args)
+            op = build(args, stream)
+
+            def checked():
+                freed = [i for i, a in enumerate(args) if isinstance(a, _Pointer) and a.alive() is None]
+                assert not freed, f'{name}: arguments {freed} were freed before the kernel ran'
+                op()
+            _run(stream, checked)  # on a slot or pilot stream, never the null stream
         return launch
     return make
+
+
+class _Launches(list):
+    """Names of the bucket kernels launched; ``attrs``: device attributes queried; ``cp``: the fake."""
 
 
 @pytest.fixture
 def fake_bucket(monkeypatch):
     """The fake CuPy with the bucket kernels, eligible from tiny lattices (groups of 4 nodes)."""
 
-    def install(chunk=2**20, overlap=True):
+    def install(chunk=2**20, overlap=True, major=9, shared=49152):
         cp, launches, busy, pinned_fail = _fake_cupy()
-        names = []
+        attrs = []
+        cp.cuda.runtime.deviceGetAttribute = lambda attr, device: attrs.append(attr) or {75: major}[attr]
+        cp.cuda.runtime.getDeviceProperties = lambda _: dict(sharedMemPerBlock=shared, maxThreadsPerBlock=1024)
+        names = _Launches()
+        names.attrs = attrs
         dense_raw, bucket_raw = cp.RawKernel, _fake_bucket_kernels(names)
         cp.RawKernel = lambda source, name, options: (bucket_raw(name) if name in B.KERNEL_NAMES
                                                       else dense_raw(source, name, options))
         Stream.created.clear()
         NullStream.queue.clear()
         monkeypatch.setitem(sys.modules, 'cupy', cp)
+        names.cp = cp
         _gpu_screen._kernels.cache_clear()
         B._kernels.cache_clear()
         monkeypatch.setattr(_gpu_screen, '_BUCKET_MIN_NODES', 0)
@@ -420,8 +450,17 @@ def test_fake_labels_equal_reference(fake_bucket, monkeypatch, dtype, chunk, sub
 
 def test_fake_rebuild_on_moving_input(fake_bucket, monkeypatch):
     """Rows sorted along the sheet: the first chunk's pilot misses later regions, the counters
-    trigger rebuilds, and the results stay exact."""
+    trigger rebuilds, and the results stay exact. The other slot still has a chunk queued on the old
+    tables at each rebuild; the fake kernels fail if those tables are freed before it runs."""
     names = fake_bucket(64)
+    busy = []
+    build = B.BucketEngine._build
+
+    def spy(self, first=None):
+        if first is None:  # a rebuild: count the other streams with queued work on the old tables
+            busy.append(sum(bool(s.stream.queue) for s in self.scratches if s.stream is not None))
+        return build(self, first)
+    monkeypatch.setattr(B.BucketEngine, '_build', spy)
     monkeypatch.setattr(B, 'RETUNE_MIN_ROWS', 1)
     monkeypatch.setattr(B, 'RETUNE_GAP', 1)
     monkeypatch.setattr(B, 'RETUNE_FRACTION', 0.01)
@@ -440,6 +479,122 @@ def test_fake_rebuild_on_moving_input(fake_bucket, monkeypatch):
     assert B.TOTALS['builds'] > 1
     assert B.TOTALS['rows'] == len(x)
     assert names.count('bpass_f64') == -(-len(x) // 64)
+    assert busy and max(busy) >= 1
+
+
+def test_overlap_counted_once(fake_bucket, monkeypatch):
+    """60 rows that both fall back (tied duplicate nodes) and land in a whole-lattice bucket are
+    under 8 % of a 1024-row chunk: no rebuild. Counted twice they were 11.7 %."""
+    fake_bucket(1024)
+    monkeypatch.setattr(B, 'RETUNE_GAP', 1)
+    rng = np.random.default_rng(3)
+    w = _grid(32, 2, rng, 1e-3)
+    w[1000] = w[1001]  # a tie for rows on this node
+    near = w[rng.integers(0, 20, size=4)]  # ordinary rows near four nodes: busy, listed buckets
+    ordinary = lambda n: near[rng.integers(0, 4, size=n)] + rng.normal(size=(n, 2)) * 1e-4  # noqa: E731
+    # The second chunk holds the 60 rows; its counters are read two chunks later (two slots).
+    x = np.concatenate([ordinary(1024), ordinary(964), np.repeat(w[1001:1002], 60, axis=0)]
+                       + [ordinary(1024) for _ in range(3)])
+    clusters = np.arange(len(w))
+    d = np.empty(len(x))
+    labels, _ = predict_stream(w, clusters, x, out_distance=d, chunk=1024, backend='cuda_screen',
+                               prefetch=False)
+    ri, rd = reference(w, x)
+    np.testing.assert_array_equal(labels, ri)
+    np.testing.assert_array_equal(_bits(d), _bits(np.sqrt(rd)))
+    T = B.TOTALS
+    assert T['rare_fallback_rows'] == 60 and T['rare_rows'] >= 60 and T['fallback_rows'] >= 60
+    assert T['fallback_rows'] + T['rare_rows'] > B.RETUNE_FRACTION * 1024  # double counting would rebuild
+    assert T['fallback_rows'] + T['rare_rows'] - T['rare_fallback_rows'] <= B.RETUNE_FRACTION * 1024
+    assert T['builds'] == 1
+
+
+def test_weights_snapshot(fake_bucket):
+    """A reader that changes the caller's weights after the searcher is built (Sol's repro): the
+    bucket tables, the screen and the exact distances all use the weights of the call."""
+    names = fake_bucket()
+    w = np.arange(2048, dtype=np.float64)[:, None]
+    w[[0, 1]] = w[[1, 0]]  # node 1 sits at 0
+    clusters = np.arange(len(w))
+
+    def reader():
+        w[[0, 1]] = w[[1, 0]]  # now node 0 sits at 0
+        yield np.zeros((1, 1), np.float32)
+    reader.n_features = 1
+    d = np.empty(1)
+    labels, _ = predict_stream(w, clusters, reader, out_distance=d, n_samples=1, backend='cuda_screen',
+                               prefetch=False)
+    assert 'bpass_f32' in names
+    assert w[0, 0] == 0  # the reader ran after the searcher was built
+    assert labels[0] == 1 and d[0] == 0
+
+
+def test_searcher_freed_without_cycle_collector(fake_bucket):
+    fake_bucket(50)
+    rng = np.random.default_rng(1)
+    w = _grid(6, 5, rng, 1e-3)
+    x = rows(w, 300)
+    gc.collect()
+    gc.disable()
+    try:
+        s = _gpu_screen.GpuScreenSearcher(w, 36, 1)
+        idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+        s(x, idx, d2)
+        ring = s._train_ring(2)
+        for k, part in enumerate(np.array_split(x, 2)):
+            ring.rows(k, len(part), x.dtype)[...] = part
+            ring.launch(k, len(part))
+        ring.drain()
+        refs = [weakref.ref(s), weakref.ref(s.bucket), weakref.ref(s.slots[0]['scratch'])]
+        del s, ring
+        assert [r() is None for r in refs] == [True, True, True]
+    finally:
+        gc.enable()
+
+
+@pytest.mark.parametrize('major', [6, 7])
+def test_compute_capability_gate(fake_bucket, major):
+    names = fake_bucket(major=major)
+    rng = np.random.default_rng(0)
+    s = _gpu_screen.GpuScreenSearcher(_grid(6, 3, rng, 1e-3), 36, 1)
+    assert (s.bucket is not None) == (major >= 7)
+    assert names.attrs == [75]  # cudaDevAttrComputeCapabilityMajor, once
+    x = rows(s.bucket.w if s.bucket else _grid(6, 3, np.random.default_rng(0), 1e-3), 50)
+    idx, d2 = np.empty(len(x), np.int32), np.empty(len(x))
+    s(x, idx, d2)
+    assert ('bpass_f64' in names) == (major >= 7)
+
+
+def test_group_cap_before_ordering(fake_bucket, monkeypatch):
+    """Lattices with too many groups for one scan block are rejected before the P x P ordering."""
+    fake_bucket()
+    splits, orders = [], []
+    split, order = B.split_groups, B.order_groups
+    monkeypatch.setattr(B, 'split_groups', lambda w: splits.append(len(w)) or split(w))
+    monkeypatch.setattr(B, 'order_groups', lambda parts: orders.append(parts['P']) or order(parts))
+    monkeypatch.setattr(B, 'MAX_GROUPS', 3)  # LEAF = 4: at most 12 nodes
+    rng = np.random.default_rng(0)
+    assert _gpu_screen.GpuScreenSearcher(rng.normal(size=(13, 3)), 13, 1).bucket is None  # > LEAF * MAX_GROUPS
+    assert splits == [] and orders == []
+    w = rng.normal(size=(12, 3))
+    assert B.split_groups(w)['P'] > 3
+    splits.clear()
+    assert _gpu_screen.GpuScreenSearcher(w, 12, 1).bucket is None  # P > MAX_GROUPS after splitting
+    assert splits == [12] and orders == []
+    monkeypatch.setattr(B, 'MAX_GROUPS', 1024)
+    splits.clear()
+    assert _gpu_screen.GpuScreenSearcher(w, 12, 1).bucket is not None
+    assert splits == [12] and len(orders) == 1
+
+
+def test_shared_memory_checked_before_grouping(fake_bucket, monkeypatch):
+    fake_bucket(shared=4000)  # the dense kernel fits (3072 bytes), the bucketed pass (5120) does not
+    splits = []
+    split = B.split_groups
+    monkeypatch.setattr(B, 'split_groups', lambda w: splits.append(len(w)) or split(w))
+    rng = np.random.default_rng(0)
+    assert _gpu_screen.GpuScreenSearcher(_grid(6, 3, rng, 1e-3), 36, 1).bucket is None
+    assert splits == []
 
 
 def test_fake_ring_and_call(fake_bucket):

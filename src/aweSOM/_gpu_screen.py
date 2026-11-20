@@ -369,6 +369,33 @@ def _device_limits(cp, device):
     return cache[device]
 
 
+_MAJOR = weakref.WeakKeyDictionary()
+
+
+def _compute_major(cp, device):
+    """Major compute capability of ``device`` (one attribute query, cached per process like
+    :func:`_device_limits`)."""
+    cache = _MAJOR.setdefault(cp, {}) if isinstance(cp, types.ModuleType) else {}
+    if device not in cache:
+        runtime = cp.cuda.runtime
+        attr = getattr(runtime, 'cudaDevAttrComputeCapabilityMajor', 75)  # the CUDA enum value
+        cache[device] = int(runtime.deviceGetAttribute(attr, device))
+    return cache[device]
+
+
+def _dense_launcher(kernels, w, block, rows_per_thread, nodes, tile, args, shared):
+    """``launch(x, idx, d2, n, stream, f64)`` queues the dense kernel on the first ``n`` rows of
+    device ``x`` (float64 if ``f64``). It holds only the kernels, the device weights and the launch
+    parameters, never the searcher."""
+    per = block * rows_per_thread
+    tail = (np.int32(nodes), np.int32(tile)) + tuple(args)
+
+    def launch(x, idx, d2, n, stream, f64):
+        kernels[int(f64)](((n + per - 1) // per,), (block,), (w, x, idx, d2, np.int32(n)) + tail,
+                          shared_mem=shared, stream=stream)
+    return launch
+
+
 def _pinned(cp, shape, dtype):
     owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
     return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
@@ -394,6 +421,11 @@ class GpuScreenSearcher:
     def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=TILE,
                  block=128, overlap=True, device=None):
         w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
+        # An owned, read-only snapshot: the device copy, the screen parameters and the bucket
+        # tables (built later, at the first search) all describe these weights, even if the
+        # caller changes its array afterwards.
+        w = np.array(w, np.float64, order='C', copy=True)
+        w.setflags(write=False)
         if not 1 <= w.shape[1] <= 32:
             raise ValueError('CUDA search supports 1 through 32 features')
         if xdim * ydim != len(w):
@@ -423,12 +455,17 @@ class GpuScreenSearcher:
             if self.shared > props[0] or block > props[1]:
                 raise ValueError('tile or block exceeds the device limit')
             self.kernels = _kernels(self.features)
+            self._dense = _dense_launcher(self.kernels, self.w, self.block, self.rows_per_thread, self.nodes,
+                                          self.tile, self.args, self.shared)
             self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
             self.bucket = None  # the bucketed search, when this lattice can use it
             if _BUCKET:
                 from . import _gpu_bucket
-                if _gpu_bucket.eligible(self.nodes, self.features, safe, _BUCKET_MIN_NODES):
+                if (_gpu_bucket.eligible(self.nodes, self.features, safe, _BUCKET_MIN_NODES)
+                        and _compute_major(cp, self.device) >= _gpu_bucket.MIN_COMPUTE_MAJOR):
                     try:
+                        # The launcher holds no reference to this searcher, so the searcher
+                        # and its buffers are freed without the cyclic collector.
                         self.bucket = _gpu_bucket.BucketEngine(cp, w, self.w, self._dense, _pinned, props[0])
                     except _gpu_bucket.Unsupported:
                         pass
@@ -472,14 +509,6 @@ class GpuScreenSearcher:
             # non-blocking streams that do not order against it.
             self.cp.cuda.get_current_stream().synchronize()
         return table
-
-    def _dense(self, x, idx, d2, n, stream, f64):
-        """Queue the dense kernel on the first ``n`` rows of device ``x`` (float64 if ``f64``)."""
-        per = self.block * self.rows_per_thread
-        self.kernels[int(f64)](
-            ((n + per - 1) // per,), (self.block,),
-            (self.w, x, idx, d2, np.int32(n), np.int32(self.nodes), np.int32(self.tile)) + self.args,
-            shared_mem=self.shared, stream=stream)
 
     def _search(self, x, idx, d2, n, stream, scratch, x_host):
         """Queue the search of the first ``n`` rows of device ``x`` (``x_host`` on the host) on

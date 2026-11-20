@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     auto w = load(dir + "/w.bin"), x = load(dir + "/x.bin"), c32 = load(dir + "/c32.bin"),
          cw = load(dir + "/cw.bin"), cid = load(dir + "/cid.bin"), clo = load(dir + "/cand_lo.bin"),
          chi = load(dir + "/cand_hi.bin"), ex32 = load(dir + "/ex32.bin"), elo = load(dir + "/ex_lo.bin"),
-         ehi = load(dir + "/ex_hi.bin");
+         ehi = load(dir + "/ex_hi.bin"), rare = load(dir + "/rare32.bin");
     std::vector<int> seed(n, -7), perm(n, -7), fb_rows(n, -7), list2(n, -7), zbuf(4 + P, 12345),
         boff(P + 1, -7), toff(P + 1, -7), cursor(P, -7), idx(n, -1);
     std::vector<double> d2(n, -2.0);
@@ -158,6 +158,7 @@ int main(int argc, char** argv) {
     const float* EX = (const float*)ex32.data();
     const int* ELO = (const int*)elo.data();
     const int* EHI = (const int*)ehi.data();
+    const int* RARE = (const int*)rare.data();
     const int R = AWESOM_R, rb = block * R;
     const int hist_block = 64, scatter_block = 64;
     auto run = [&](auto* X) {
@@ -174,10 +175,10 @@ int main(int argc, char** argv) {
         launch((n + rb - 1) / rb + P, block, sh_pass, [&] {
             if constexpr (sizeof(T) == 8)
                 bpass_f64(W, X, perm.data(), boff.data(), toff.data(), CW, CID, CLO, CHI, EX, ELO, EHI, idx.data(),
-                          d2.data(), fb_rows.data(), zbuf.data(), P, ct, wmax_c, cmax, g1, safe_c, eta, one_m_eps);
+                          d2.data(), fb_rows.data(), zbuf.data(), RARE, P, ct, wmax_c, cmax, g1, safe_c, eta, one_m_eps);
             else
                 bpass_f32(W, X, perm.data(), boff.data(), toff.data(), CW, CID, CLO, CHI, EX, ELO, EHI, idx.data(),
-                          d2.data(), fb_rows.data(), zbuf.data(), P, ct, wmax_c, cmax, g1, safe_c, eta, one_m_eps);
+                          d2.data(), fb_rows.data(), zbuf.data(), RARE, P, ct, wmax_c, cmax, g1, safe_c, eta, one_m_eps);
         });
         launch(fbgrid, fbblock, sh_fbs, [&] {
             if constexpr (sizeof(T) == 8)
@@ -241,7 +242,7 @@ def run(build, w, x, T, block=64, ct=16, fbgrid=3, fbblock=64):
     F = w.shape[1]
     root, exe = build(F)
     sc = T['sc']
-    for name in ('c32', 'cw', 'cid', 'cand_lo', 'cand_hi', 'ex32', 'ex_lo', 'ex_hi'):
+    for name in ('c32', 'cw', 'cid', 'cand_lo', 'cand_hi', 'ex32', 'ex_lo', 'ex_hi', 'rare32'):
         np.ascontiguousarray(T[name]).tofile(root / f'{name}.bin')
     np.ascontiguousarray(w, np.float64).tofile(root / 'w.bin')
     np.ascontiguousarray(x).tofile(root / 'x.bin')
@@ -277,6 +278,7 @@ def check(build, w, x, T, **kw):
     assert out['zbuf'][0] == (info['code'] != 0).sum()
     assert out['zbuf'][1] == (info['code'] == 1).sum()
     assert out['zbuf'][2] == len(info['screen_left'])
+    assert out['zbuf'][3] == ((info['code'] != 0) & T['rare'][info['seed']]).sum()  # fallback in rare buckets
     perm = out['perm']
     np.testing.assert_array_equal(np.sort(perm), np.arange(len(x)))
     np.testing.assert_array_equal(info['seed'][perm], np.repeat(np.arange(P), counts))
@@ -315,7 +317,8 @@ def test_kernel_source_any_lists(build, monkeypatch, lists):
         K, rare = np.full(P, P), np.ones(P, bool)
     T = B.pack(w, grp, sc, K, rare)
     T.update(sc=sc, grp=grp)
-    check(build, w, x, T, block=32, ct=8, fbgrid=2, fbblock=32)
+    info = check(build, w, x, T, block=32, ct=8, fbgrid=2, fbblock=32)
+    assert ((info['code'] != 0) & rare[info['seed']]).any()  # the overlap counter is exercised
 
 
 def test_lane_ties_in_fallback(build, monkeypatch):
