@@ -89,6 +89,8 @@ def take(table, idx, out=None):
 
 
 class RawKernel:
+    """Only the dense screen kernels (the bucketed search is switched off below)."""
+
     def __init__(self, source, name, options=()):
         self.name = name
 
@@ -126,6 +128,11 @@ float32 = np.float32
 float64 = np.float64
 uint8 = np.uint8
 uint16 = np.uint16
+
+# This shim runs every kernel as the dense search, so searchers keep the dense path.
+import aweSOM._gpu_screen as _screen  # noqa: E402
+
+_screen._BUCKET = False
 '''
 
 
