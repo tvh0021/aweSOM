@@ -1159,7 +1159,8 @@ class _Scratch:
         self.tile_off = cp.empty(P + 1, np.int32)
         self.cursor = cp.empty(P, np.int32)
         self.buffers = []  # pinned (owner, int32[4 + P]) pairs, reused
-        self.records = []  # (rows, table generation, sample or None, pinned buffer index)
+        # (rows, table generation, sample or None, pinned buffer index, that generation's rare mask)
+        self.records = []
         self.stream = None  # the stream of the last search
 
     def buffer(self, i):
@@ -1336,17 +1337,17 @@ class BucketEngine:
                              shared_mem=self.shared["fb_exact"], stream=stream)
         i = len(s.records)
         s.zbuf.get(out=s.buffer(i), stream=stream, blocking=False)
-        s.records.append((n, self.gen, sample, i))
+        s.records.append((n, self.gen, sample, i, self.rare))
         s.stream = stream
         self.since += 1
 
     def collect(self, s):
         """Read the counters of ``s``'s queued searches; call only after waiting for its stream."""
         records, s.records = s.records, []
-        for n, gen, sample, i in records:
+        for n, gen, sample, i, rare_mask in records:
             st = s.buffers[i][1]
             fb, both = int(st[0]), int(st[3])  # both: fallback rows of whole-lattice buckets
-            rare = int(st[4:][self.rare].sum()) if gen == self.gen else 0
+            rare = int(st[4:][rare_mask].sum())  # the tables this chunk ran on, as counters[3]
             for key, v in (("rows", n), ("fallback_rows", fb), ("top_two_failed", int(st[1])), ("rare_rows", rare),
                            ("rare_fallback_rows", both)):
                 self.stats[key] += v

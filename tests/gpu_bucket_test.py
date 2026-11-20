@@ -509,6 +509,26 @@ def test_overlap_counted_once(fake_bucket, monkeypatch):
     assert T['builds'] == 1
 
 
+def test_overlap_of_chunk_on_old_tables(fake_bucket, monkeypatch):
+    """A chunk still in flight on the old tables at a rebuild is counted with those tables: its
+    rare rows include its rare fallback rows (Sol's round-2 repro)."""
+    fake_bucket(1024)
+    monkeypatch.setattr(B, 'RETUNE_GAP', 1)
+    rng = np.random.default_rng(3)
+    w = _grid(32, 2, rng, 1e-3)
+    w[1000] = w[1001]
+    near = w[rng.integers(0, 20, size=4)]
+    ordinary = lambda n: near[rng.integers(0, 4, size=n)] + rng.normal(size=(n, 2)) * 1e-4  # noqa: E731
+    tied = lambda: np.concatenate([ordinary(924), np.repeat(w[1001:1002], 100, axis=0)])  # noqa: E731
+    # Chunk 1's counters schedule a rebuild before chunk 3; chunk 2 is then queued on the old tables.
+    x = np.concatenate([ordinary(1024), tied(), tied(), ordinary(1024), ordinary(1024)])
+    labels, _ = predict_stream(w, np.arange(len(w)), x, chunk=1024, backend='cuda_screen', prefetch=False)
+    np.testing.assert_array_equal(labels, reference(w, x)[0])
+    T = B.TOTALS
+    assert T['builds'] == 2
+    assert T['rare_fallback_rows'] == 200 and T['rare_rows'] >= 200
+
+
 def test_weights_snapshot(fake_bucket):
     """A reader that changes the caller's weights after the searcher is built (Sol's repro): the
     bucket tables, the screen and the exact distances all use the weights of the call."""
