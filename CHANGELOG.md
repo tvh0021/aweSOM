@@ -43,9 +43,33 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `copy_bytes` with `layout`, `ranks`, `manifest_seconds`, and
   `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
   rank count.
+
+## [1.10.1] - 2026-11-19
+
+This patch release cleans up the `v1.10.0` code, packaging, and tests. It
+removes no documented function, argument, or command line flag, and no shipped
+default changes.
+
+**Training, labelling, U-matrix, and SCE outputs match `v1.10.0` bit for bit.
+Existing pickled lattices and `format_version` 1 `SOMModel` files load and
+predict as before.**
+
+### Changed
+
 - Cleanup of the v1.10.0 code: removed dead private code, unused imports and
   commented-out sketches, and pruned redundant tests. The JOSS
   `draft-pdf.yml` workflow now runs only on manual `workflow_dispatch`.
+- Two imports that their modules never used are gone, so the names
+  `aweSOM.stream.predict` and `aweSOM.run_som.MinMaxScaler` no longer resolve.
+  Neither was documented or listed in `__all__`. Import `predict` from
+  `aweSOM` or `aweSOM.inference`, and `MinMaxScaler` from
+  `sklearn.preprocessing`.
+- `requirements.txt` uses LF line endings and drops its two commented `jax`
+  lines, `docs/requirements.txt` drops `sphinxcontrib-napoleon`, and
+  `setup.py` drops `include_package_data=True`. The installed requirements and
+  the files in the wheel are the same as in `v1.10.0`.
+- New command line smoke tests run `run_som.py` and `make_sce_clusters.py` end
+  to end on small inputs.
 
 ### Fixed
 
@@ -617,6 +641,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.10.1]: https://github.com/tvh0021/aweSOM/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/tvh0021/aweSOM/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0
