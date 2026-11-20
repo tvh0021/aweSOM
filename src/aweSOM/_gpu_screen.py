@@ -42,6 +42,8 @@ can differ from the CPU screen; :func:`_cuda_screen_reference` emulates the
 fused rounding exactly, so its fallback count is the kernel's.
 """
 import contextlib
+import types
+import weakref
 from functools import lru_cache
 
 import numpy as np
@@ -340,17 +342,18 @@ def _on_device(cp, device):
     return cp.cuda.Device(device)
 
 
-_LIMITS = {}
+_LIMITS = weakref.WeakKeyDictionary()
 
 
 def _device_limits(cp, device):
     """``(sharedMemPerBlock, maxThreadsPerBlock)`` of ``device``, queried once per process
-    (the query costs about 1 ms, and a searcher is built every epoch)."""
-    key = (id(cp), device)
-    if key not in _LIMITS:
+    for an imported CuPy module (the query costs about 1 ms, and a searcher is built
+    every epoch)."""
+    cache = _LIMITS.setdefault(cp, {}) if isinstance(cp, types.ModuleType) else {}
+    if device not in cache:
         props = cp.cuda.runtime.getDeviceProperties(device)
-        _LIMITS[key] = (props['sharedMemPerBlock'], props['maxThreadsPerBlock'])
-    return _LIMITS[key]
+        cache[device] = (props['sharedMemPerBlock'], props['maxThreadsPerBlock'])
+    return cache[device]
 
 
 def _pinned(cp, shape, dtype):
@@ -586,14 +589,14 @@ class _TrainRing:
         s, slot = self.s, self.slots[k]
         if slot is None or slot['dtype'] != dtype or len(slot['host'][1]) < m:
             self.slots[k] = None  # free the old buffers first; a failed allocation reallocates
-            owners, host = zip(*(_pinned(s.cp, shape, dt) for shape, dt in
-                                 [((m, s.features), dtype), ((m,), np.int32), ((m,), np.float64)]))
             cap = min(m, s.chunk)
             # Allocated on the current stream, not the slot's: CuPy pools memory per
             # stream, and the slot streams end with the ring (every epoch), so their
             # pool bins would never be reused. Safe because a slot is idle when its
             # buffers are freed (drained, or its result already read).
             with _on_device(s.cp, s.device):
+                owners, host = zip(*(_pinned(s.cp, shape, dt) for shape, dt in
+                                     [((m, s.features), dtype), ((m,), np.int32), ((m,), np.float64)]))
                 device = [s.cp.empty((cap, s.features), dtype), s.cp.empty(cap, np.int32),
                           s.cp.empty(cap, np.float64)]
             slot = self.slots[k] = dict(owners=owners, host=host, device=device, dtype=dtype, cap=cap)
@@ -623,10 +626,19 @@ class _TrainRing:
         return hx[:m], hi[:m], hd[:m]
 
     def drain(self):
-        """Wait for all queued work (also after an error, before the buffers are dropped)."""
+        """Wait for all queued work (also after an error, before the buffers are dropped).
+
+        Every stream is waited for even when one fails; the first error is raised then."""
+        error = None
         with _on_device(self.s.cp, self.s.device):
             for stream in self.streams:
-                stream.synchronize()
+                try:
+                    stream.synchronize()
+                except BaseException as e:
+                    if error is None:
+                        error = e
+        if error is not None:
+            raise error
 
 
 def best_match_nodes_cuda_screen(weights, data, chunk=2**20):

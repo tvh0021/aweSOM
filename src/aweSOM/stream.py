@@ -270,7 +270,10 @@ class _CallableSource:
 
         def ready(block):
             block = _as_float(block)
-            return block if scale is None else _scale_rows(block, scale)
+            if scale is None:
+                return block
+            _check_chunk(block, self.n_feat)  # before broadcasting against the scaler
+            return _scale_rows(block, scale)
 
         lazy = getattr(self.fn, "lazy_chunks", None)
         if callable(lazy):
@@ -855,7 +858,7 @@ def _stage(pool, c: np.ndarray, dst: np.ndarray, scale) -> None:
     does not depend on the number of workers.
     """
     m = c.shape[0]
-    k = min(_STAGE_THREADS, m) if c.size >= _STAGE_MIN else 1
+    k = min(_STAGE_THREADS, numba.get_num_threads(), m) if c.size >= _STAGE_MIN else 1
 
     def part(i):
         lo, hi = (i * m) // k, ((i + 1) * m) // k
@@ -870,7 +873,7 @@ def _stage(pool, c: np.ndarray, dst: np.ndarray, scale) -> None:
         list(pool.map(part, range(k)))
 
 
-def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> None:
+def _pass_queued(it, bmu, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> None:
     """The chunk loop of :func:`_pass` for ``cuda_screen``, queued across chunks.
 
     Chunk ``j`` is staged into ring slot ``j % S`` (S = ``_GPU_SLOTS``) and
@@ -878,8 +881,10 @@ def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> Non
     pinned slot. So the device searches the next chunks while the host reads,
     stages and accumulates, and the reader's array is released once staged.
     Chunks are accumulated in the order read, each with its own row count,
-    so the sums are bitwise those of the synchronous loop. Every queued chunk
-    is accumulated (and the device idle) before this returns or raises.
+    so the sums are bitwise those of the synchronous loop. A chunk of more
+    rows than the searcher's ``chunk`` takes the synchronous path after the
+    queue is emptied, which bounds the pinned slots. Every queued chunk is
+    accumulated (and the device idle) before this returns or raises.
     """
     slots = len(ring.slots)
     queue: list = []
@@ -894,7 +899,7 @@ def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> Non
         stats["acc"] += time.perf_counter() - t1
 
     k = 0
-    with concurrent.futures.ThreadPoolExecutor(_STAGE_THREADS) as pool:
+    with concurrent.futures.ThreadPoolExecutor(min(_STAGE_THREADS, numba.get_num_threads())) as pool:
         try:
             t_read = time.perf_counter()
             for c in it:
@@ -906,6 +911,21 @@ def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> Non
                     t_read = time.perf_counter()
                     continue
                 t0 = time.perf_counter()
+                if m > ring.s.chunk:  # synchronous, as in _pass
+                    while queue:
+                        accumulate()
+                    t0 = time.perf_counter()
+                    if scale is not None:
+                        c = _scale_rows(c, scale)
+                    idx, d2 = np.empty(m, np.int32), np.empty(m)
+                    stats["fallbacks"] += bmu(c, idx, d2)
+                    t1 = time.perf_counter()
+                    _accumulate_groups(c, idx, d2, s_g, n_g, q_g)
+                    stats["bmu"] += t1 - t0
+                    stats["acc"] += time.perf_counter() - t1
+                    stats["rows"] += m
+                    t_read = time.perf_counter()
+                    continue
                 # Slot k is idle: its last chunk was accumulated before this one was read.
                 _stage(pool, c, ring.rows(k, m, np.dtype(np.float64) if scale is not None else c.dtype), scale)
                 del c  # staged: the reader may reuse its array
@@ -919,8 +939,13 @@ def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> Non
                 t_read = time.perf_counter()
             while queue:
                 accumulate()
-        finally:
-            ring.drain()
+        except BaseException:
+            try:
+                ring.drain()
+            except BaseException:
+                pass  # the first error wins
+            raise
+        ring.drain()
 
 
 def _pass(
@@ -952,7 +977,7 @@ def _pass(
     if prefetch:
         it = _prefetched(it, stats)
     if ring is not None:
-        _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch)
+        _pass_queued(it, bmu, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch)
     else:
         idx = np.empty(0, np.int32)
         d2 = np.empty(0)

@@ -66,7 +66,7 @@ def test_array_source(fake, monkeypatch, dtype, chunk, sub, prefetch, fraction, 
     assert _sha(new) == _sha(old) == _sha(ref)
     _same_info(new_info, old_info)
     _same_info(new_info, ref_info)
-    if chunk < 900 * fraction:  # several chunks per pass: launches find earlier chunks queued
+    if sub >= chunk < 900 * fraction:  # several queued chunks: launches find earlier ones queued
         assert any(f.busy)
 
 
@@ -189,8 +189,78 @@ def test_error_drains(fake, monkeypatch):
     fake(64, fail_after=5)
     monkeypatch.setattr(stream, '_GPU_PIPELINE', True)
     with pytest.raises(RuntimeError, match='launch failed'):
-        train_batch_stream(_data(), chunk=100, bmu='cuda_screen', **OPTIONS)
+        train_batch_stream(_data(), chunk=50, bmu='cuda_screen', **OPTIONS)
     assert all(not s.queue for s in Stream.created)
+
+
+def test_failed_stream_drains_the_others(fake, monkeypatch):
+    """After a failed launch, a stream that also fails to synchronize neither leaves the
+    other streams' work queued nor hides the launch error; the ring alone raises it."""
+    f = fake(64, fail_after=5)
+    monkeypatch.setattr(stream, '_GPU_PIPELINE', True)
+    rings = []
+    make = _gpu_screen.GpuScreenSearcher._train_ring
+
+    def train_ring(self, slots):
+        ring = make(self, slots)
+        first = ring.streams[0]
+
+        def sync():
+            if len(f.launches) > 5:  # after the failed launch
+                raise RuntimeError('sync failed')
+            Stream.synchronize(first)
+        first.synchronize = sync
+        rings.append(ring)
+        return ring
+
+    monkeypatch.setattr(_gpu_screen.GpuScreenSearcher, '_train_ring', train_ring)
+    with pytest.raises(RuntimeError, match='launch failed'):
+        train_batch_stream(_data(), chunk=50, bmu='cuda_screen', **OPTIONS)
+    (ring,) = rings
+    assert ring.streams[0].queue and ring.streams[1].queue == ring.streams[2].queue == []
+    ring.streams[1].queue.append(lambda: None)
+    with pytest.raises(RuntimeError, match='sync failed'):
+        ring.drain()
+    assert ring.streams[1].queue == []
+
+
+class Sizes:
+    """Callable yielding consecutive slices of ``x`` with the given row counts."""
+
+    def __init__(self, x, sizes, scaler=None):
+        self.x, self.sizes = x, sizes
+        if scaler is not None:
+            self._awesom_raw_scaler = scaler
+
+    def __call__(self):
+        a = 0
+        for m in self.sizes:
+            yield self.x[a:a + m]
+            a += m
+
+
+@pytest.mark.parametrize('scaled', [False, True])
+@pytest.mark.parametrize('prefetch', [False, True])
+def test_chunks_above_searcher_chunk(fake, monkeypatch, scaled, prefetch):
+    """Chunks of more rows than the searcher's run synchronously between queued ones,
+    with bitwise-equal results and no pinned slot above the searcher's chunk."""
+    f = fake(50)
+    pinned = []
+    plain = _gpu_screen._pinned
+    monkeypatch.setattr(_gpu_screen, '_pinned', lambda cp, shape, dt: pinned.append(shape[0]) or
+                        plain(cp, shape, dt))
+    sizes = [30, 80, 0, 20, 50, 51, 200, 10, 10, 449]
+    raw = _data() * 3.0 + 7.0
+    scaler = Scaler('median-iqr', np.median(raw, axis=0), np.std(raw, axis=0)) if scaled else None
+    rows = scaler.transform(raw) if scaled else raw
+    kw = dict(chunk=64, prefetch=prefetch, n_samples=len(raw), bmu='cuda_screen')
+    old, old_info = _train(monkeypatch, Sizes(rows, sizes), False, **kw)
+    new, new_info = _train(monkeypatch, Sizes(raw, sizes, scaler), True, **kw)
+    ref, ref_info = _train(monkeypatch, Sizes(rows, sizes), True, **{**kw, 'bmu': 'numba'})
+    assert _sha(new) == _sha(old) == _sha(ref)
+    _same_info(new_info, old_info)
+    _same_info(new_info, ref_info)
+    assert pinned and max(pinned) <= 50 and any(f.busy)
 
 
 # --------------------------------------------------------------------- real device
