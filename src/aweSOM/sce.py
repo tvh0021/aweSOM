@@ -156,7 +156,6 @@ def _load_labels(path: str) -> np.ndarray:
     bad = as_int != labels
     bad |= (as_int < -1) | (as_int >= np.iinfo(np.int32).max)  # would wrap when narrowed
     if bad.any():
-        as_int = as_int.copy()
         as_int[bad] = -1
     if as_int.min() >= 0 and as_int.max() < 255:
         return as_int.astype(np.uint8)

@@ -26,7 +26,7 @@ Or run a specific test function within a module:
 
 Two tests in ``sce_test.py`` import JAX with ``pytest.importorskip("jax")``.
 Without JAX, pytest skips ``test_jax_gpu_available`` and ``test_jax_cpu_available`` and runs the other four tests.
-With JAX installed and no GPU, all six tests pass, and ``test_jax_gpu_available`` issues a warning.
+With JAX installed and no GPU, all six tests pass (``test_jax_gpu_available`` loads a separate copy of ``aweSOM.sce`` under a mocked GPU backend).
 SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 The ensemble loop itself works on integer contingency tables and does not need a GPU; ``sce_loop_test.py`` checks it
 against the original mask-by-mask loop (bitwise on NumPy, to float32 precision on a JAX device).

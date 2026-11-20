@@ -103,7 +103,6 @@ class Lattice:
             self.this_batch_train = self.train
         else:
             self.this_batch_train = number_of_steps
-        # self.momentum_decay_rate = momentum_decay_rate
 
         # check if the dims are reasonable
         if self.xdim < 4 or self.ydim < 4:
@@ -178,12 +177,6 @@ class Lattice:
             1, nsize_step // max(1, nsize_max - nsize_min)
         )  # how often to shrink the neighborhood
 
-        # if self.epoch < 2 * nsize_step:
-        # 	nsize = nsize_max
-        # elif self.epoch >= 3 * nsize_step:
-        # 	nsize = nsize_min
-        # else:
-        # 	nsize = nsize_max - self.epoch // nsize_freq
         epoch = self.epoch  # counts the number of epochs per nsize_freq
         stop_epoch = epoch + this_batch_train
         print("starting epoch is: ", epoch, flush=True)
@@ -199,14 +192,6 @@ class Lattice:
         if this_batch_train > number_input_vectors:
             indices = np.tile(indices, this_batch_train // number_input_vectors + 1)
         xk = self.data_array[indices[:this_batch_train], :]
-
-        # implement momentum-based gradient descent
-        # momentum_decay_rate = self.momentum_decay_rate
-
-        # history of the loss function
-        # loss_freq = 1000
-        # self.loss_history = np.zeros((self.train, number_features))
-        # self.average_loss = np.zeros((self.train//loss_freq, number_features))
 
         # the per-step learning rate and neighborhood size; index k is the value used at
         # step k, index this_batch_train is the value after the last step
@@ -434,10 +419,8 @@ class Lattice:
         print(f"Number of clusters : {n_clusters}", flush=True)
         print("Centroids: ", unique_ids, flush=True)
 
-        # mapping = {}
         clusters = 1000 * np.ones((x, y), dtype=np.int32)
         for i in range(n_clusters):
-            # mapping[i] = unique_ids[i]
             for ix in range(x):
                 for iy in range(y):
                     if (
@@ -1098,8 +1081,6 @@ class Lattice:
         # get the dimensions of the map
         xdim = self.xdim
         ydim = self.ydim
-        xlist = []
-        ylist = []
         centr_locs = []
 
         # create a list of unique centroid positions
@@ -1372,12 +1353,11 @@ class Lattice:
 
         """
 
-        def exp_cov(x1, x2, theta=2, p=2, distMat=0):
+        def exp_cov(x1, x2, theta=2):
             x1 = x1 * (1 / theta)
             x2 = x2 * (1 / theta)
             distMat = euclidean_distances(x1, x2)
-            distMat = distMat**p
-            return np.exp(-distMat)
+            return np.exp(-(distMat**2))
 
         NN = [[1] * ncol] * nrow
         grid = {"x": [i for i in range(nrow)], "y": [i for i in range(ncol)]}
@@ -1451,7 +1431,7 @@ class Lattice:
 
         tmp_1 = np.array(np.transpose(tmp))
 
-        fig, ax = plt.subplots(dpi=200)
+        _, ax = plt.subplots(dpi=200)
         plt.rcParams["font.size"] = 8
         ax.pcolor(tmp_1, cmap=plt.cm.YlOrRd)
 
@@ -1534,7 +1514,6 @@ class Lattice:
                 c = self.coordinate(
                     np.reshape(nix, (1, 1)), self.xdim
                 )  # NOTE: slow code
-                # print(c)
                 ix = int(c[0, 0])
                 iy = int(c[0, 1])
 

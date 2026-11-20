@@ -197,8 +197,6 @@ def _label_cc3d(data_array, structure, periodic):
     n_nb = int(structure.sum()) - 1
     if n_nb not in (6, 18, 26) or (periodic and n_nb != 6):
         return None
-    full = np.zeros((3, 3, 3), dtype=bool)
-    full[1, 1, 1] = True
     reference = {6: (np.abs(np.indices((3, 3, 3)) - 1).sum(axis=0) <= 1),
                  18: (np.abs(np.indices((3, 3, 3)) - 1).sum(axis=0) <= 2),
                  26: np.ones((3, 3, 3), dtype=bool)}[n_nb]
@@ -321,35 +319,6 @@ def merge_double_sheets(
     return merged_double_sheets
 
 
-# Example usage
-# if __name__ == "__main__":
-#     # Example 2D array
-#     array_2d = np.array([[0, 1, 1, 0], [1, 1, 0, 0], [0, 0, 2, 2], [2, 2, 2, 0]])
-
-#     clumped_array, clump_labels = find_clumps_and_mask(array_2d)
-#     print("Original Array:")
-#     print(array_2d)
-#     print("\nClumped Array:")
-#     print(clumped_array)
-#     print("\nClump Labels:")
-#     print(clump_labels)
-
-#     # Example 3D array
-#     array_3d = np.array(
-#         [
-#             [[0, 1, 0], [1, 1, 0], [0, 0, 0]],
-#             [[1, 1, 0], [0, 0, 2], [2, 2, 2]],
-#             [[0, 0, 0], [2, 2, 0], [0, 0, 0]],
-#         ]
-#     )
-
-#     clumped_array_3d, clump_labels_3d = find_clumps_and_mask(array_3d)
-#     print("\nOriginal 3D Array:")
-#     print(array_3d)
-#     print("\nClumped 3D Array:")
-#     print(clumped_array_3d)
-#     print("\nClump Labels 3D:")
-#     print(clump_labels_3d)
 
 
 def merge_double_sheets_fast(double_sheet_dict: dict, positive_sheet_dict: dict, negative_sheet_dict: dict):

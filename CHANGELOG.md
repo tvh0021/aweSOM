@@ -4,6 +4,46 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-11-19
+
+This patch release cleans up the `v1.10.0` code, packaging, and tests. It
+removes no documented function, argument, or command line flag, and no shipped
+default changes.
+
+**Training, labelling, U-matrix, and SCE outputs match `v1.10.0` bit for bit.
+Existing pickled lattices and `format_version` 1 `SOMModel` files load and
+predict as before.**
+
+### Changed
+
+- Cleanup of the v1.10.0 code: removed dead private code, unused imports and
+  commented-out sketches, and pruned redundant tests. The JOSS
+  `draft-pdf.yml` workflow now runs only on manual `workflow_dispatch`.
+- Two imports that their modules never used are gone, so the names
+  `aweSOM.stream.predict` and `aweSOM.run_som.MinMaxScaler` no longer resolve.
+  Neither was documented or listed in `__all__`. Import `predict` from
+  `aweSOM` or `aweSOM.inference`, and `MinMaxScaler` from
+  `sklearn.preprocessing`.
+- `requirements.txt` uses LF line endings and drops its two commented `jax`
+  lines, `docs/requirements.txt` drops `sphinxcontrib-napoleon`, and
+  `setup.py` drops `include_package_data=True`. The installed requirements and
+  the files in the wheel are the same as in `v1.10.0`.
+- New command line smoke tests run `run_som.py` and `make_sce_clusters.py` end
+  to end on small inputs.
+
+### Fixed
+
+- The `make_sce_clusters.py` command line no longer crashes when it ranks 1 to
+  49 Gsum entries; it now smooths the curve with `gsum_derivative`, which
+  gives the same result as before for 50 or more entries.
+- `setup.py` reads `README.md` and `requirements.txt` as UTF-8 next to the
+  script, so builds no longer fail on systems with a non-UTF-8 default
+  encoding, and it skips blank and comment lines in `requirements.txt`.
+- `test_jax_gpu_available` now checks the GPU branch of `aweSOM.sce` under a
+  mocked backend instead of issuing a warning; both backend tests load a
+  separate copy of the module so they no longer change the shared one.
+  `test_train_lattice` now checks the learning rate it meant to check.
+
 ## [1.10.0] - 2026-11-18
 
 This release adds CPU streaming batch training and inference in `aweSOM.stream`
@@ -561,6 +601,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.10.1]: https://github.com/tvh0021/aweSOM/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/tvh0021/aweSOM/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/tvh0021/aweSOM/compare/v1.7.0...v1.8.0

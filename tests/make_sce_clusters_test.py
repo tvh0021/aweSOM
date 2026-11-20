@@ -1,7 +1,13 @@
-import pytest
-import numpy as np
-import matplotlib.pyplot as plt
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pytest
 
 from aweSOM.make_sce_clusters import (
     plot_gsum_values,
@@ -196,6 +202,89 @@ def test_make_file_name():
     assert make_file_name(1, "png") == "0001.png"
     assert make_file_name(10, "png") == "0010.png"
     assert make_file_name(100, "png") == "0100.png"
+
+
+def test_make_sce_clusters_cli_smoke(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "src" / "aweSOM" / "make_sce_clusters.py"
+    src_dir = repo_root / "src"
+
+    env = os.environ.copy()
+    env["MPLBACKEND"] = "Agg"
+    env["PYTHONPATH"] = (
+        f"{src_dir}{os.pathsep}{env['PYTHONPATH']}"
+        if env.get("PYTHONPATH")
+        else str(src_dir)
+    )
+
+    # (a) Shipped Iris mapping copied into tmp_path with read-only --labels_path
+    # so all generated plots and .npy outputs stay inside tmp_path.
+    iris_dir = tmp_path / "iris_sce"
+    iris_dir.mkdir()
+    iris_labels_dir = repo_root / "examples" / "iris" / "som_results"
+    shutil.copyfile(
+        iris_labels_dir / "SCE" / "multimap_mappings.txt",
+        iris_dir / "multimap_mappings.txt",
+    )
+
+    proc_iris = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--file_path",
+            str(iris_dir),
+            "--labels_path",
+            str(iris_labels_dir),
+            "--dims",
+            "150",
+            "--threshold",
+            "-0.05",
+            "--return_gsum",
+            "--save_combined_map",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_iris.returncode == 0, f"stdout:\n{proc_iris.stdout}\nstderr:\n{proc_iris.stderr}"
+    assert (iris_dir / "gsum_values.png").is_file()
+    assert (iris_dir / "gsum_deriv.png").is_file()
+    combined_files = list(iris_dir.glob("sce_clusters_*.npy"))
+    assert len(combined_files) == 1
+    assert np.load(combined_files[0]).shape == (7, 150)
+
+    # (b) Synthetic small ensemble (< 50 entries) verifying C12 window clamping
+    # exits 0 and writes plots instead of crashing with ValueError.
+    small_dir = tmp_path / "small_sce"
+    small_dir.mkdir()
+    lines = []
+    val = 50.0
+    for run in range(5):
+        lines.append(f"labels.small-{run}")
+        for cid in range(4):
+            lines.append(f"{cid} {val:.4f}")
+            val -= 2.0
+    (small_dir / "multimap_mappings.txt").write_text("\n".join(lines) + "\n")
+
+    proc_small = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--file_path",
+            str(small_dir),
+            "--return_gsum",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_small.returncode == 0, f"stdout:\n{proc_small.stdout}\nstderr:\n{proc_small.stderr}"
+    assert (small_dir / "gsum_values.png").is_file()
+    assert (small_dir / "gsum_deriv.png").is_file()
 
 
 if __name__ == "__main__":

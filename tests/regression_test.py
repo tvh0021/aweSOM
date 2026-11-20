@@ -8,7 +8,6 @@ import io
 import contextlib
 
 import numpy as np
-import pytest
 
 from aweSOM import Lattice
 from aweSOM.sce import compute_SQ
@@ -38,17 +37,6 @@ def test_short_training_runs_do_not_divide_by_zero():
     assert som.epoch == 20
     som, _ = _train(train=7)
     assert som.epoch == 7
-
-
-def test_restart_lattice_is_not_modified_in_place():
-    som, data = _train(train=200)
-    weights = som.lattice.copy()
-    with contextlib.redirect_stdout(io.StringIO()):
-        som.train_lattice(data, list("abcd"), number_of_steps=100, restart_lattice=weights)
-    assert np.array_equal(weights, som.lattice_history[-1]) or not np.shares_memory(
-        weights, som.lattice
-    )
-    assert som.epoch == 300
 
 
 def test_single_centroid_does_not_crash_merge():

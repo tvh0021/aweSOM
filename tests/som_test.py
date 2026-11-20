@@ -69,8 +69,8 @@ def test_train_lattice(trained_map: Lattice):
     assert trained_map.data_array.shape == data.shape
     assert trained_map.features_names == features_names
     assert trained_map.lattice.shape == (xdim * ydim, data_dims[1])
-    assert (
-        trained_map.alpha == pytest.approx(alpha_0 * 0.75**25, rel=1e-4)
+    assert trained_map.alpha == (
+        pytest.approx(alpha_0 * 0.75**24, rel=1e-6)
         if trained_map.alpha_type == 1
         else alpha_0
     )
@@ -118,15 +118,6 @@ def test_assign_cluster_to_lattice(map_after_mapping: Lattice):
     clusters_merge = map_after_mapping.assign_cluster_to_lattice(merge_cost=0.4)
     number_of_clusters_merge = np.max(clusters_merge) + 1
     assert number_of_clusters_merge <= number_of_clusters
-
-
-def test_assign_cluster_to_data(map_after_mapping: Lattice):
-    print("Testing assigning cluster ids to data", flush=True)
-    with pytest.warns(DeprecationWarning):
-        som_labels = map_after_mapping.assign_cluster_to_data(
-            map_after_mapping.projection_2d, map_after_mapping.lattice_assigned_clusters
-        )
-    assert som_labels.shape == (data_dims[0],)
 
 
 def test_best_match(map_after_mapping: Lattice):

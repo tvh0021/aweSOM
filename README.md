@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.10.0
+Version: 1.10.1
 
 ## 1. Installation
 
@@ -62,7 +62,7 @@ Or run a specific test function within a module:
 python -m pytest tests/[module]_test.py::test_[function]
 ```
 
-Two tests in `sce_test.py` import JAX with `pytest.importorskip("jax")`. Without JAX, pytest skips `test_jax_gpu_available` and `test_jax_cpu_available` and runs the other four tests. With JAX installed and no GPU, all six tests pass, and `test_jax_gpu_available` issues a warning. SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
+Two tests in `sce_test.py` import JAX with `pytest.importorskip("jax")`. Without JAX, pytest skips `test_jax_gpu_available` and `test_jax_cpu_available` and runs the other four tests. With JAX installed and no GPU, all six tests pass (`test_jax_gpu_available` loads a separate copy of `aweSOM.sce` under a mocked GPU backend). SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
 
 ## 3. Basic Usage - SOM
 

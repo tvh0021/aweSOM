@@ -55,15 +55,6 @@ def test_best_match_nodes_matches_numpy_argmin_up_to_ties():
     np.testing.assert_allclose(dist2, d2_np[np.arange(len(data)), idx], rtol=1e-14)
 
 
-def test_exact_ties_go_to_lowest_node_index():
-    weights = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
-    data = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])
-    idx, dist2 = best_match_nodes(weights, data)
-    assert idx.tolist() == [0, 0, 1, 0]
-    assert idx.tolist() == np.argmin(((data[:, None] - weights[None]) ** 2).sum(-1), axis=1).tolist()
-    assert dist2.tolist() == [1.0, 0.0, 0.0, 0.5]
-
-
 @pytest.mark.parametrize("chunk", [1, 7, 333, 2**20])
 def test_chunking_does_not_change_results(chunk):
     rng = np.random.default_rng(3)

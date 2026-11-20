@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 from unittest.mock import patch
-import warnings
 import glob
 
 from aweSOM.sce import (
@@ -17,39 +16,38 @@ mock_data = np.array([[0, 1, 1], [0, 0, 1], [1, 1, 0]])
 mock_data_3d = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]])
 
 
+def _load_sce_with_backend(backend):
+    # `aweSOM.sce` picks its array library at import time. Run that choice
+    # under a mocked backend in a separate copy of the module, so the shared
+    # `aweSOM.sce` (and every function other tests imported from it) is left
+    # untouched.
+    import importlib.util
+
+    import aweSOM.sce
+
+    spec = importlib.util.spec_from_file_location(
+        "aweSOM._sce_backend_probe", aweSOM.sce.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    with patch("jax.default_backend", return_value=backend):
+        spec.loader.exec_module(module)
+    return module
+
+
 def test_jax_gpu_available():
     pytest.importorskip("jax")
-    # Check that the correct device is being used
-    with patch("jax.default_backend", return_value="gpu"):
-        import aweSOM.sce as sce
-
-        if sce.USE_JAX and sce.array_lib.__name__ == "jax.numpy":
-            assert sce.array_lib.__name__ == "jax.numpy"
-            print("Using JAX for GPU computation.")
-        else:
-            warnings.warn("While JAX is available, no GPU was found. Will use NumPy.")
+    sce = _load_sce_with_backend("gpu")
+    assert sce.USE_JAX is True
+    assert sce.array_lib.__name__ == "jax.numpy"
 
 
 def test_jax_cpu_available():
     pytest.importorskip("jax")
-    # Check that the correct device is being used. `aweSOM.sce` chooses its
-    # array library at import time, so the module has to be re-imported
-    # under the patched backend and restored afterwards (otherwise this test
-    # only passes by accident on machines whose real backend is already cpu,
-    # and fails on an Apple Metal install).
-    import importlib
-
-    import aweSOM.sce as sce
-
-    try:
-        with patch("jax.default_backend", return_value="cpu"):
-            sce = importlib.reload(sce)
-            assert sce.USE_JAX is False
-            assert sce.array_lib.__name__ == "numpy"
-            # (no `hasattr(sce, "jnp")` check: importlib.reload keeps the old
-            # module dict, so a stale `jnp` survives from the real import)
-    finally:
-        importlib.reload(sce)
+    # Mocking cpu keeps this test meaningful on GPU and Apple Metal installs.
+    sce = _load_sce_with_backend("cpu")
+    assert sce.USE_JAX is False
+    assert sce.array_lib.__name__ == "numpy"
+    assert not hasattr(sce, "jnp")
 
 
 def test_load_som_npy(tmp_path):

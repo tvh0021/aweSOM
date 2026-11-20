@@ -59,7 +59,7 @@ def test_copy_npy_rows_into_place(tmp_path, dtype, shape):
     del created
     n = shape[0]
     edges = [0, 0, 40, 41, n]  # an empty part, a one-row part, uneven parts
-    crcs, stats = [], {}
+    stats = {}
     dest = NpyWriter(final)
     dest[0:0] = ref[0:0]
     for r, (a, b) in enumerate(zip(edges[:-1], edges[1:])):
@@ -69,7 +69,6 @@ def test_copy_npy_rows_into_place(tmp_path, dtype, shape):
         w = NpyWriter(part)
         w[0:b - a] = ref[a:b]
         w.close()
-        crcs.append(w.crc32)
         assert copy_npy_rows(part, dest, a, block=7, stats=stats) == w.crc32 == zlib.crc32(np.ascontiguousarray(ref[a:b]))
     assert dest.crc32 is None  # the copies are checked by their own CRC, not the writer's
     dest.close()
