@@ -130,6 +130,11 @@ __all__ = [
 
 DEFAULT_CHUNK = 2**20
 DEFAULT_GROUPS = 64
+# Private knobs of the queued cuda_screen training pass (see _pass_queued).
+_GPU_PIPELINE = True  # False: one synchronous search per chunk, as before
+_GPU_SLOTS = 3  # chunks in flight: staging, searching and accumulating
+_STAGE_THREADS = 16  # ordered workers copying or scaling a chunk into pinned memory
+_STAGE_MIN = 1 << 16  # values below which staging runs on the calling thread
 
 
 # --------------------------------------------------------------------- sources
@@ -144,6 +149,16 @@ def _as_float(block: np.ndarray) -> np.ndarray:
     if block.dtype not in (np.float32, np.float64):
         block = block.astype(np.float64)
     return np.ascontiguousarray(block)
+
+
+def _scale_rows(x: np.ndarray, scale: tuple, out: Optional[np.ndarray] = None) -> np.ndarray:
+    """``(x - offset) / scale`` in float64: the two operations of
+    :meth:`aweSOM.model.Scaler.transform`, in the same order for every value."""
+    offset, div = scale
+    if out is None:
+        return (x - offset) / div
+    np.subtract(x, offset, out=out)
+    return np.divide(out, div, out=out)
 
 
 def _check_chunk(c: np.ndarray, n_feat: int) -> None:
@@ -163,6 +178,7 @@ class _ArraySource:
         self.data = data
         self.n, self.n_feat = int(shape[0]), int(shape[1])
         self.h5 = _is_h5(data)
+        self.scale = None  # rows are read as given
 
     def read(self, start: int, stop: int) -> np.ndarray:
         return _as_float(self.data[start:stop])
@@ -204,6 +220,10 @@ class _CallableSource:
       resume. When the counting pass is skipped, ``calls`` is advanced by one
       in its place, so call ``k`` is the same call as in a run that made the
       pass (``rows(ix)`` is then expected to act as one call).
+    - ``_awesom_raw_scaler`` (private): an :class:`aweSOM.model.Scaler`. The
+      callable then yields raw rows and every chunk and ``rows(ix)`` result is
+      scaled here with ``Scaler.transform``'s two float64 operations; the
+      ``cuda_screen`` training pass scales straight into its pinned buffers.
     """
 
     def __init__(
@@ -215,6 +235,9 @@ class _CallableSource:
         self.fn = fn
         self.n = n_samples
         self.n_feat = n_features
+        raw = getattr(fn, "_awesom_raw_scaler", None)
+        self.scale = None if raw is None else (np.asarray(raw.offset, np.float64),
+                                               np.asarray(raw.scale, np.float64))
         if self.n_feat is None:
             for name in ("n_feat", "n_features"):
                 value = getattr(fn, name, None)
@@ -240,16 +263,23 @@ class _CallableSource:
                 raise ValueError(f"n_samples={self.n} but the source yielded {n} rows")
             self.n = n
 
-    def lazy(self) -> Iterator[tuple[int, Callable[[], np.ndarray]]]:
-        """One call of the source as ``(rows, read)`` pairs; ``read()`` returns the float chunk."""
+    def lazy(self, raw: bool = False) -> Iterator[tuple[int, Callable[[], np.ndarray]]]:
+        """One call of the source as ``(rows, read)`` pairs; ``read()`` returns the float chunk
+        (scaled, unless ``raw``)."""
+        scale = None if raw else self.scale
+
+        def ready(block):
+            block = _as_float(block)
+            return block if scale is None else _scale_rows(block, scale)
+
         lazy = getattr(self.fn, "lazy_chunks", None)
         if callable(lazy):
             for m, read in lazy():
-                yield int(m), (lambda read=read: _as_float(read()))
+                yield int(m), (lambda read=read: ready(read()))
             return
         for block in self.fn():
             block = np.asarray(block)
-            yield block.shape[0], (lambda block=block: _as_float(block))
+            yield block.shape[0], (lambda block=block: ready(block))
 
     def rows(self, ix: np.ndarray) -> np.ndarray:
         """Rows ``ix`` as float64: the callable's ``rows`` if it has one, else one
@@ -258,7 +288,7 @@ class _CallableSource:
         if callable(own):
             out = np.asarray(own(ix), np.float64)
             _check_chunk(out, self.n_feat)
-            return out
+            return out if self.scale is None else _scale_rows(out, self.scale)
         order = np.argsort(ix, kind="stable")
         sorted_ix = ix[order]
         out = np.empty((len(ix), self.n_feat), np.float64)
@@ -509,6 +539,7 @@ def _epoch_chunks(
     rng: Optional[np.random.Generator],
     rank: int = 0,
     size: int = 1,
+    raw: bool = False,
 ) -> Iterator[np.ndarray]:
     """Chunks of one pass: all rows, or a stratified block sample (array sources),
     or a Bernoulli row sample (callable sources).
@@ -516,10 +547,11 @@ def _epoch_chunks(
     With ``size > 1`` only the chunks with index ``i % size == rank`` are
     yielded (round-robin ownership). The chunk boundaries and the random draws
     do not depend on ``rank`` or ``size``, so the ranks together see exactly
-    the rows of a single-process pass.
+    the rows of a single-process pass. ``raw`` leaves the rows of a callable
+    with a scaler unscaled (the caller scales them).
     """
     if isinstance(source, _CallableSource):
-        for i, (m, read) in enumerate(source.lazy()):
+        for i, (m, read) in enumerate(source.lazy(raw)):
             keep = rng.random(m) < fraction if fraction < 1.0 else None
             if i % size != rank:
                 continue
@@ -815,6 +847,82 @@ def cuda_available() -> bool:
 # --------------------------------------------------------------------- trainer
 
 
+def _stage(pool, c: np.ndarray, dst: np.ndarray, scale) -> None:
+    """Copy (or, with ``scale``, scale) chunk ``c`` into ``dst`` with ordered workers.
+
+    Worker ``i`` of ``k`` writes rows ``[i * m // k, (i + 1) * m // k)``; every
+    value goes through the same operations whatever the split, so ``dst``
+    does not depend on the number of workers.
+    """
+    m = c.shape[0]
+    k = min(_STAGE_THREADS, m) if c.size >= _STAGE_MIN else 1
+
+    def part(i):
+        lo, hi = (i * m) // k, ((i + 1) * m) // k
+        if scale is None:
+            np.copyto(dst[lo:hi], c[lo:hi])
+        else:
+            _scale_rows(c[lo:hi], scale, out=dst[lo:hi])
+
+    if k == 1:
+        part(0)
+    else:
+        list(pool.map(part, range(k)))
+
+
+def _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch) -> None:
+    """The chunk loop of :func:`_pass` for ``cuda_screen``, queued across chunks.
+
+    Chunk ``j`` is staged into ring slot ``j % S`` (S = ``_GPU_SLOTS``) and
+    queued on the device; then chunk ``j - S + 1`` is accumulated from its
+    pinned slot. So the device searches the next chunks while the host reads,
+    stages and accumulates, and the reader's array is released once staged.
+    Chunks are accumulated in the order read, each with its own row count,
+    so the sums are bitwise those of the synchronous loop. Every queued chunk
+    is accumulated (and the device idle) before this returns or raises.
+    """
+    slots = len(ring.slots)
+    queue: list = []
+
+    def accumulate():
+        k, m = queue.pop(0)
+        t0 = time.perf_counter()
+        x, idx, d2 = ring.result(k, m)
+        t1 = time.perf_counter()
+        _accumulate_groups(x, idx, d2, s_g, n_g, q_g)
+        stats["bmu"] += t1 - t0
+        stats["acc"] += time.perf_counter() - t1
+
+    k = 0
+    with concurrent.futures.ThreadPoolExecutor(_STAGE_THREADS) as pool:
+        try:
+            t_read = time.perf_counter()
+            for c in it:
+                if not prefetch:
+                    stats["io_wait"] += time.perf_counter() - t_read
+                _check_chunk(c, n_feat)
+                m = c.shape[0]
+                if not m:  # adds nothing to the sums
+                    t_read = time.perf_counter()
+                    continue
+                t0 = time.perf_counter()
+                # Slot k is idle: its last chunk was accumulated before this one was read.
+                _stage(pool, c, ring.rows(k, m, np.dtype(np.float64) if scale is not None else c.dtype), scale)
+                del c  # staged: the reader may reuse its array
+                ring.launch(k, m)
+                queue.append((k, m))
+                k = (k + 1) % slots
+                stats["bmu"] += time.perf_counter() - t0
+                stats["rows"] += m
+                if len(queue) == slots:
+                    accumulate()
+                t_read = time.perf_counter()
+            while queue:
+                accumulate()
+        finally:
+            ring.drain()
+
+
 def _pass(
     source,
     bmu: _BMU,
@@ -835,29 +943,37 @@ def _pass(
     n_g = np.zeros((groups, n_nodes))
     q_g = np.zeros(groups)
     stats = {"io_wait": 0.0, "bmu": 0.0, "acc": 0.0, "fallbacks": 0, "rows": 0}
-    it = _epoch_chunks(source, chunk, fraction, block, rng, rank, size)
+    ring = None
+    if _GPU_PIPELINE and bmu.kind == "cuda_screen":
+        make = getattr(bmu.gpu, "_train_ring", None)  # stand-in searchers have none
+        ring = None if make is None else make(_GPU_SLOTS)
+    scale = getattr(source, "scale", None) if ring is not None else None
+    it = _epoch_chunks(source, chunk, fraction, block, rng, rank, size, raw=scale is not None)
     if prefetch:
         it = _prefetched(it, stats)
-    idx = np.empty(0, np.int32)
-    d2 = np.empty(0)
-    t_read = time.perf_counter()
-    for c in it:
-        if not prefetch:
-            stats["io_wait"] += time.perf_counter() - t_read
-        _check_chunk(c, n_feat)
-        m = c.shape[0]
-        if idx.shape[0] < m:
-            idx = np.empty(m, np.int32)
-            d2 = np.empty(m)
-        t0 = time.perf_counter()
-        stats["fallbacks"] += bmu(c, idx[:m], d2[:m])
-        t1 = time.perf_counter()
-        _accumulate_groups(c, idx[:m], d2[:m], s_g, n_g, q_g)
-        t2 = time.perf_counter()
-        stats["bmu"] += t1 - t0
-        stats["acc"] += t2 - t1
-        stats["rows"] += m
+    if ring is not None:
+        _pass_queued(it, ring, scale, n_feat, s_g, n_g, q_g, stats, prefetch)
+    else:
+        idx = np.empty(0, np.int32)
+        d2 = np.empty(0)
         t_read = time.perf_counter()
+        for c in it:
+            if not prefetch:
+                stats["io_wait"] += time.perf_counter() - t_read
+            _check_chunk(c, n_feat)
+            m = c.shape[0]
+            if idx.shape[0] < m:
+                idx = np.empty(m, np.int32)
+                d2 = np.empty(m)
+            t0 = time.perf_counter()
+            stats["fallbacks"] += bmu(c, idx[:m], d2[:m])
+            t1 = time.perf_counter()
+            _accumulate_groups(c, idx[:m], d2[:m], s_g, n_g, q_g)
+            t2 = time.perf_counter()
+            stats["bmu"] += t1 - t0
+            stats["acc"] += t2 - t1
+            stats["rows"] += m
+            t_read = time.perf_counter()
     stats["s"] = s_g.sum(axis=0)
     stats["n"] = n_g.sum(axis=0)
     stats["qe_sum"] = float(q_g.sum())
@@ -950,7 +1066,8 @@ def train_batch_stream(
         chunk: Rows read and processed at once (array sources). Memory is about
             ``2 * chunk * F * itemsize + chunk * 12`` bytes for data, prefetch
             and BMU buffers, plus ``groups * nodes * (F + 1) * 8`` bytes of
-            accumulators.
+            accumulators; ``"cuda_screen"`` adds three pinned buffers of
+            ``chunk * (F * 8 + 12)`` bytes or less.
         r_max: Initial radius; defaults to ``max(xdim, ydim) + 1``.
         r_min: Final radius; clamped to ``r_max``.
         seed: Seed of ``np.random.default_rng`` for the initial lattice. With

@@ -340,6 +340,19 @@ def _on_device(cp, device):
     return cp.cuda.Device(device)
 
 
+_LIMITS = {}
+
+
+def _device_limits(cp, device):
+    """``(sharedMemPerBlock, maxThreadsPerBlock)`` of ``device``, queried once per process
+    (the query costs about 1 ms, and a searcher is built every epoch)."""
+    key = (id(cp), device)
+    if key not in _LIMITS:
+        props = cp.cuda.runtime.getDeviceProperties(device)
+        _LIMITS[key] = (props['sharedMemPerBlock'], props['maxThreadsPerBlock'])
+    return _LIMITS[key]
+
+
 def _pinned(cp, shape, dtype):
     owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
     return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
@@ -390,8 +403,8 @@ class GpuScreenSearcher:
         with _on_device(cp, self.device):
             self.w = cp.asarray(w)
             cp.cuda.get_current_stream().synchronize()
-            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-            if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
+            props = _device_limits(cp, self.device)
+            if self.shared > props[0] or block > props[1]:
                 raise ValueError('tile or block exceeds the device limit')
             self.kernels = _kernels(self.features)
             self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
@@ -532,6 +545,10 @@ class GpuScreenSearcher:
             raise
         return self.token
 
+    def _train_ring(self, slots):
+        """Private: a :class:`_TrainRing` of ``slots`` chunks for the training pass."""
+        return _TrainRing(self, slots)
+
     def __call__(self, block, idx, d2):
         x = np.asarray(block)
         if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
@@ -542,6 +559,74 @@ class GpuScreenSearcher:
             self.submit(x, idx, d2)
             self.wait()
         return 0
+
+
+class _TrainRing:
+    """Private ring of queued training chunks for :func:`aweSOM.stream._pass`.
+
+    Slot ``k`` owns pinned host rows, int32 nodes and float64 squared
+    distances for a whole chunk, device buffers of at most ``searcher.chunk``
+    rows and its own stream. The caller writes a chunk into :meth:`rows`,
+    queues it with :meth:`launch` (upload, search, download, in pieces of
+    ``searcher.chunk`` rows) and reads the pinned results with
+    :meth:`result`, which waits for the slot's stream. A slot is reused only
+    after the caller has finished with its result, so no device work touches
+    a slot that is being written or read on the host. Each row's node and
+    distance depend only on the row and the weights, as in ``__call__``.
+    """
+
+    def __init__(self, searcher, slots):
+        self.s = searcher
+        with _on_device(searcher.cp, searcher.device):
+            self.streams = [searcher.cp.cuda.Stream(non_blocking=True) for _ in range(slots)]
+        self.slots = [None] * slots
+
+    def rows(self, k, m, dtype):
+        """Pinned ``(m, F)`` input of slot ``k`` (grown when needed); the slot must be idle."""
+        s, slot = self.s, self.slots[k]
+        if slot is None or slot['dtype'] != dtype or len(slot['host'][1]) < m:
+            self.slots[k] = None  # free the old buffers first; a failed allocation reallocates
+            owners, host = zip(*(_pinned(s.cp, shape, dt) for shape, dt in
+                                 [((m, s.features), dtype), ((m,), np.int32), ((m,), np.float64)]))
+            cap = min(m, s.chunk)
+            # Allocated on the current stream, not the slot's: CuPy pools memory per
+            # stream, and the slot streams end with the ring (every epoch), so their
+            # pool bins would never be reused. Safe because a slot is idle when its
+            # buffers are freed (drained, or its result already read).
+            with _on_device(s.cp, s.device):
+                device = [s.cp.empty((cap, s.features), dtype), s.cp.empty(cap, np.int32),
+                          s.cp.empty(cap, np.float64)]
+            slot = self.slots[k] = dict(owners=owners, host=host, device=device, dtype=dtype, cap=cap)
+        return slot['host'][0][:m]
+
+    def launch(self, k, m):
+        """Queue the search of the first ``m`` staged rows of slot ``k``."""
+        s, slot, stream = self.s, self.slots[k], self.streams[k]
+        (hx, hi, hd), (dx, di, dd) = slot['host'], slot['device']
+        kernel = s.kernels[int(hx.dtype == np.float64)]
+        per = s.block * s.rows_per_thread
+        with _on_device(s.cp, s.device), stream:
+            for a in range(0, m, slot['cap']):
+                n = min(slot['cap'], m - a)
+                dx[:n].set(hx[a:a + n], stream=stream)
+                kernel(((n + per - 1) // per,), (s.block,),
+                       (s.w, dx, di, dd, np.int32(n), np.int32(s.nodes), np.int32(s.tile)) + s.args,
+                       shared_mem=s.shared, stream=stream)
+                di[:n].get(out=hi[a:a + n], stream=stream, blocking=False)
+                dd[:n].get(out=hd[a:a + n], stream=stream, blocking=False)
+
+    def result(self, k, m):
+        """Wait for slot ``k`` and return its pinned ``(rows, idx, d2)`` of ``m`` rows."""
+        with _on_device(self.s.cp, self.s.device):
+            self.streams[k].synchronize()
+        hx, hi, hd = self.slots[k]['host']
+        return hx[:m], hi[:m], hd[:m]
+
+    def drain(self):
+        """Wait for all queued work (also after an error, before the buffers are dropped)."""
+        with _on_device(self.s.cp, self.s.device):
+            for stream in self.streams:
+                stream.synchronize()
 
 
 def best_match_nodes_cuda_screen(weights, data, chunk=2**20):
