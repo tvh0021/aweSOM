@@ -730,7 +730,8 @@ def test_device_training_equals_dense(cuda, monkeypatch, dtype, pipeline):
     monkeypatch.setattr(_gpu_screen, '_BUCKET', True)
     B.reset_totals()
     w1, i1 = train_batch_stream(x, **kw)
-    assert B.TOTALS['engines'] == 2 and B.TOTALS['rows'] == 2 * len(x)
+    # one searcher per epoch plus the final QE pass (final_pass="full"), each over every row
+    assert B.TOTALS['engines'] == 3 and B.TOTALS['rows'] == 3 * len(x)
     assert _sha(w1) == _sha(w0)
     np.testing.assert_array_equal(i1['hits'], i0['hits'])
     np.testing.assert_array_equal(_bits(i1['qe']), _bits(i0['qe']))
