@@ -9,6 +9,7 @@ jobs:
   pytest:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +46,7 @@ jobs:
         # arm64 macOS runners (macos-latest) have 3 vCPUs (Intel macOS has 4), while CPU reference fixtures use n_threads=4.
         env:
           NUMBA_NUM_THREADS: "4"
-        run: python -m pytest -q tests
+        run: python -m pytest -q -o faulthandler_timeout=240 tests
 
   wheel:
     name: wheel (ubuntu-latest, Python 3.12)
