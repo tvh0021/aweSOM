@@ -19,8 +19,10 @@ seeds, bucket counts and the three counters must equal the CPU models', and
 ``perm`` must list every row once, grouped by bucket. Skipped without
 ``clang++`` or ``g++``.
 """
+import os
 import shutil
 import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -31,7 +33,13 @@ from aweSOM import _gpu_bucket as B
 from aweSOM.inference import best_match_nodes
 
 CXX = shutil.which('clang++') or shutil.which('g++')
-pytestmark = pytest.mark.skipif(CXX is None, reason='no C++ compiler')
+# On GitHub's macOS runners one OS thread per CUDA thread takes 5-9 min per case
+# (about 2 s on Linux CI and on a local Mac), so the file runs on Linux CI only.
+pytestmark = [
+    pytest.mark.skipif(CXX is None, reason='no C++ compiler'),
+    pytest.mark.skipif(sys.platform == 'darwin' and bool(os.environ.get('CI')),
+                       reason='too slow on macOS CI runners; Linux CI runs it'),
+]
 
 EXTRA = r'''
 #include <cfenv>
