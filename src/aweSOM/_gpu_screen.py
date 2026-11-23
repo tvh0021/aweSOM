@@ -40,8 +40,15 @@ unchanged float64 code, so labels and distances stay bitwise those of
 :func:`aweSOM.inference.best_match_nodes`. Only the set of certified rows
 can differ from the CPU screen; :func:`_cuda_screen_reference` emulates the
 fused rounding exactly, so its fallback count is the kernel's.
+
+Searchers of large safe lattices (``_BUCKET``, ``_BUCKET_MIN_NODES``) screen
+each row against a short candidate list instead of every node, with the same
+screen, certificate and float64 code and the same results bit for bit; see
+:mod:`aweSOM._gpu_bucket`. The dense kernel below stays the control.
 """
 import contextlib
+import types
+import weakref
 from functools import lru_cache
 
 import numpy as np
@@ -50,6 +57,14 @@ from numba import njit, prange
 from .inference import _check_inputs, _U32
 
 TILE = 128  # nodes per shared-memory tile
+
+# Private switch: True searches eligible lattices with the bucketed path of
+# aweSOM._gpu_bucket (same results, bit for bit); False keeps the dense kernel
+# below for every lattice (the control). Read when a searcher is built.
+_BUCKET = True
+# Smallest lattice that uses the bucketed path; below it the dense kernel is
+# already cheap. Tests lower it.
+_BUCKET_MIN_NODES = 2048
 
 
 def _screen_parameters(w):
@@ -340,6 +355,47 @@ def _on_device(cp, device):
     return cp.cuda.Device(device)
 
 
+_LIMITS = weakref.WeakKeyDictionary()
+
+
+def _device_limits(cp, device):
+    """``(sharedMemPerBlock, maxThreadsPerBlock)`` of ``device``, queried once per process
+    for an imported CuPy module (the query costs about 1 ms, and a searcher is built
+    every epoch)."""
+    cache = _LIMITS.setdefault(cp, {}) if isinstance(cp, types.ModuleType) else {}
+    if device not in cache:
+        props = cp.cuda.runtime.getDeviceProperties(device)
+        cache[device] = (props['sharedMemPerBlock'], props['maxThreadsPerBlock'])
+    return cache[device]
+
+
+_MAJOR = weakref.WeakKeyDictionary()
+
+
+def _compute_major(cp, device):
+    """Major compute capability of ``device`` (one attribute query, cached per process like
+    :func:`_device_limits`)."""
+    cache = _MAJOR.setdefault(cp, {}) if isinstance(cp, types.ModuleType) else {}
+    if device not in cache:
+        runtime = cp.cuda.runtime
+        attr = getattr(runtime, 'cudaDevAttrComputeCapabilityMajor', 75)  # the CUDA enum value
+        cache[device] = int(runtime.deviceGetAttribute(attr, device))
+    return cache[device]
+
+
+def _dense_launcher(kernels, w, block, rows_per_thread, nodes, tile, args, shared):
+    """``launch(x, idx, d2, n, stream, f64)`` queues the dense kernel on the first ``n`` rows of
+    device ``x`` (float64 if ``f64``). It holds only the kernels, the device weights and the launch
+    parameters, never the searcher."""
+    per = block * rows_per_thread
+    tail = (np.int32(nodes), np.int32(tile)) + tuple(args)
+
+    def launch(x, idx, d2, n, stream, f64):
+        kernels[int(f64)](((n + per - 1) // per,), (block,), (w, x, idx, d2, np.int32(n)) + tail,
+                          shared_mem=shared, stream=stream)
+    return launch
+
+
 def _pinned(cp, shape, dtype):
     owner = cp.cuda.alloc_pinned_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize)
     return owner, np.ndarray(shape, dtype=dtype, buffer=owner)
@@ -365,6 +421,11 @@ class GpuScreenSearcher:
     def __init__(self, weights, xdim, ydim, *, chunk=2**20, tile=TILE,
                  block=128, overlap=True, device=None):
         w, _ = _check_inputs(weights, np.empty((0, np.shape(weights)[-1])))
+        # An owned, read-only snapshot: the device copy, the screen parameters and the bucket
+        # tables (built later, at the first search) all describe these weights, even if the
+        # caller changes its array afterwards.
+        w = np.array(w, np.float64, order='C', copy=True)
+        w.setflags(write=False)
         if not 1 <= w.shape[1] <= 32:
             raise ValueError('CUDA search supports 1 through 32 features')
         if xdim * ydim != len(w):
@@ -390,11 +451,24 @@ class GpuScreenSearcher:
         with _on_device(cp, self.device):
             self.w = cp.asarray(w)
             cp.cuda.get_current_stream().synchronize()
-            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-            if self.shared > props['sharedMemPerBlock'] or block > props['maxThreadsPerBlock']:
+            props = _device_limits(cp, self.device)
+            if self.shared > props[0] or block > props[1]:
                 raise ValueError('tile or block exceeds the device limit')
             self.kernels = _kernels(self.features)
+            self._dense = _dense_launcher(self.kernels, self.w, self.block, self.rows_per_thread, self.nodes,
+                                          self.tile, self.args, self.shared)
             self.streams = [cp.cuda.Stream(non_blocking=True) for _ in range(2 if overlap else 1)]
+            self.bucket = None  # the bucketed search, when this lattice can use it
+            if _BUCKET:
+                from . import _gpu_bucket
+                if (_gpu_bucket.eligible(self.nodes, self.features, safe, _BUCKET_MIN_NODES)
+                        and _compute_major(cp, self.device) >= _gpu_bucket.MIN_COMPUTE_MAJOR):
+                    try:
+                        # The launcher holds no reference to this searcher, so the searcher
+                        # and its buffers are freed without the cyclic collector.
+                        self.bucket = _gpu_bucket.BucketEngine(cp, w, self.w, self._dense, _pinned, props[0])
+                    except _gpu_bucket.Unsupported:
+                        pass
         self.slots = []
         self.capacity = 0
         self.dtype = None
@@ -414,8 +488,9 @@ class GpuScreenSearcher:
                                    ((capacity,), np.int32), ((capacity,), np.float64)]))
             with stream:
                 device = [self.cp.empty(a.shape, a.dtype) for a in arrays]
+            scratch = None if self.bucket is None else self.bucket.scratch(capacity)
             self.slots.append(dict(owners=owners, host=arrays, device=device,
-                                   labels=None, pending=None))
+                                   labels=None, pending=None, scratch=scratch))
         self.capacity, self.dtype = capacity, dtype
 
     def cluster_map(self, node_cluster, dtype=np.int32):
@@ -435,8 +510,19 @@ class GpuScreenSearcher:
             self.cp.cuda.get_current_stream().synchronize()
         return table
 
+    def _search(self, x, idx, d2, n, stream, scratch, x_host):
+        """Queue the search of the first ``n`` rows of device ``x`` (``x_host`` on the host) on
+        ``stream``: the bucketed path when the slot has scratch buffers, else the dense kernel.
+        Both write the same node and squared distance for every row."""
+        if scratch is None:
+            self._dense(x, idx, d2, n, stream, x_host.dtype == np.float64)
+        else:
+            self.bucket.search(scratch, stream, x, idx, d2, n, x_host)
+
     def _finish(self, slot, stream):
         stream.synchronize()
+        if slot.get('scratch') is not None:
+            self.bucket.collect(slot['scratch'])
         pending, slot['pending'] = slot['pending'], None
         if pending is not None:
             _, out, host, d2, host_d2, _ = pending
@@ -453,6 +539,8 @@ class GpuScreenSearcher:
         finally:
             for slot in self.slots:
                 slot['pending'] = None
+                if slot.get('scratch') is not None:
+                    self.bucket.discard(slot['scratch'])
 
     def wait(self, token=None):
         """Write the results of every ``submit`` up to ``token`` (all when None)."""
@@ -493,7 +581,6 @@ class GpuScreenSearcher:
 
     def _submit(self, x, out, d2, clusters):
         cp = self.cp
-        kernel = self.kernels[int(x.dtype == np.float64)]
         try:
             self._allocate(len(x), x.dtype)
             for start in range(0, len(x), self.capacity):
@@ -510,11 +597,7 @@ class GpuScreenSearcher:
                                                  or slot['labels'].dtype != clusters.dtype):
                         slot['labels'] = cp.empty(self.capacity, clusters.dtype)
                     dev[0][:n].set(host[0][:n], stream=stream)
-                    per = self.block * self.rows_per_thread
-                    kernel(((n + per - 1) // per,), (self.block,),
-                           (self.w, dev[0], dev[1], dev[2], np.int32(n),
-                            np.int32(self.nodes), np.int32(self.tile)) + self.args,
-                           shared_mem=self.shared, stream=stream)
+                    self._search(dev[0], dev[1], dev[2], n, stream, slot.get('scratch'), host[0][:n])
                     if clusters is None:
                         result, host_out = dev[1][:n], host[1][:n]
                     else:
@@ -532,6 +615,10 @@ class GpuScreenSearcher:
             raise
         return self.token
 
+    def _train_ring(self, slots):
+        """Private: a :class:`_TrainRing` of ``slots`` chunks for the training pass."""
+        return _TrainRing(self, slots)
+
     def __call__(self, block, idx, d2):
         x = np.asarray(block)
         if x.ndim != 2 or x.shape[1] != self.features or x.dtype not in (np.float32, np.float64):
@@ -542,6 +629,83 @@ class GpuScreenSearcher:
             self.submit(x, idx, d2)
             self.wait()
         return 0
+
+
+class _TrainRing:
+    """Private ring of queued training chunks for :func:`aweSOM.stream._pass`.
+
+    Slot ``k`` owns pinned host rows, int32 nodes and float64 squared
+    distances for a whole chunk, device buffers of at most ``searcher.chunk``
+    rows and its own stream. The caller writes a chunk into :meth:`rows`,
+    queues it with :meth:`launch` (upload, search, download, in pieces of
+    ``searcher.chunk`` rows) and reads the pinned results with
+    :meth:`result`, which waits for the slot's stream. A slot is reused only
+    after the caller has finished with its result, so no device work touches
+    a slot that is being written or read on the host. Each row's node and
+    distance depend only on the row and the weights, as in ``__call__``.
+    """
+
+    def __init__(self, searcher, slots):
+        self.s = searcher
+        with _on_device(searcher.cp, searcher.device):
+            self.streams = [searcher.cp.cuda.Stream(non_blocking=True) for _ in range(slots)]
+        self.slots = [None] * slots
+
+    def rows(self, k, m, dtype):
+        """Pinned ``(m, F)`` input of slot ``k`` (grown when needed); the slot must be idle."""
+        s, slot = self.s, self.slots[k]
+        if slot is None or slot['dtype'] != dtype or len(slot['host'][1]) < m:
+            self.slots[k] = None  # free the old buffers first; a failed allocation reallocates
+            cap = min(m, s.chunk)
+            # Allocated on the current stream, not the slot's: CuPy pools memory per
+            # stream, and the slot streams end with the ring (every epoch), so their
+            # pool bins would never be reused. Safe because a slot is idle when its
+            # buffers are freed (drained, or its result already read).
+            with _on_device(s.cp, s.device):
+                owners, host = zip(*(_pinned(s.cp, shape, dt) for shape, dt in
+                                     [((m, s.features), dtype), ((m,), np.int32), ((m,), np.float64)]))
+                device = [s.cp.empty((cap, s.features), dtype), s.cp.empty(cap, np.int32),
+                          s.cp.empty(cap, np.float64)]
+                scratch = None if s.bucket is None else s.bucket.scratch(cap)
+            slot = self.slots[k] = dict(owners=owners, host=host, device=device, dtype=dtype, cap=cap,
+                                        scratch=scratch)
+        return slot['host'][0][:m]
+
+    def launch(self, k, m):
+        """Queue the search of the first ``m`` staged rows of slot ``k``."""
+        s, slot, stream = self.s, self.slots[k], self.streams[k]
+        (hx, hi, hd), (dx, di, dd) = slot['host'], slot['device']
+        with _on_device(s.cp, s.device), stream:
+            for a in range(0, m, slot['cap']):
+                n = min(slot['cap'], m - a)
+                dx[:n].set(hx[a:a + n], stream=stream)
+                s._search(dx, di, dd, n, stream, slot.get('scratch'), hx[a:a + n])
+                di[:n].get(out=hi[a:a + n], stream=stream, blocking=False)
+                dd[:n].get(out=hd[a:a + n], stream=stream, blocking=False)
+
+    def result(self, k, m):
+        """Wait for slot ``k`` and return its pinned ``(rows, idx, d2)`` of ``m`` rows."""
+        with _on_device(self.s.cp, self.s.device):
+            self.streams[k].synchronize()
+        if self.slots[k].get('scratch') is not None:
+            self.s.bucket.collect(self.slots[k]['scratch'])
+        hx, hi, hd = self.slots[k]['host']
+        return hx[:m], hi[:m], hd[:m]
+
+    def drain(self):
+        """Wait for all queued work (also after an error, before the buffers are dropped).
+
+        Every stream is waited for even when one fails; the first error is raised then."""
+        error = None
+        with _on_device(self.s.cp, self.s.device):
+            for stream in self.streams:
+                try:
+                    stream.synchronize()
+                except BaseException as e:
+                    if error is None:
+                        error = e
+        if error is not None:
+            raise error
 
 
 def best_match_nodes_cuda_screen(weights, data, chunk=2**20):

@@ -1,4 +1,5 @@
 """Production input refusals, sampling, label matching and real export/reload."""
+import gc
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -501,11 +502,13 @@ def test_wave_rejects_abnormal_exit_after_result(probe):
 def test_wave_leaks_no_descriptors(probe):
     fds = lambda: len(os.listdir('/proc/self/fd' if os.path.exists('/proc/self/fd') else '/dev/fd'))
     pool.run_wave([('a',)], target=probe)  # warm multiprocessing's own helpers
+    gc.collect()  # descriptors owned by unreachable objects would otherwise close mid-test
     before = fds()
     for _ in range(3):
         pool.run_wave([('a',), ('b',)], target=probe)
         with pytest.raises(RuntimeError): pool.run_wave([('block',), ('die',)], target=probe)
         pool.run_wave([('linger',)], target=probe, exit_grace=.5)
+    gc.collect()
     assert fds() == before
 
 
