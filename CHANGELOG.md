@@ -43,6 +43,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `copy_bytes` with `layout`, `ranks`, `manifest_seconds`, and
   `directory_fsync`, and `fit_disk_budget` budgets `per_row * rows` at every MPI
   rank count.
+- `cuda_screen` training is faster. Host-to-device staging now overlaps the GPU
+  pass, for chunks of up to 2^20 rows. Larger chunks keep the synchronous pass.
+  Maps with at least 2048 nodes and at most 10 features use an exact bucketed BMU
+  search, on GPUs with compute capability 7.0 or higher. Weights, hits and labels
+  are bitwise identical to the dense search. There is no API or file-format
+  change.
 
 ## [1.10.1] - 2026-11-19
 
