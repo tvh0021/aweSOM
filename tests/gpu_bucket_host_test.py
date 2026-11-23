@@ -37,7 +37,7 @@ CXX = shutil.which('clang++') or shutil.which('g++')
 # (about 2 s on Linux CI and on a local Mac), so the file runs on Linux CI only.
 pytestmark = [
     pytest.mark.skipif(CXX is None, reason='no C++ compiler'),
-    pytest.mark.skipif(sys.platform == 'darwin' and bool(os.environ.get('CI')),
+    pytest.mark.skipif(sys.platform == 'darwin' and os.environ.get('GITHUB_ACTIONS') == 'true',
                        reason='too slow on macOS CI runners; Linux CI runs it'),
 ]
 
