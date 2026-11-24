@@ -34,4 +34,5 @@ setup(
     ],
     python_requires=">=3.9",
     install_requires=required,
+    extras_require={"mpi": ["mpi4py"]},
 )

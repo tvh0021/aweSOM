@@ -198,6 +198,38 @@ def test_anchored_sce_labels(tmp_path):
     assert [len(g) for g in info["groups"]] == [3, 3, 3]
 
 
+def test_anchored_and_stacked_sce_labels_sharded_parts(tmp_path):
+    from aweSOM.make_sce_clusters import anchored_sce_labels, stack_sce_labels
+    from aweSOM.npy_parts import write_npy_manifest
+    from aweSOM.sce import find_number_of_clusters, loop_over_all_clusters
+    from aweSOM.stream import npy_crc32
+
+    rng = np.random.default_rng(7)
+    truth = rng.permutation(np.repeat(np.arange(3), [100, 120, 80])).astype(np.uint8)
+    runs = [truth, np.array([2, 0, 1], dtype=np.uint8)[truth], np.array([1, 2, 0], dtype=np.uint8)[truth]]
+    files = []
+    for i, lab in enumerate(runs):
+        pdir = tmp_path / f"labels.run-{i}.parts"
+        pdir.mkdir()
+        cuts = [0, 130, 300]
+        entries = []
+        for r in range(2):
+            a, b = cuts[r], cuts[r + 1]
+            pf = pdir / f"part-{r:04d}.npy"
+            np.save(pf, lab[a:b])
+            entries.append(dict(rank=r, file=pf.name, start=a, stop=b, rows=b - a, bytes=b - a, crc32=int(npy_crc32(pf, 0, b - a))))
+        write_npy_manifest(pdir, dtype=lab.dtype, shape=lab.shape, parts=entries)
+        files.append(str(pdir))
+
+    (tmp_path / "SCE").mkdir()
+    loop_over_all_clusters(files, find_number_of_clusters(files), np.array([300]), str(tmp_path / "SCE"), write_masks=False)
+    labels, signals, info = anchored_sce_labels(str(tmp_path / "SCE" / "multimap_mappings.txt"), str(tmp_path), [300])
+    assert np.array_equal(labels, truth)
+    assert info["medoid"].endswith("labels.run-0")
+    s_labels, s_signals, _ = stack_sce_labels(str(tmp_path / "SCE" / "multimap_mappings.txt"), str(tmp_path), [300])
+    assert s_labels.shape == (300,) and s_signals.shape[1] == 300
+
+
 def test_make_file_name():
     assert make_file_name(1, "png") == "0001.png"
     assert make_file_name(10, "png") == "0010.png"

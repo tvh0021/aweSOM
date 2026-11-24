@@ -9,6 +9,12 @@ Installation
         cd aweSOM
         pip install .
 
+   For multi-rank CPU streaming with MPI (on a system that already provides OpenMPI or MPICH), install the optional ``[mpi]`` extra:
+
+    .. code-block:: bash
+
+        pip install ".[mpi]"
+
 2. Install JAX with CUDA support separately, otherwise JAX will not recognize the GPU:
 
     .. code-block:: bash

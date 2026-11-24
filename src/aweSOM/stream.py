@@ -98,12 +98,23 @@ from .inference import (
     narrow_label_dtype,
 )
 
+from .npy_parts import (
+    ShardedNpyArray,
+    open_npy,
+    stitch_npy,
+    verify_npy_parts,
+    write_npy_manifest,
+)
+
 __all__ = [
     "BMUSearcher",
     "NpyReader",
     "NpyWriter",
+    "ShardedNpyArray",
     "copy_npy_rows",
     "npy_crc32",
+    "open_npy",
+    "stitch_npy",
     "train_batch_stream",
     "read_checkpoint",
     "predict_stream",
@@ -112,6 +123,8 @@ __all__ = [
     "stratified_sample",
     "neighbourhood_update",
     "peak_rss_bytes",
+    "verify_npy_parts",
+    "write_npy_manifest",
 ]
 
 DEFAULT_GROUPS = 64
@@ -327,6 +340,11 @@ class NpyWriter:
     system then stops buffering writes (CephFS turns every write into a
     synchronous write to the storage servers, 11x slower when measured on
     a cluster).
+
+    For several nodes, let each rank write its own part file inside
+    ``<stem>.parts/`` and publish ``manifest.json`` with
+    :func:`write_npy_manifest` (read lazily via :func:`open_npy`, or stitched
+    later into one ``.npy`` file with :func:`stitch_npy`).
 
     ``crc32`` is the zlib CRC-32 of the bytes written so far when the writes
     covered one contiguous range in ascending order (``first`` to ``end``);
@@ -867,6 +885,7 @@ def train_batch_stream(
     n_features: Optional[int] = None,
     checkpoint: Optional[str] = None,
     resume: bool = False,
+    comm: Any = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Train a SOM lattice with the batch map, streaming the data chunk by chunk.
 
@@ -933,6 +952,14 @@ def train_batch_stream(
             epoch (every rank reads it). Data, lattice, epochs, radii (and so
             the phases) and sampling must match; the result is bitwise equal to an
             uninterrupted run with the same rank count.
+        comm: mpi4py communicator (:func:`aweSOM.distributed.get_comm`) for a
+            run with one rank per node. Rank 0 draws the initial lattice and
+            broadcasts it; every rank searches the chunks with index
+            ``i % size == rank``; the sums are gathered and added in rank order
+            (:class:`aweSOM.distributed.Reducer`), then every rank applies the
+            same update. A fixed rank count is bitwise reproducible; different
+            rank counts differ in the last bits of the float64 sums. Every
+            rank must call with the same arguments and the same data.
 
     Returns:
         ``(weights, info)``; ``weights`` float64 ``(xdim * ydim, F)`` (equal on
@@ -966,6 +993,12 @@ def train_batch_stream(
     if resume and checkpoint is None:
         raise ValueError("resume=True needs a checkpoint path")
     rank, size = 0, 1
+    red = None
+    if comm is not None:
+        from .distributed import Reducer
+
+        red = Reducer(comm)
+        rank, size = red.rank, red.size
     root = rank == 0
     old_threads = numba.get_num_threads()
     if n_threads is not None:
@@ -1039,6 +1072,8 @@ def train_batch_stream(
                 # call so that the ranks stay in step; rank 0's rows are broadcast.
                 if root or fn is not None:
                     w = np.asarray(source.rows(ix), np.float64)
+            if red is not None:
+                w = red.bcast(w if root else None, (n_nodes, n_feat))
 
         from .model import _git_commit
 
@@ -1066,6 +1101,8 @@ def train_batch_stream(
             bmu_kinds.append(searcher.kind)
             t_red = time.perf_counter()
             tot, per = st, {k: np.array([st[k]]) for k in _RANK_FIELDS}
+            if red is not None:
+                tot, per = red.reduce_pass(st)
             t1 = time.perf_counter()
             w = neighbourhood_update(tot["s"], tot["n"], w, xdim, ydim, r)
             t2 = time.perf_counter()
@@ -1091,6 +1128,8 @@ def train_batch_stream(
                     f"(io wait {st['io_wait']:.2f}, bmu {st['bmu']:.2f}, update {t2 - t1:.3f}, "
                     f"fallbacks {tot['fallbacks']}, {searcher.kind}"
                 )
+                if red is not None:
+                    line += f", reduce {t1 - t_red:.3f}, ranks {size}"
                 print(line + ")", flush=True)
             # Checkpoint and callback run on rank 0 only.
             stop = None
@@ -1104,6 +1143,13 @@ def train_batch_stream(
                         callback(e, w.copy())
                 except BaseException as exc:
                     stop = exc
+            # Rank 0 broadcasts the outcome, so a failure or a stop raised by the callback
+            # ends every rank, not only rank 0. The broadcast also holds the other ranks
+            # until the checkpoint file is complete.
+            if red is not None and (checkpoint is not None or callback is not None):
+                status = red.bcast_object(None if stop is None else repr(stop))
+                if status is not None and not root:
+                    raise RuntimeError(f"rank 0 stopped training after epoch {e + 1}: {status}")
             if stop is not None:
                 raise stop
 
@@ -1114,6 +1160,8 @@ def train_batch_stream(
             st = _pass(source, _BMU(w, bmu, xdim, ydim), n_nodes, n_feat, chunk, frac, sample_block,
                        np.random.default_rng([s_seed, epochs]) if frac < 1.0 else None,
                        groups, prefetch, rank, size)
+            if red is not None:
+                st, _ = red.reduce_pass(st)
             qe_after[-1] = st["qe_sum"] / st["rows"]
             hits = st["n"].round().astype(np.int64)
         else:
@@ -1198,6 +1246,7 @@ def predict_stream(
     prefetch: bool = True,
     n_samples: Optional[int] = None,
     out_node: Any = None,
+    comm: Any = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Label every row of a streamed source with its best-matching node's cluster.
 
@@ -1206,6 +1255,31 @@ def predict_stream(
     same nodes, including the lowest-index tie rule, and the same float64
     distances bit for bit.
 
+    Two ways to run with several MPI ranks:
+
+    - Shared source, ``comm`` given: every rank of ``comm`` calls with the
+      same arguments. Rank r labels the contiguous rows ``[lo, hi)`` =
+      :func:`aweSOM.distributed.row_range` ``(N, r, size)``. Each of ``out``,
+      ``out_node`` and ``out_distance`` holds either all ``N`` rows (this
+      rank writes rows ``lo`` to ``hi``) or only this rank's ``hi - lo``
+      rows (written from 0). With ``out=None`` a rank gets a new array of
+      its own rows (``stats["start"]`` is its first row).
+      For files on a shared file system use :class:`NpyWriter`, one writer
+      node per file.
+      Each rank writes ``part-RRRR.npy`` of its own ``hi - lo`` rows inside
+      ``<stem>.parts/`` and closes it with ``fsync``. After ``comm.allgather``,
+      rank 0 publishes ``manifest.json`` via :func:`write_npy_manifest`.
+      :func:`open_npy` reads the parts lazily, and :func:`stitch_npy` joins
+      them into one file later.
+      Several nodes writing one file is slow on network file systems (see
+      :class:`NpyWriter`), and a writable ``numpy.memmap`` there can even
+      overwrite other nodes' rows.
+      The call returns once this rank's rows are written; close the writers
+      before anyone reads them.
+    - Local blocks, no ``comm``: each rank holds its own rows (for example the
+      cells of one AsterX rank) and calls this function, or
+      :func:`aweSOM.inference.predict`, on that block.
+
     Args:
         weights: ``(nodes, F)`` lattice.
         node_cluster: ``(nodes,)`` cluster id per node (use ``np.arange(nodes)``
@@ -1213,6 +1287,7 @@ def predict_stream(
         data_source: As in :func:`train_batch_stream` (already scaled).
         out: Writable ``(N,)`` integer array-like (``ndarray``, ``memmap``,
             ``h5py.Dataset``, :class:`NpyWriter`) that holds every cluster id.
+            With ``comm`` it may hold only this rank's ``hi - lo`` rows (see above).
             If None, it is allocated in memory as the smallest of uint8, uint16 and int32
             that holds every entry of ``node_cluster``
             (:func:`aweSOM.inference.narrow_label_dtype`): uint8 for up to
@@ -1227,6 +1302,7 @@ def predict_stream(
         prefetch: Read the next chunk in a background thread.
         n_samples: Rows of a callable source if known.
         out_node: Optional writable integer array for the BMU node index, sized like ``out``.
+        comm: mpi4py communicator: label this rank's row range only (see above).
 
     Returns:
         ``(out, stats)``. ``stats`` holds rows, seconds, io_wait, compute,
@@ -1249,9 +1325,24 @@ def predict_stream(
     source = _make_source(data_source, n_samples)
     rank, size = 0, 1
     lo, hi = 0, source.n
+    if comm is not None:
+        from .distributed import row_range
+
+        rank, size = int(comm.Get_rank()), int(comm.Get_size())
+        lo, hi = row_range(source.n, rank, size)
+        for name, a in (("out", out), ("out_distance", out_distance), ("out_node", out_node)):
+            if a is not None and len(a) not in (source.n, hi - lo):
+                raise ValueError(f"with comm, {name} must hold all {source.n} rows or this rank's {hi - lo}")
     if out is None:
         out = np.empty(hi - lo, narrow_label_dtype(clusters))
+    # Row pos goes to index pos - base. Without comm every base is 0, and outputs need no len().
     bases = (0, 0, 0)
+    if comm is not None:
+        # base = lo for an array of this rank's rows only. Lengths N and hi - lo agree
+        # only when lo = 0, where both bases are 0.
+        bases = tuple(
+            0 if a is None or len(a) == source.n else lo for a in (out, out_distance, out_node)
+        )
     stats: dict[str, Any] = {"io_wait": 0.0, "compute": 0.0, "write": 0.0}
     it = _range_chunks(source, chunk, lo, hi)
     if prefetch:

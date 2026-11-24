@@ -39,3 +39,28 @@ jobs:
       - name: Run tests
         # The tests read examples/iris/... by relative path, so run them from the checkout root.
         run: python -m pytest -q tests
+
+  pytest-mpi:
+    name: pytest-mpi (ubuntu-latest, Python 3.12, OpenMPI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install OpenMPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies and aweSOM[mpi]
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r examples/plasma-turbulence/requirements.txt
+          pip install ".[mpi]"
+      - name: Verify mpirun and run MPI tests
+        run: |
+          mpirun -n 2 --oversubscribe python -m mpi4py -c "from aweSOM.distributed import get_comm; c = get_comm(); assert c is not None and c.Get_size() == 2"
+          python -m pytest -q -rs tests/stream_mpi_test.py tests/label_mpi_test.py tests/node_local_rank_mpi_test.py tests/npy_parts_test.py tests/sce_loop_test.py tests/make_sce_clusters_test.py

@@ -42,12 +42,22 @@ Peak memory during training is roughly ``2 * chunk * F * itemsize + chunk * 12``
 
 In single-process runs, ``info`` from :func:`aweSOM.stream.train_batch_stream` and ``stats`` from :func:`aweSOM.stream.predict_stream` report ``ranks = 1`` and ``rank = 0``. :func:`aweSOM.stream.peak_rss_bytes` and ``info["peak_rss"]`` return the process peak resident set size in bytes on POSIX systems and ``None`` when Python's ``resource`` module is absent.
 
+Multi-rank MPI streaming
+------------------------
+
+Both :func:`aweSOM.stream.train_batch_stream` and :func:`aweSOM.stream.predict_stream` accept an optional ``comm`` keyword argument holding an ``mpi4py`` communicator (such as ``comm=aweSOM.distributed.get_comm()``):
+
+- In :func:`aweSOM.stream.train_batch_stream`, each rank processes chunks round-robin by chunk index, and :class:`aweSOM.distributed.Reducer` exchanges per-rank accumulators with ``Allgather`` and sums them in rank order so every rank holds bitwise-identical weights. Runs with a fixed rank count are bitwise reproducible (including checkpoint and resume, where the rank count must match the checkpoint). Across different rank counts, the ``float64`` sums are added in a different order, so trained weights differ in the last bits (release tests on 40,000 rows and a 24x17 map measured a maximum relative weight difference of ``1.3e-13`` with identical labels across 1, 2, and 4 ranks).
+- In :func:`aweSOM.stream.predict_stream`, each rank labels only its contiguous slice ``aweSOM.distributed.row_range(n_samples, rank, size)`` without collectives during labelling. Output targets (``out``, ``out_node``, ``out_distance``) may hold either all ``n_samples`` rows or only this rank's ``stop - start`` rows, allowing each rank to write an independent part file inside ``<stem>.parts/``.
+
+See :doc:`distributed` for installation of the ``[mpi]`` extra, the one-writer-per-file rule on shared network filesystems, sharded ``.parts`` outputs in :mod:`aweSOM.npy_parts`, and a full MPI example.
+
 Checkpoint and resume
 ---------------------
 
 Pass ``checkpoint="run.npz"`` to :func:`aweSOM.stream.train_batch_stream` to atomically rewrite a checkpoint file after every epoch in format ``aweSOM.stream.checkpoint/1``. Inspect a saved checkpoint with :func:`aweSOM.stream.read_checkpoint`, which returns ``(meta, arrays)``.
 
-Pass ``checkpoint="run.npz", resume=True`` to continue from the last completed epoch. If the checkpoint file does not exist yet, training starts from epoch 0. On resume, the trainer checks that the lattice shape, feature count, sample count, epoch count, radius schedule (including ``r_max``, ``r_min``, and ``phases``), sampling settings, ``chunk``, ``groups``, and rank count match the checkpoint, raising ``ValueError`` if any setting differs. A resumed single-process run produces weights, hit counts, and quantization errors bitwise equal to an uninterrupted run.
+Pass ``checkpoint="run.npz", resume=True`` to continue from the last completed epoch. If the checkpoint file does not exist yet, training starts from epoch 0. On resume, the trainer checks that the lattice shape, feature count, sample count, epoch count, radius schedule (including ``r_max``, ``r_min``, and ``phases``), sampling settings, ``chunk``, ``groups``, and rank count match the checkpoint, raising ``ValueError`` if any setting differs. A resumed run produces weights, hit counts, and quantization errors bitwise equal to an uninterrupted run at the same rank count. Under MPI, rank 0 writes the checkpoint and invokes ``callback``, then broadcasts the outcome so a stop or error ends every rank cleanly.
 
 Streaming inference, narrow label dtypes, and ``out_node``
 ----------------------------------------------------------

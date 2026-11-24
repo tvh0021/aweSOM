@@ -14,7 +14,7 @@ Authors:
 [Joonas Nättilä](https://natj.github.io) - University of Helsinki,
 [Jordy Davelaar](https://jordydavelaar.com) - Princeton University.
 
-Version: 1.10.1
+Version: 1.11.0
 
 ## 1. Installation
 
@@ -24,6 +24,12 @@ Version: 1.10.1
 git clone https://github.com/tvh0021/aweSOM.git
 cd aweSOM
 pip install .
+```
+
+For multi-rank CPU streaming with MPI (on a system that already provides OpenMPI or MPICH), install the optional `[mpi]` extra:
+
+```bash
+pip install ".[mpi]"
 ```
 
 2. Install JAX with CUDA support separately:
@@ -62,7 +68,7 @@ Or run a specific test function within a module:
 python -m pytest tests/[module]_test.py::test_[function]
 ```
 
-Two tests in `sce_test.py` import JAX with `pytest.importorskip("jax")`. Without JAX, pytest skips `test_jax_gpu_available` and `test_jax_cpu_available` and runs the other four tests. With JAX installed and no GPU, all six tests pass (`test_jax_gpu_available` loads a separate copy of `aweSOM.sce` under a mocked GPU backend). SCE itself runs on the CPU with NumPy when JAX or a GPU is missing.
+Two tests in `sce_test.py` import JAX with `pytest.importorskip("jax")`. Without JAX, pytest skips `test_jax_gpu_available` and `test_jax_cpu_available` and runs the other four tests. With JAX installed and no GPU, all six tests pass (`test_jax_gpu_available` loads a separate copy of `aweSOM.sce` under a mocked GPU backend). SCE itself runs on the CPU with NumPy when JAX or a GPU is missing. The `mpirun` tests in `stream_mpi_test.py`, `label_mpi_test.py`, and `node_local_rank_mpi_test.py` skip with a stated reason when `mpi4py` or `mpirun` is absent.
 
 ## 3. Basic Usage - SOM
 
@@ -302,6 +308,14 @@ Keep `"screen"` on small trained maps such as `29x20` with `580` nodes, where a 
 - `train_batch_stream(data_source, xdim, ydim, epochs=60, ...)` reads row-sliceable 2D arrays (`ndarray`, `numpy.memmap`, `h5py.Dataset`, or `NpyReader`) or zero-argument chunk callables. Library defaults are `epochs=60` with radius phases `(20, 10, 30)` from `radius_phases` and `radius_schedule`, `r_min=8` (clamped to `min(r_min, r_max)`), `bmu="auto"` (probing up to 16,384 rows of the first chunk per pass), and `final_pass="full"`. All options after `epochs` are keyword-only, and `phases=(P, T, M)` overrides the phase lengths. Pass `checkpoint="run.npz"` and `resume=True` to write `aweSOM.stream.checkpoint/1` files after each epoch and resume bit for bit in a single process (`read_checkpoint` inspects them).
 - `predict_stream(weights, node_cluster, data_source, ...)` labels streamed sources using `"screen"` (default), `"patch"` (with `lattice_shape=(xdim, ydim)`), or `"numba"`. For callable sources, pass `n_samples` and set `fn.n_feat` (or `fn.n_features`) on the callable to skip the counting pass (`n_features` is a `train_batch_stream`-only keyword). When `out=None`, it allocates an in-memory array in the smallest of `uint8`, `uint16`, and `int32` that holds every entry of `node_cluster` via `aweSOM.inference.narrow_label_dtype`. Pass `out_node` and `out_distance` to record BMU node indices and `float64` Euclidean distances alongside cluster labels, and use `NpyWriter`, `npy_crc32`, and `copy_npy_rows` for direct `.npy` writes with CRC-32 checks.
 - Exact `float64` quantization error and topographic error functions (`quantization_error`, `topographic_error`, `quantization_error_fast`, and `topographic_error_fast`) live in `aweSOM._batch_core`. See `docs/source/streaming.rst` for full examples and the source protocol.
+
+### Distributed MPI streaming and sharded `.parts` outputs
+
+Install the `[mpi]` extra (`pip install ".[mpi]"`) to run `train_batch_stream` and `predict_stream` across multiple MPI ranks with `mpirun -n <ranks> python -m mpi4py ...`. Importing `aweSOM`, `aweSOM.stream`, `aweSOM.distributed`, or `aweSOM.npy_parts` never imports `mpi4py`; `aweSOM.distributed.get_comm` imports it lazily when called.
+
+- `aweSOM.distributed` exports `get_comm`, `Reducer`, `row_range`, and `node_local_rank`. Pass `comm=get_comm()` to `train_batch_stream` to distribute chunks round-robin across ranks and exchange `float64` accumulators with rank-ordered `Allgather` so every rank holds bitwise-identical weights. Runs with a fixed rank count (including checkpoint and resume, where rank 0 writes the checkpoint and broadcasts stop or error outcomes) are bitwise reproducible. Across different rank counts, the `float64` sums are added in a different order, so trained weights differ in the last bits (release tests on 40,000 rows and a 24x17 map measured a maximum relative weight difference of `1.3e-13` with identical labels across 1, 2, and 4 ranks).
+- Pass `comm` to `predict_stream` so each rank labels its contiguous slice `row_range(n_samples, rank, size)` with no collectives during labelling. Outputs (`out`, `out_node`, `out_distance`) may hold either all rows or only the calling rank's `stop - start` rows.
+- On shared network filesystems, keep one writer per file by writing each rank's slice to `part-RRRR.npy` inside `<stem>.parts/` (`awesom-npy-parts` format version 1) and publishing `manifest.json` last via `write_npy_manifest`. `aweSOM.npy_parts` provides `open_npy`, `ShardedNpyArray`, `stitch_npy`, `verify_npy_parts`, `write_npy_manifest`, `part_filename`, and `parts_dir_for` (with `ShardedNpyArray`, `open_npy`, and `stitch_npy` also re-exported from `aweSOM` and `aweSOM.stream`), plus a CLI (`python -m aweSOM.npy_parts verify` and `stitch`). `aweSOM.sce` and `aweSOM.make_sce_clusters` discover and read both plain `.npy` files and `<stem>.parts/` directories transparently (preferring `.npy` when both exist for the same stem). See `docs/source/distributed.rst` for the full guide and launch notes (including the `HFI_NO_CPUAFFINITY=1` site workaround for `libpsm2` clusters).
 
 ## 4. Basic Usage - SCE
 

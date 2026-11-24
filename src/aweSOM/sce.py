@@ -12,10 +12,23 @@
 ## are bitwise identical to the mask-by-mask loop on the NumPy backend. compute_SQ and
 ## create_mask are kept (JAX-accelerated when a GPU or Metal backend is present) for direct use.
 
+from __future__ import annotations
+
 import os
 import glob
 import argparse
 import numpy as np
+
+if __package__:
+    from .npy_parts import open_npy
+else:
+    try:
+        from aweSOM.npy_parts import open_npy
+    except ModuleNotFoundError:
+        import sys as _sys
+
+        _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from aweSOM.npy_parts import open_npy
 
 # Use JAX if GPU and the jax package is installed, otherwise use NumPy
 # added support for experimental JAX backend with METAL on Apple silicon
@@ -50,9 +63,30 @@ def conditional_jit(func):
         return func
 
 
-# read array from clusterID.npy
-def load_som_npy(path: str) -> array_lib.ndarray:
-    return array_lib.load(path, "r")
+# read array from clusterID.npy or clusterID.parts
+def load_som_npy(path: str):
+    if USE_JAX:
+        if os.path.isfile(path):
+            return array_lib.load(path, "r")
+        return array_lib.asarray(open_npy(path, mmap_mode=None))
+    return open_npy(path, mmap_mode="r")
+
+
+def _run_stem(run: str) -> str:
+    s = os.fsdecode(run)
+    if len(s) > 1:
+        s = s.rstrip("/")
+        if os.sep != "/":
+            s = s.rstrip(os.sep)
+    for sep in ("/", os.sep):
+        if s.endswith(sep + "manifest.json"):
+            s = s[: -len(sep + "manifest.json")]
+            break
+    if s.endswith(".parts"):
+        return s[: -len(".parts")]
+    if s.endswith(".npy"):
+        return s[:-4]
+    return s
 
 
 @conditional_jit
@@ -145,13 +179,17 @@ def pair_quality_from_counts(n_a: int, n_b: int, n_i: int) -> float:
 
 
 def _load_labels(path: str) -> np.ndarray:
-    """Load one label file as a compact integer array (NumPy, never JAX).
+    """Load one label file (or ``.parts`` dataset) as a compact integer array (NumPy, never JAX).
 
     Non-integer values can never equal a cluster id in ``create_mask`` so they
     are mapped to -1, which the contingency table ignores.
     """
-    raw = np.load(path, mmap_mode="r")
-    labels = np.asarray(raw).reshape(-1)
+    raw = open_npy(path, mmap_mode="r")
+    try:
+        labels = np.asarray(raw).reshape(-1)
+    finally:
+        if hasattr(raw, "close"):
+            raw.close()
     as_int = labels.astype(np.int64)
     bad = as_int != labels
     bad |= (as_int < -1) | (as_int >= np.iinfo(np.int32).max)  # would wrap when narrowed
@@ -341,10 +379,11 @@ def loop_over_all_clusters(
         return cached[(i, j)]
 
     for i, run in enumerate(runs):
+        stem = _run_stem(run)
         print("-----------------------")
         print("Run : ", run, flush=True)
         with open(subfolder + "/multimap_mappings.txt", "a") as f:
-            f.write("{}\n".format(run.removesuffix(".npy")))
+            f.write("{}\n".format(stem))
         print("nids : ", nids[i])
 
         # totals[cid] accumulates SQ over the other runs in ascending run order and, within a
@@ -366,7 +405,7 @@ def loop_over_all_clusters(
             # every cell of this cluster accumulated exactly the same SQ values in the same order
             if write_masks:
                 total_mask = np.where(labels[i] == cid, total_SQ_scalar, 0.0).astype(mask_dtype, copy=False).reshape(dimensions)
-                np.save(subfolder + "/mask-{}-id{}.npy".format(run.removesuffix(".npy"), cid), total_mask)
+                np.save(subfolder + "/mask-{}-id{}.npy".format(stem, cid), total_mask)
             with open(subfolder + "/multimap_mappings.txt", "a") as f:
                 f.write("{} {}\n".format(cid, total_SQ_scalar))
 
@@ -378,23 +417,44 @@ def find_number_of_clusters(cluster_files: list[str]) -> array_lib.ndarray:
     Find the number of clusters in each run.
 
     Args:
-        cluster_files (list[str]): A list of data files saved in '.npy' format.
+        cluster_files (list[str]): A list of data files saved in '.npy' or '.parts' format.
 
     Returns:
         number_of_clusters ((j)np.ndarray): An array of the number of cluster ids in each run.
     """
-
     number_of_clusters = np.empty(len(cluster_files), dtype=int)
     for run in range(len(cluster_files)):
-        clusters = np.load(cluster_files[run], mmap_mode="r")
-        if np.issubdtype(clusters.dtype, np.integer) and clusters.size:
-            lo, hi = int(clusters.min()), int(clusters.max())
-            if lo >= 0 and hi < 1 << 24:  # count distinct ids without a sort
-                number_of_clusters[run] = np.count_nonzero(np.bincount(clusters.reshape(-1), minlength=1))
-                continue
-        number_of_clusters[run] = len(np.unique(clusters))
+        clusters = open_npy(cluster_files[run], mmap_mode="r")
+        try:
+            if np.issubdtype(clusters.dtype, np.integer) and clusters.size:
+                lo, hi = int(clusters.min()), int(clusters.max())
+                if lo >= 0 and hi < 1 << 24:  # count distinct ids without a sort
+                    counts = np.zeros(hi + 1, dtype=np.int64)
+                    step = max(1, _CONTINGENCY_CHUNK // max(1, int(np.prod(clusters.shape[1:], dtype=np.int64))))
+                    for start in range(0, clusters.shape[0], step):
+                        block = np.asarray(clusters[start : start + step]).reshape(-1)
+                        counts += np.bincount(block, minlength=hi + 1)
+                    number_of_clusters[run] = int(np.count_nonzero(counts))
+                    continue
+            number_of_clusters[run] = len(np.unique(np.asarray(clusters)))
+        finally:
+            if hasattr(clusters, "close"):
+                clusters.close()
 
     return number_of_clusters
+
+
+def _discover_cluster_files(folder: str = ".") -> list[str]:
+    """Discover ``*.npy`` and ``*.parts`` (with ``manifest.json``) in ``folder``, deduplicating by stem (preferring ``.npy``)."""
+    parts_pattern = "*.parts" if folder == "." else os.path.join(folder, "*.parts")
+    npy_pattern = "*.npy" if folder == "." else os.path.join(folder, "*.npy")
+    by_stem: dict[str, str] = {}
+    for p in sorted(glob.glob(parts_pattern)):
+        if os.path.isfile(os.path.join(p, "manifest.json")):
+            by_stem[_run_stem(p)] = p
+    for p in sorted(glob.glob(npy_pattern)):
+        by_stem[_run_stem(p)] = p
+    return list(by_stem.values())
 
 
 def parse_args():
@@ -440,7 +500,7 @@ if __name__ == "__main__":
     print("Starting SCE", flush=True)
     folder = args.folder
     os.chdir(folder)
-    cluster_files = glob.glob("*.npy")
+    cluster_files = _discover_cluster_files(".")
 
     # --------------------------------------------------
     # data

@@ -4,6 +4,78 @@ All notable changes to aweSOM are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-11-23
+
+This release adds multi-rank CPU MPI streaming training and labelling, sharded
+`<stem>.parts/` array outputs with CRC-32 verification and stitching, SCE
+`.parts` discovery and readers, and the optional `[mpi]` install extra.
+
+**Single-process training, labelling, U-matrix, and streaming outputs match
+`v1.10.1` bit for bit, and plain `.npy` SCE outputs match `v1.10.1` and
+`v1.9.0` on the 28-map `128^3` plasma example on macOS. Existing pickled
+lattices and `format_version` 1 `SOMModel` files load and predict as before.
+Importing `aweSOM`, `aweSOM.stream`, `aweSOM.distributed`, or `aweSOM.npy_parts`
+never imports `mpi4py`.**
+
+### Added
+
+- `comm` keyword argument on `aweSOM.stream.train_batch_stream` and
+  `aweSOM.stream.predict_stream` for multi-rank CPU MPI execution. Training
+  assigns chunks round-robin across ranks, exchanges per-rank `float64`
+  accumulators with rank-ordered `Allgather` so every rank holds identical
+  weights, and broadcasts rank-0 checkpoint and callback outcomes so errors or
+  stops end every rank cleanly. Runs at a fixed rank count (including
+  checkpoint and resume) are bitwise reproducible. Across different rank counts,
+  the `float64` sums are added in a different order, so trained weights differ
+  in the last bits (release tests on 40,000 rows and a 24x17 map measured a
+  maximum relative weight difference of `1.3e-13` with identical labels across
+  1, 2, and 4 ranks). Labelling splits rows contiguously via `row_range` with no
+  collectives during labelling and accepts either full-length or rank-local
+  outputs.
+- `aweSOM.distributed`, exporting `get_comm`, `Reducer`, `row_range`, and
+  `node_local_rank` with lazy `mpi4py` imports.
+- `aweSOM.npy_parts`, implementing the `awesom-npy-parts` format version 1
+  sharded `<stem>.parts/` layout for one-writer-per-file output on shared
+  network filesystems. Exports all 15 public symbols (`FORMAT_NAME`,
+  `FORMAT_VERSION`, `MANIFEST_NAME`, `PARTS_SUFFIX`, `ShardedNpyArray`,
+  `copy_npy_output`, `npy_file_for`, `npy_output_exists`, `open_npy`,
+  `part_filename`, `parts_dir_for`, `remove_npy_output`, `stitch_npy`,
+  `verify_npy_parts`, and `write_npy_manifest`), re-exports `ShardedNpyArray`,
+  `open_npy`, and `stitch_npy` from `aweSOM` and `aweSOM.stream` (plus
+  `verify_npy_parts` and `write_npy_manifest` from `aweSOM.stream`), and ships
+  the `python -m aweSOM.npy_parts {stitch,verify}` command line interface.
+- Transparent `.parts` reading and discovery in `aweSOM.sce` and
+  `aweSOM.make_sce_clusters` via `open_npy`. Folder discovery in `sce.py`
+  recognises both `*.npy` files and `*.parts/` directories containing
+  `manifest.json`, preferring `.npy` when both exist for the same stem. Plain
+  `.npy` SCE runs on the 28-map `128^3` plasma example on macOS produce
+  `multimap_mappings.txt` and mask files identical by SHA-256 to `v1.10.1` and
+  `v1.9.0`.
+- Optional `[mpi]` extra in `setup.py` (`pip install ".[mpi]"` installs
+  `mpi4py`).
+- Tests in `tests/npy_parts_test.py`, `tests/stream_mpi_test.py`,
+  `tests/label_mpi_test.py`, and `tests/node_local_rank_mpi_test.py` (plus test
+  helpers `tests/fake_comm.py`, `tests/mpi_stream_worker.py`,
+  `tests/mpi_label_worker.py`, and `tests/mpi_node_local_worker.py`), `.parts`
+  SCE tests in `tests/sce_loop_test.py` and `tests/make_sce_clusters_test.py`,
+  and an Ubuntu OpenMPI CI lane in `.github/workflows/tests.yml`.
+
+### Changed
+
+- `sce.py` folder discovery now returns files in a deterministic order (sorted
+  `.parts` directories followed by remaining plain `.npy` stems in sorted
+  order), so plain `.npy` folders run in sorted name order and the run order in
+  `multimap_mappings.txt` can differ from earlier releases on file systems that
+  do not return names in sorted order.
+
+### Documentation
+
+- Added `docs/source/distributed.rst` (linked from `docs/source/index.rst`),
+  added `aweSOM.distributed` and `aweSOM.npy_parts` to
+  `docs/source/modules.rst`, updated `docs/source/streaming.rst`,
+  `docs/source/installation.rst`, `docs/source/testing.rst`, `README.md`, and
+  `BENCHMARKS.md`.
+
 ## [1.10.1] - 2026-11-19
 
 This patch release cleans up the `v1.10.0` code, packaging, and tests. It
@@ -601,6 +673,7 @@ Trained lattices, cluster maps and SCE outputs are unchanged.
 
 JOSS publication version.
 
+[1.11.0]: https://github.com/tvh0021/aweSOM/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/tvh0021/aweSOM/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/tvh0021/aweSOM/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/tvh0021/aweSOM/compare/v1.8.0...v1.9.0

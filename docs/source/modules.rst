@@ -39,6 +39,36 @@ aweSOM.stream
    :show-inheritance:
 
 
+aweSOM.distributed
+------------------
+
+.. automodule:: aweSOM.distributed
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
+aweSOM.npy_parts
+----------------
+
+.. automodule:: aweSOM.npy_parts
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   .. autodata:: FORMAT_NAME
+      :annotation: = "awesom-npy-parts"
+
+   .. autodata:: FORMAT_VERSION
+      :annotation: = 1
+
+   .. autodata:: MANIFEST_NAME
+      :annotation: = "manifest.json"
+
+   .. autodata:: PARTS_SUFFIX
+      :annotation: = ".parts"
+
+
 aweSOM.run_som
 --------------
 
